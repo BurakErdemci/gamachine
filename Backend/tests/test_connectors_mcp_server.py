@@ -135,8 +135,24 @@ def test_allowed_call_asks_the_gate_then_reaches_upstream_unchanged(upstream):
         return await client.call_tool("blender_execute_blender_code", {"code": "print(1)"})
     result = run(server, body)
     assert not result.is_error and text(result).startswith("pid ")
-    assert gate.calls == [(7, "blender", "execute_blender_code")]
+    assert gate.calls == [(7, "blender", "execute_blender_code", {"code": "print(1)"})]
     assert [c[1:] for c in calls()] == [["execute_blender_code", {"code": "print(1)"}]]
+
+
+def test_post_gate_sends_the_arguments_and_waits_longer_for_blender_code(monkeypatch):
+    sent = []
+
+    async def fake_post(path, body, timeout):
+        sent.append((path, body, timeout))
+        return {"ok": True}
+    monkeypatch.setattr(mcp_server, "_post", fake_post)
+    anyio.run(mcp_server.post_gate, 7, "blender", "execute_blender_code", {"code": "x = 1"})
+    anyio.run(mcp_server.post_gate, 7, "blender", "get_scene_info", {})
+    assert sent[0][:2] == ("/connectors/gate", {"conversation_id": 7, "connector": "blender",
+                                                "tool": "execute_blender_code", "args": {"code": "x = 1"}})
+    assert sent[1][1]["args"] == {} and sent[1][2] == mcp_server._GATE_TIMEOUT_S
+    # The backend may hold this call for the user's card (up to 120 s), well under the 180 s tool timeout.
+    assert 120 < sent[0][2] < 170
 
 
 @pytest.mark.parametrize("reply", [{"ok": False, "error": "The user pressed Stop in this chat."},

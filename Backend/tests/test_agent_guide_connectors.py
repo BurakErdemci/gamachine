@@ -59,6 +59,12 @@ def test_block_names_the_exposed_tools_and_the_rules(block):
         assert banned not in block
 
 
+@pytest.mark.parametrize("block,word", [(guide.CONNECTORS_GUIDE_EN, "approval"),
+                                        (guide.CONNECTORS_GUIDE_TR, "onay")])
+def test_block_says_risky_blender_code_may_need_approval(block, word):
+    assert word in block and "bpy.ops.wm.*" in block
+
+
 def test_browser_block_is_unchanged_by_the_shared_helper():
     original = guide.compose("en", project_open=True, unity_state="off", addendum="CUSTOM_RULE")
     changed = guide.with_browser_use(original)

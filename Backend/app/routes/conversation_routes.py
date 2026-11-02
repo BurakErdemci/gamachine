@@ -15,6 +15,7 @@ from time import time
 from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
+import action_risk
 from ai_providers import AIProviderManager
 from auth_utils import require_conversation_owner, require_user, get_current_user, _check_token
 from error_i18n import localize_sse, translate_detail
@@ -634,6 +635,20 @@ BROWSER_RESTART_REASON = "The agent browser restarted, so this browser approval 
 BROWSER_CLEARED_REASON = "The browser data was cleared, so this browser approval no longer applies."
 BROWSER_INACTIVE_REASON = "The agent browser is turned off in Settings."
 CARDS_OFF_REASON = "approval cards are off"
+
+# execute_blender_code follows the global approval mode (owner decision, Burak, 2 Nov 2026). The
+# connectors server's gate POST waits for this card (its budget is 135 s): well under MCP_PENDING_TTL
+# (170 s) and the 180 s an agent gives one MCP call.
+BLENDER_CODE_TOOL = "execute_blender_code"
+BLENDER_CARD_TOOL = "blender_execute_code"
+BLENDER_CARD_WAIT_S = 120.0
+_BLENDER_CARD_POLL_S = 0.25
+BLENDER_CARD_CODE_MAX = 20_000
+BLENDER_DECLINED_REASON = ("The user declined this Blender code, so it did not run. Do not run it again "
+                           "unchanged; ask the user what they want instead.")
+BLENDER_UNANSWERED_REASON = ("The user did not answer the approval card for this Blender code, so it did not "
+                             "run. Do not retry it on your own; tell the user it needs their approval.")
+CONNECTOR_HALTED_REASON = "The user pressed Stop in this chat. Do not call connector tools again until the user asks."
 
 
 def create_conversation_router(db, progress_store=None):  # Kept only for call compatibility.
@@ -2888,6 +2903,8 @@ Max 300 kelime. Türkçe yaz.
                 continue
             if entry.get("kind") == "mail":
                 action = {"kind": "mail"}
+            elif "blender_code" in entry:
+                action = {"kind": "blender_code", "code": entry["blender_code"]}
             else:
                 action = _mcp_action(entry.get("tool"), entry.get("params"),
                                      entry.get("workspace_path"))
@@ -3062,17 +3079,71 @@ Max 300 kelime. Türkçe yaz.
             "runtime": dict(_browser_runtime), "page_gen": _browser_gen(owner),
             "stop_gen": _browser_stop_gen.get(owner, 0)})
 
-    def _connector_gate(body: dict, token: str, tool) -> Optional[str]:
-        """Refusal for an agent connector call (CONTRACT.md section 5), else None."""
+    def _connector_gate(body: dict, token: str, tool) -> "tuple[Optional[str], Optional[dict]]":
+        """(refusal, card) for an agent connector call (CONTRACT.md section 5): a refusal; or the
+        approval card execute_blender_code needs in the current mode, for the caller to open on the
+        event loop; or (None, None) to go ahead."""
         owner, why_unowned = _verified_mcp_owner(body.get("conversation_id"), token)
         if owner is _UNKNOWN_OWNER:
             logger.warning("[connectors] call refused (%s)", why_unowned)
-            return "Connectors only work for a chat whose turn is running."
+            return "Connectors only work for a chat whose turn is running.", None
         if owner in _computer_halted:
-            return "The user pressed Stop in this chat. Do not call connector tools again until the user asks."
+            return CONNECTOR_HALTED_REASON, None
         if _names_missing_chat(owner, fail_closed=True):
-            return "This chat was deleted."
-        return connector_launcher.refusal(body.get("connector"), tool, db)
+            return "This chat was deleted.", None
+        refusal = connector_launcher.refusal(body.get("connector"), tool, db)
+        if refusal or tool != BLENDER_CODE_TOOL:
+            return refusal, None
+        args = body.get("args")
+        action = {"kind": "blender_code", "code": args.get("code") if isinstance(args, dict) else None}
+        decision = approval_mode.needs_card(action)
+        if not decision.card:
+            return None, None
+        # Step mode carries no reason; the card still names a critical trigger when there is one.
+        risk = action_risk.classify(action)
+        return None, {"owner": owner, "connector": body.get("connector"), "code": action["code"],
+                      "mode": decision.mode, "reason": risk.reason if risk.critical else ""}
+
+    def _blender_card(owner: int, connector: Any, code: Any, mode: str, reason: str) -> str:
+        """Open execute_blender_code's card through the MCP card machinery; returns its gate id."""
+        gate_id = f"blender-{uuid.uuid4().hex[:10]}"
+        text = code if isinstance(code, str) else ""
+        params = {"code": text[:BLENDER_CARD_CODE_MAX], "code_chars": len(text),
+                  "truncated": len(text) > BLENDER_CARD_CODE_MAX, "reason": reason,
+                  "connector": connector if isinstance(connector, str) else "", "mode": mode}
+        first = next((line.strip() for line in text.splitlines() if line.strip()), "")
+        summary = f"blender code: {first[:80]}"
+        _register_gate(gate_id, owner, kind="external")
+        # blender_code keeps the full text: a switch to balanced re-classifies it, never the shown part.
+        _mcp_pending[gate_id] = {
+            "tool": BLENDER_CARD_TOOL, "params": params, "workspace_path": "", "conversation_id": owner,
+            "blender_code": text, "risk_reason": reason, "summary": summary,
+        }
+        _mcp_results[gate_id] = {"status": "pending"}
+        _mcp_result_ts[gate_id] = time()
+        _cards.open_card(gate_id, conversation_id=owner, kind="mcp", tool=BLENDER_CARD_TOOL,
+                         summary=summary, params=params, risk=reason or None,
+                         resolver=_mcp_resolver(gate_id))
+        return gate_id
+
+    async def _blender_card_answer(gate_id: str, owner: int) -> Optional[str]:
+        """Wait for the card: None when approved, else the refusal the agent reads. Unanswered
+        within BLENDER_CARD_WAIT_S, or Stop in the chat, closes it as rejected."""
+        deadline = time() + BLENDER_CARD_WAIT_S
+        while True:
+            result = _mcp_results.get(gate_id)
+            if result is not None and result.get("status") != "pending":
+                _drop_mcp_gate(gate_id)
+                return None if result.get("approved") is True else BLENDER_DECLINED_REASON
+            halted = owner in _computer_halted
+            if halted or result is None or time() >= deadline:
+                closed = _cards.close_card(gate_id, "rejected" if halted else "timed_out",
+                                           decision="computer_halt" if halted else None, resolve=False)
+                # Not closed while the card is open elsewhere: an answer won the race; read it next round.
+                if closed or result is None or (not _cards.is_open(gate_id) and time() >= deadline + 5):
+                    _drop_mcp_gate(gate_id)
+                    return CONNECTOR_HALTED_REASON if halted else BLENDER_UNANSWERED_REASON
+            await asyncio.sleep(_BLENDER_CARD_POLL_S)
 
     @router.post("/connectors/gate")
     async def connectors_gate(
@@ -3081,7 +3152,9 @@ Max 300 kelime. Türkçe yaz.
     ):
         """Asked by the connectors MCP server before every upstream tool call."""
         _check_token(x_session_token)
-        refusal = await asyncio.to_thread(_connector_gate, body, x_session_token, body.get("tool"))
+        refusal, card = await asyncio.to_thread(_connector_gate, body, x_session_token, body.get("tool"))
+        if card is not None:
+            refusal = await _blender_card_answer(_blender_card(**card), card["owner"])
         return {"ok": False, "error": refusal} if refusal else {"ok": True}
 
     @router.post("/connectors/{cid}/open")
@@ -3092,7 +3165,7 @@ Max 300 kelime. Türkçe yaz.
     ):
         """Starts the connector's app with its add-on for the agent, or attaches to the one already listening."""
         _check_token(x_session_token)
-        refusal = await asyncio.to_thread(_connector_gate, {**body, "connector": cid}, x_session_token, "open")
+        refusal, _ = await asyncio.to_thread(_connector_gate, {**body, "connector": cid}, x_session_token, "open")
         if refusal:
             return {"ok": False, "error": refusal}
         return await asyncio.to_thread(connector_launcher.open_app, cid, db)

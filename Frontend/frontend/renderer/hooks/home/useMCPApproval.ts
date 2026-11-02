@@ -29,6 +29,7 @@ import axios from 'axios';
 import { PendingFile } from '../../components/home/FileCreationApproval';
 import { computerCardInfo, type ComputerCardInfo } from '../../components/home/ComputerUseApproval';
 import { browserCardInfo, type BrowserCardInfo } from '../../components/home/BrowserApproval';
+import { BLENDER_CARD_TOOL, blenderCardInfo, type BlenderCardInfo } from '../../components/home/BlenderApproval';
 import { cevir } from '../../lib/i18n';
 import { backendWorkspacePath } from '../../lib/backendWorkspacePath';
 import { onCardClosed } from '../../lib/remoteControl';
@@ -63,6 +64,8 @@ export interface McpActiveGate {
   computer?: ComputerCardInfo;
   /** Set for browser_* tools only: the agent browser's own card. */
   browser?: BrowserCardInfo;
+  /** Set for the connectors' execute_blender_code card only: the code and why it asks. */
+  blender?: BlenderCardInfo;
 }
 
 /** A request whose source chat the backend could not name (tray entry). */
@@ -533,6 +536,11 @@ export const useMCPApproval = ({
         const withBrowser: McpActiveGate = { ...gate, browser: browserCardInfo(tool, params) };
         activeGateRef.current = withBrowser;
         setActiveGate(withBrowser);
+        clearActiveCardRef.current = null;
+      } else if (tool === BLENDER_CARD_TOOL) {
+        const withBlender: McpActiveGate = { ...gate, blender: blenderCardInfo(params) };
+        activeGateRef.current = withBlender;
+        setActiveGate(withBlender);
         clearActiveCardRef.current = null;
       } else if (tool === MAIL_TOOL && typeof yuk.body === 'string') {
         // A note between chats: its own card, so the user reads "which chat

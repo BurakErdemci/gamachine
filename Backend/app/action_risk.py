@@ -28,6 +28,7 @@ actions, which never reach the agy hook.
 """
 from __future__ import annotations
 
+import ast
 import ntpath
 import os
 import re
@@ -40,7 +41,7 @@ CRITICAL = "critical"
 
 KINDS = frozenset({
     "shell", "file_write", "file_delete", "file_move", "read", "read_outside",
-    "unity", "mail", "permission", "other",
+    "unity", "mail", "permission", "blender_code", "other",
 })
 
 
@@ -107,6 +108,8 @@ def _classify(action: dict) -> Risk:
         return _critical("read_outside_workspace", _first(action["paths"]))
     if kind == "unity":
         return classify_unity(action.get("tool"), action.get("args"))
+    if kind == "blender_code":
+        return classify_blender_code(action.get("code"))
     if kind == "mail":
         # Owner decision (Burak, 27 Sep 2026): notes between chats are not critical.
         return _routine("mail")
@@ -239,6 +242,291 @@ def classify_unity(tool: Any, args: Any) -> Risk:
     if risk == "unknown":
         return _critical("unity_unknown_tool", detail)
     return _critical("unity_critical_action", detail)
+
+
+# ── Blender code ─────────────────────────────────────────────────────────────
+
+# Owner decision (Burak, 2 Nov 2026): in balanced mode ordinary scene building
+# (objects, materials, modifiers, single deletes, selections) runs with no card;
+# only code that reaches outside the scene asks. This reads the code, it does
+# not sandbox it: getattr on bpy objects with names the code builds at run time
+# can still hide intent, and the card in step mode is the stronger guard.
+_BLENDER_SYSTEM_MODULES = frozenset({
+    "os", "sys", "subprocess", "shutil", "socket", "ctypes", "urllib", "http", "requests",
+    "pathlib", "importlib", "multiprocessing", "threading", "webbrowser",
+})
+# A safe list, as for shell commands: an import outside it is critical, since a
+# list of dangerous modules always misses one (io, pickle, tempfile, runpy, nt...).
+# addon_utils stays: upstream's rigging guide enables Rigify with it.
+_BLENDER_MODULES = frozenset({
+    "bpy", "bpy_extras", "bmesh", "mathutils", "bl_math", "addon_utils", "math", "cmath",
+    "random", "colorsys", "collections", "itertools", "functools", "operator", "statistics",
+    "typing", "dataclasses", "enum", "copy", "string", "re", "json", "time", "datetime",
+    "decimal", "fractions", "heapq", "bisect", "textwrap", "numpy",
+})
+_BLENDER_BUILTINS = {
+    "open": "file access", "exec": "runs code", "eval": "runs code", "compile": "runs code",
+    "__import__": "dynamic import", "globals": "namespace access", "locals": "namespace access",
+    "vars": "namespace access", "breakpoint": "runs code",
+}
+# Allowed only as a direct call on a bpy object with a literal attribute name.
+_BLENDER_ATTR_BUILTINS = frozenset({"getattr", "setattr", "delattr"})
+_BLENDER_INTERNAL_ATTRS = frozenset({
+    "f_globals", "f_locals", "f_builtins", "f_back", "gi_frame", "cr_frame", "ag_frame",
+    "tb_frame", "tb_next", "gi_code", "co_code", "func_globals",
+})
+# Methods that write a file wherever they are called (Image.save/save_render/unpack,
+# ndarray.tofile) or run a text block as a module.
+_BLENDER_WRITE_METHODS = frozenset({"save", "save_render", "unpack", "tofile"})
+_NUMPY_FILE_FUNCS = frozenset({
+    "save", "savez", "savez_compressed", "load", "loadtxt", "savetxt", "genfromtxt",
+    "fromfile", "memmap", "fromregex", "DataSource",
+})
+_BLENDER_PREFIXES = (
+    ("bpy.ops.wm", "window-manager operator"),
+    ("bpy.ops.preferences", "preferences"),
+    ("bpy.context.preferences", "preferences"),
+    ("bpy.ops.script", "script operator"),
+    ("bpy.ops.extensions", "extensions operator"),
+    ("bpy.ops.file", "file operator"),
+    ("bpy.ops.text.run_script", "runs a text block"),
+    ("bpy.ops.outliner.orphans_purge", "mass delete"),
+    ("bpy.data.orphans_purge", "mass delete"),
+    ("bpy.data.batch_remove", "mass delete"),
+    ("bpy.data.libraries.write", "library file access"),
+    ("bpy.data.libraries.load", "library file access"),
+    ("bpy.app.handlers", "handlers or timers"),
+    ("bpy.app.timers", "handlers or timers"),
+    ("bpy.utils.execfile", "runs a file"),
+    ("bpy.utils.load_scripts", "runs scripts"),
+)
+_LOOPS = (ast.For, ast.AsyncFor, ast.While, ast.ListComp, ast.SetComp, ast.DictComp,
+          ast.GeneratorExp)
+_DATA_REMOVE = re.compile(r"bpy\.data\.[^.]+\.remove")
+_OBJECT_DELETE = frozenset({"bpy.ops.object.delete", "bpy.ops.outliner.delete"})
+_BLENDER_MAX_CHARS = 200_000
+
+
+def _dunder(name: str) -> bool:
+    return len(name) > 4 and name.startswith("__") and name.endswith("__")
+
+
+def _under(path: str, prefix: str) -> bool:
+    return path == prefix or path.startswith(prefix + ".")
+
+
+def _blender_path_reason(path: str) -> Optional[str]:
+    segs = path.split(".")
+    if segs[0] in _BLENDER_SYSTEM_MODULES:
+        return "system module"
+    if segs[0] == "numpy" and len(segs) > 1 and segs[1] in _NUMPY_FILE_FUNCS:
+        return "file access"
+    for prefix, what in _BLENDER_PREFIXES:
+        if _under(path, prefix):
+            return what
+    if len(segs) >= 3 and segs[:2] == ["bpy", "ops"]:
+        group, op = segs[2], (segs[3] if len(segs) > 3 else "")
+        if group.startswith(("export_", "import_")) or op.startswith(("export", "import")):
+            return "export/import operator"
+        if op.startswith("save"):
+            return "file write"
+    if len(segs) >= 3 and segs[:2] == ["bpy", "utils"] and segs[2].startswith(("register", "unregister")):
+        return "registers code"
+    return None
+
+
+class _BlenderScan(ast.NodeVisitor):
+    """Collects every critical finding with its position; the first one wins."""
+
+    def __init__(self, aliases: dict, parents: dict):
+        self.aliases, self.parents = aliases, parents
+        self.found: list = []
+        self.loops = 0
+        self.mass_select: list = []
+        self.deletes: list = []
+
+    def flag(self, node, what: str, name: str) -> None:
+        self.found.append(((getattr(node, "lineno", 0), getattr(node, "col_offset", 0)), what, name))
+
+    def chains(self, node) -> set:
+        return _blender_chains(node, self.aliases)
+
+    def generic_visit(self, node):
+        loop = isinstance(node, _LOOPS)
+        self.loops += loop
+        super().generic_visit(node)
+        self.loops -= loop
+
+    def visit_Import(self, node):
+        for alias in node.names:
+            self._module(node, alias.name)
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node):
+        if node.level or not node.module:
+            self.flag(node, "relative import", node.module or ".")
+        else:
+            self._module(node, node.module)
+            for alias in node.names:
+                if alias.name == "*":
+                    self.flag(node, "star import", node.module)
+                elif (why := _blender_path_reason(f"{node.module}.{alias.name}")) is not None:
+                    self.flag(node, why, f"{node.module}.{alias.name}")
+        self.generic_visit(node)
+
+    def _module(self, node, name: str) -> None:
+        root = name.split(".")[0]
+        if root in _BLENDER_SYSTEM_MODULES:
+            self.flag(node, "system module", name)
+        elif root not in _BLENDER_MODULES:
+            self.flag(node, "module outside the scene-building list", name)
+
+    def visit_Name(self, node):
+        if node.id in _BLENDER_BUILTINS:
+            self.flag(node, _BLENDER_BUILTINS[node.id], node.id)
+        elif _dunder(node.id):
+            self.flag(node, "dunder name", node.id)
+        elif node.id in _BLENDER_SYSTEM_MODULES:
+            self.flag(node, "system module", node.id)
+        elif node.id in _BLENDER_ATTR_BUILTINS and not self._bpy_attr_call(node):
+            self.flag(node, "dynamic attribute access", node.id)
+        self.generic_visit(node)
+
+    def _bpy_attr_call(self, node) -> bool:
+        call = self.parents.get(node)
+        if not isinstance(call, ast.Call) or call.func is not node or len(call.args) < 2:
+            return False
+        name = call.args[1]
+        if not (isinstance(name, ast.Constant) and isinstance(name.value, str)) or _dunder(name.value):
+            return False
+        roots = self.chains(call.args[0])
+        if not roots or not all(r == "bpy" or r.startswith("bpy.") for r in roots):
+            return False
+        for root in roots:
+            if (why := _blender_path_reason(f"{root}.{name.value}")) is not None:
+                self.flag(call, why, f"{root}.{name.value}")
+        return True
+
+    def visit_Attribute(self, node):
+        if _dunder(node.attr):
+            self.flag(node, "dunder attribute", node.attr)
+        elif node.attr in _BLENDER_INTERNAL_ATTRS:
+            self.flag(node, "interpreter internals", node.attr)
+        elif node.attr in _BLENDER_SYSTEM_MODULES:
+            self.flag(node, "system module", node.attr)
+        elif node.attr == "as_module":
+            self.flag(node, "runs a text block", node.attr)
+        parent = self.parents.get(node)
+        called = isinstance(parent, ast.Call) and parent.func is node
+        if called and node.attr in _BLENDER_WRITE_METHODS:
+            self.flag(node, "file write", node.attr)
+        if not (isinstance(parent, ast.Attribute) and parent.value is node):
+            for path in self.chains(node):
+                if (why := _blender_path_reason(path)) is not None:
+                    self.flag(node, why, path)
+                if _DATA_REMOVE.fullmatch(path) and (self.loops or not called):
+                    self.flag(node, "removes data in a loop", path)
+                if called:
+                    self._op_call(parent, path)
+        self.generic_visit(node)
+
+    def _op_call(self, call, path: str) -> None:
+        pos = (call.lineno, call.col_offset)
+        if path.startswith("bpy.ops."):
+            for kw in call.keywords:
+                if kw.arg == "write_still" and not (isinstance(kw.value, ast.Constant) and not kw.value.value):
+                    self.flag(call, "file write", f"{path}(write_still)")
+        if path in _OBJECT_DELETE:
+            if self.loops:
+                self.flag(call, "removes data in a loop", path)
+            self.deletes.append((pos, path))
+        elif path.startswith("bpy.ops.object.select_"):
+            action = next((kw.value for kw in call.keywords if kw.arg == "action"), None)
+            if not (path == "bpy.ops.object.select_all" and isinstance(action, ast.Constant)
+                    and action.value == "DESELECT"):
+                self.mass_select.append(pos)
+        elif path.endswith(".select_set") and self.loops:
+            self.mass_select.append(pos)
+
+
+def _blender_chains(node, aliases: dict) -> set:
+    """Dotted paths `node` may name, with import and assignment aliases expanded."""
+    parts = []
+    while True:
+        if isinstance(node, ast.Attribute):
+            parts.append(node.attr)
+            node = node.value
+        elif isinstance(node, ast.Subscript):
+            parts.append("[]")
+            node = node.value
+        elif isinstance(node, ast.Call):
+            parts.append("()")
+            node = node.func
+        elif isinstance(node, ast.Name):
+            tail = ".".join(reversed(parts))
+            return {f"{root}.{tail}" if tail else root for root in aliases.get(node.id, {node.id})}
+        else:
+            return set()
+
+
+def _blender_aliases(tree) -> dict:
+    """name -> the dotted paths it is bound to by imports, assignments and loop targets."""
+    aliases: dict = {}
+
+    def bind(name: str, paths) -> bool:
+        before = aliases.get(name)
+        aliases[name] = (before or set()) | set(paths)
+        return aliases[name] != before
+
+    for _ in range(5):
+        changed = False
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for a in node.names:
+                    if a.asname:
+                        changed |= bind(a.asname, {a.name})
+                    else:
+                        changed |= bind(a.name.split(".")[0], {a.name.split(".")[0]})
+            elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+                for a in node.names:
+                    changed |= bind(a.asname or a.name, {f"{node.module}.{a.name}"})
+            elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)) and node.value is not None:
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                paths = _blender_chains(node.value, aliases)
+                for target in targets:
+                    if isinstance(target, ast.Name) and paths:
+                        changed |= bind(target.id, paths)
+            elif isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)):
+                paths = {p + ".[]" for p in _blender_chains(node.iter, aliases)}
+                if isinstance(node.target, ast.Name) and paths:
+                    changed |= bind(node.target.id, paths)
+        if not changed:
+            break
+    return aliases
+
+
+def classify_blender_code(code: Any) -> Risk:
+    """execute_blender_code's code: critical when it reaches files, programs,
+    the network, the open .blend, Blender's own code hooks, or removes data en
+    masse; everything else (bpy scene building, maths) is routine."""
+    if not isinstance(code, str):
+        return _critical("blender_code: no code", type(code).__name__)
+    if len(code) > _BLENDER_MAX_CHARS:
+        return _critical("blender_code: too long to review", f"{len(code)} characters")
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError, RecursionError, MemoryError) as exc:
+        return _critical("blender_code: unparsable", type(exc).__name__)
+    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    scan = _BlenderScan(_blender_aliases(tree), parents)
+    scan.visit(tree)
+    for pos, path in scan.deletes:
+        if any(sel < pos for sel in scan.mass_select):
+            scan.flag(ast.Pass(lineno=pos[0], col_offset=pos[1]), "mass delete after select all", path)
+    if scan.found:
+        _, what, name = min(scan.found, key=lambda f: f[0])
+        return _critical(f"blender_code: {what} ({_short(name, 60)})", name)
+    return _routine("blender_code")
 
 
 # ── Shell ────────────────────────────────────────────────────────────────────

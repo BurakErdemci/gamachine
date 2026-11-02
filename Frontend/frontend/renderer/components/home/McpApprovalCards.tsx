@@ -25,6 +25,7 @@ import { FileDeleteApproval } from './FileDeleteApproval';
 import { CommandApproval } from './CommandApproval';
 import { ComputerUseApproval } from './ComputerUseApproval';
 import { BrowserApproval } from './BrowserApproval';
+import { BlenderApproval } from './BlenderApproval';
 import { RiskReasonLine } from './RiskReasonLine';
 import { GateFailure, gateFailure, postMcpDecision, postComputerDecision, decisionToast } from '../../hooks/home/gateResponse';
 import { MCP_MSG_ID, McpActiveGate } from '../../hooks/home/useMCPApproval';
@@ -359,6 +360,7 @@ export const McpApprovalCards: React.FC<McpApprovalCardsProps> = ({
 
   const computer = gate.computer;
   const browser = gate.browser;
+  const blender = gate.blender;
 
   return (
     <>
@@ -385,6 +387,21 @@ export const McpApprovalCards: React.FC<McpApprovalCardsProps> = ({
           {lock(
           <BrowserApproval
             info={browser}
+            phonePaired={phonePaired}
+            onAnswer={async (approved) => {
+              const result = await decide(approved);
+              onResolved();
+              reportDecision(result, approved ? t('cu.card.sent') : t('cu.card.rejected'));
+            }}
+          />)}
+        </div>
+      )}
+
+      {blender && (
+        <div className="approval-slot">
+          {lock(
+          <BlenderApproval
+            info={blender}
             phonePaired={phonePaired}
             onAnswer={async (approved) => {
               const result = await decide(approved);

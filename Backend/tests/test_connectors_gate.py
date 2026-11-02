@@ -1,5 +1,7 @@
 """Backend gate for the agent connectors server: POST /connectors/gate and POST /connectors/{id}/open."""
 import json
+import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -11,6 +13,7 @@ from agentic import approval_mode, approval_policy, cards
 from connectors import catalog, launcher, settings, views
 from connectors.installer import Installer
 from remote import ui_dispatch
+from routes import conversation_routes
 from routes.conversation_routes import create_conversation_router
 
 SECRET = "connectors-secret"
@@ -67,9 +70,11 @@ def env(tmp_path, monkeypatch):
     launcher.bind()
 
 
-def gate(env, tool="execute_blender_code", connector="blender", conversation_id=1):
-    response = env.client.post("/connectors/gate", json={
-        "conversation_id": conversation_id, "connector": connector, "tool": tool})
+def gate(env, tool="execute_blender_code", connector="blender", conversation_id=1, args=None):
+    body = {"conversation_id": conversation_id, "connector": connector, "tool": tool}
+    if args is not None:
+        body["args"] = args
+    response = env.client.post("/connectors/gate", json=body)
     assert response.status_code == 200
     return response.json()
 
@@ -178,3 +183,140 @@ def test_open_reports_a_launch_failure(env):
 @pytest.mark.parametrize("path", ["/connectors/gate", "/connectors/blender/open"])
 def test_phone_channel_cannot_reach_either_route(path):
     assert ui_dispatch.http_allowed("POST", path) is False
+
+
+# ── execute_blender_code follows the global approval mode ───────────────────
+
+CRITICAL = "import os\nos.remove('C:/x')"
+ROUTINE = "import bpy\nbpy.ops.mesh.primitive_cube_add(size=2)"
+
+
+def set_mode(env, mode):
+    response = env.client.post("/approval-mode", json={"mode": mode}, headers=UI)
+    assert response.status_code == 200
+
+
+def gate_in_background(env, code):
+    out = {}
+    thread = threading.Thread(target=lambda: out.update(reply=gate(env, args={"code": code})))
+    thread.start()
+    return thread, out
+
+
+def wait_for_card(env):
+    for _ in range(400):
+        pending = env.client.get("/mcp-pending").json()["pending"]
+        if pending:
+            return pending
+        time.sleep(0.01)
+    raise AssertionError("no card opened")
+
+
+def answer(env, gate_id, approved):
+    response = env.client.post(f"/mcp-approval-respond/{gate_id}", json={"approved": approved})
+    assert response.status_code == 200
+
+
+def finish(thread, out):
+    thread.join(10)
+    assert not thread.is_alive()
+    return out["reply"]
+
+
+def test_auto_mode_runs_critical_blender_code_without_a_card(env):
+    assert gate(env, args={"code": CRITICAL}) == {"ok": True}
+    assert cards.list_pending() == []
+
+
+def test_balanced_routine_code_goes_through_without_a_card(env):
+    set_mode(env, "balanced")
+    assert gate(env, args={"code": ROUTINE}) == {"ok": True}
+    assert cards.list_pending() == []
+
+
+@pytest.mark.parametrize("mode,code", [("balanced", CRITICAL), ("step", ROUTINE)])
+def test_carded_code_runs_once_the_user_approves(env, mode, code):
+    set_mode(env, mode)
+    thread, out = gate_in_background(env, code)
+    pending = wait_for_card(env)
+    (gate_id, entry), = pending.items()
+    assert entry["tool"] == "blender_execute_code" and entry["conversation_id"] == 1
+    params = entry["params"]
+    assert params["code"] == code and params["truncated"] is False and params["mode"] == mode
+    assert params["connector"] == "blender"
+    if mode == "balanced":
+        assert params["reason"] == "blender_code: system module (os)" == entry["risk_reason"]
+    else:
+        assert params["reason"] == ""
+    assert [c["card_id"] for c in cards.list_pending(1)] == [gate_id]
+    answer(env, gate_id, True)
+    assert finish(thread, out) == {"ok": True}
+    assert env.client.get("/mcp-pending").json()["pending"] == {}
+
+
+def test_a_rejected_card_refuses_the_call(env):
+    set_mode(env, "step")
+    thread, out = gate_in_background(env, ROUTINE)
+    (gate_id, _), = wait_for_card(env).items()
+    answer(env, gate_id, False)
+    reply = finish(thread, out)
+    assert reply["ok"] is False and "declined" in reply["error"] and "Do not run it again" in reply["error"]
+
+
+def test_an_unanswered_card_closes_and_refuses_the_call(env, monkeypatch):
+    monkeypatch.setattr(conversation_routes, "BLENDER_CARD_WAIT_S", 0.3)
+    set_mode(env, "balanced")
+    reply = gate(env, args={"code": CRITICAL})
+    assert reply["ok"] is False and "did not answer" in reply["error"] and "Do not retry" in reply["error"]
+    assert cards.list_pending() == []
+    assert env.client.get("/mcp-pending").json()["pending"] == {}
+
+
+def test_stop_during_the_card_refuses_the_call(env):
+    set_mode(env, "step")
+    thread, out = gate_in_background(env, ROUTINE)
+    wait_for_card(env)
+    assert env.client.post("/computer-use/halt/1", headers=UI).status_code == 200
+    reply = finish(thread, out)
+    assert reply["ok"] is False and "Stop" in reply["error"]
+    assert cards.list_pending() == []
+
+
+def test_long_code_is_capped_on_the_card_with_a_note(env):
+    set_mode(env, "step")
+    code = "x = 1\n" * 5000
+    thread, out = gate_in_background(env, code)
+    (gate_id, entry), = wait_for_card(env).items()
+    params = entry["params"]
+    assert params["truncated"] is True and params["code_chars"] == len(code)
+    assert len(params["code"]) == conversation_routes.BLENDER_CARD_CODE_MAX
+    answer(env, gate_id, False)
+    finish(thread, out)
+
+
+def test_switching_to_balanced_reclassifies_the_full_code(env):
+    set_mode(env, "step")
+    # The critical line sits past the shown part: the full text decides, never the cap.
+    code = "x = 1\n" * 5000 + "import os\n"
+    thread, out = gate_in_background(env, code)
+    (gate_id, _), = wait_for_card(env).items()
+    set_mode(env, "balanced")
+    entry = env.client.get("/mcp-pending").json()["pending"][gate_id]
+    assert entry["risk_reason"] == "blender_code: system module (os)"
+    answer(env, gate_id, False)
+    finish(thread, out)
+
+    set_mode(env, "step")
+    thread, out = gate_in_background(env, ROUTINE)
+    wait_for_card(env)
+    set_mode(env, "balanced")
+    assert finish(thread, out) == {"ok": True}
+
+
+@pytest.mark.parametrize("tool", ["get_scene_info", "look", "get_addon_status"])
+def test_read_tools_never_ask_even_in_step_mode(env, tool):
+    set_mode(env, "step")
+    assert gate(env, tool, args={"code": CRITICAL}) == {"ok": True}
+    env.answers = [True]
+    assert open_(env)["ok"] is True
+    assert cards.list_pending() == []
