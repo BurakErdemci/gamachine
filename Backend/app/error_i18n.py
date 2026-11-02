@@ -31,6 +31,12 @@ EN: dict[str, str] = {
         "The agent browser cannot be changed through this channel.",
     "Tarayıcı kullanımı yalnız uygulama arayüzünden değiştirilebilir.":
         "The agent browser can only be changed from the app interface.",
+    "Tarayıcı onay kartları yalnız uygulama arayüzünden değiştirilebilir.":
+        "The agent browser's approval cards can only be changed from the app interface.",
+    "Bilgisayar kullanımı onay kartları yalnız uygulama arayüzünden değiştirilebilir.":
+        "Computer use approval cards can only be changed from the app interface.",
+    "cards_off true ya da false olmalı.":
+        "cards_off must be true or false.",
     "Bu kanaldan tarayıcı durumu değiştirilemez.":
         "The agent browser state cannot be changed through this channel.",
     "Tarayıcı çalışma durumu yalnız uygulama arayüzünden bildirilebilir.":
