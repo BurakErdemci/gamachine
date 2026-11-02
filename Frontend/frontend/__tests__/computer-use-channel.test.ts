@@ -138,7 +138,7 @@ describe('computer-use registered channel', () => {
       expect(handler.indexOf('await computerUse.reconcile()')).toBeGreaterThan(handler.indexOf('await axios.post('))
       expect(handler.indexOf('await computerUse.reconcile()')).toBeLessThan(handler.indexOf('return response.data'))
       const writeCatch = handler.indexOf('} catch (error)')
-      const writeFailure = handler.indexOf("throw new Error(text || 'Çalışma modu backend’e iletilemedi.')")
+      const writeFailure = handler.indexOf("throw new Error(text || mt('modeSendFailed'))")
       const reconcileCall = handler.indexOf('await computerUse.reconcile()')
       expect(writeCatch).toBeGreaterThan(handler.indexOf('await axios.post('))
       expect(writeFailure).toBeGreaterThan(writeCatch)
