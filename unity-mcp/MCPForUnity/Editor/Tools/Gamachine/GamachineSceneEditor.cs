@@ -66,10 +66,15 @@ namespace MCPForUnity.Editor.Tools.Gamachine
                         propsChanged = true;
                         stream.GetChangeGameObjectOrComponentPropertiesEvent(i, out var change);
                         // GameObject properties include the tree's name and activity fields.
+#if UNITY_6000_6_OR_NEWER
+                        // 6.6 makes instanceId a compile error (CS0619), which a CS0618 pragma cannot silence.
+                        if (!(EditorUtility.EntityIdToObject(change.entityId) is Component))
+#else
                         // Unity 6.4 deprecates instanceId; replacement APIs differ in 6.4 vs 6.5+, so preserve behavior.
 #pragma warning disable CS0618
                         if (!(GameObjectLookup.ResolveInstanceID(change.instanceId) is Component))
 #pragma warning restore CS0618
+#endif
                             hierarchyChanged = true;
                         break;
                     case ObjectChangeKind.ChangeAssetObjectProperties:
