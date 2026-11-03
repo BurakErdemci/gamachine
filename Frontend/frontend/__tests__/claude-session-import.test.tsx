@@ -218,6 +218,34 @@ describe('ControlPanel Claude session row', () => {
     expect(mocked.get).not.toHaveBeenCalled()
   })
 
+  it('shows a visible strip button that copies exactly the command', async () => {
+    mocked.get.mockResolvedValue({ data: { session_id: SID, workspace: 'C:\Projects\Game', command: COMMAND } })
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    const showToast = vi.fn()
+    strip({ showToast })
+    const button = await screen.findByTestId('claude-session-strip')
+    expect(button.textContent).toContain('Terminalde devam et')
+    expect(button.getAttribute('title')).toBe(`Claude oturumu ${SID} — komutu kopyala`)
+    expect(mocked.get).toHaveBeenCalledTimes(1)
+    fireEvent.click(button)
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(COMMAND))
+    expect(showToast).toHaveBeenCalledWith('Komut kopyalandı', 'success')
+    expect(screen.getByTestId('claude-session-copy')).toBeTruthy()
+  })
+
+  it('has no strip button for a null session id or a non-Claude chat', async () => {
+    mocked.get.mockResolvedValue({ data: { session_id: null } })
+    const { unmount } = strip()
+    await waitFor(() => expect(mocked.get).toHaveBeenCalled())
+    expect(screen.queryByTestId('claude-session-strip')).toBeNull()
+    unmount()
+    mocked.get.mockReset()
+    strip({ isClaudeSubscription: false })
+    expect(mocked.get).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('claude-session-strip')).toBeNull()
+  })
+
   it('reads the session again when a turn ends', async () => {
     mocked.get.mockResolvedValue({ data: { session_id: null } })
     const { rerender } = strip({ loading: true })

@@ -330,6 +330,17 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
             {contextUsage?.should_compact && <span className="strip-alert" data-should-compact aria-hidden="true" />}
             {isCompacting && <span className="strip-busy">{t('memory.compacting')}</span>}
           </button>
+          {claudeSession && (
+            <button
+              type="button"
+              data-testid="claude-session-strip"
+              onClick={() => { void copySessionCommand(); }}
+              title={t('claudeSession.stripTitle', { id: claudeSession.session_id })}
+              className="strip-item"
+            >
+              {'⌨️ '}{t('claudeSession.stripLabel')}
+            </button>
+          )}
         </>
       )}
 
