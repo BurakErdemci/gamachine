@@ -3,6 +3,8 @@
 // lib/appearance.ts): localStorage, every access in try/catch, so a refused storage only means
 // nothing is remembered, never a broken screen.
 
+import { isRemotePage } from '../remote/transport';
+
 export const KEYS = {
   seen: 'guide.seen',                 // {"<topic id>": <rev watched>}
   installedFrom: 'guide.installedFrom', // the app version of the first launch
@@ -41,5 +43,7 @@ export function installedFrom(appVersion: string, s?: Store): string {
   return appVersion;
 }
 
-export const tourDone = (s?: Store): boolean => read(KEYS.tourDone, s) === '1';
+// The web remote shows a desktop that ran its own tour; its browser storage starts empty, so the
+// tour asked the owner's name again there (3 Nov 2026).
+export const tourDone = (s?: Store): boolean => isRemotePage() || read(KEYS.tourDone, s) === '1';
 export const markTourDone = (s?: Store): void => write(KEYS.tourDone, '1', s);
