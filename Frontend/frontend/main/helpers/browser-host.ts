@@ -1201,6 +1201,12 @@ export class BrowserHost {
         entry.timer = this.later(() => {
           if (entry.state === 'awaiting_approval') this.cancelDownload(entry, 'nobody approved it within 3 minutes')
         }, DOWNLOAD_APPROVAL_MS)
+        // The gateway only sees a paused download in the agent's next reply, so with browser cards off it would
+        // wait for that reply (or the 3 minute cancel). Ask the setting now; any failure leaves it paused.
+        void (async () => {
+          const { data } = await this.request('get', '/browser/settings')
+          if (data?.cards_off === true && entry.state === 'awaiting_approval') this.resumeDownload(entry)
+        })().catch(() => { /* stays paused for the gateway */ })
       }
       item.on('updated', (_event, state) => {
         entry.receivedBytes = item.getReceivedBytes()

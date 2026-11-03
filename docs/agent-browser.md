@@ -323,7 +323,7 @@ only answers two read-only calls and keeps no pick state; nothing is ever reconc
 - USER downloads start at once, with no card and no type limit.
 - AGENT downloads of a blocked type (`AGENT_BLOCKED_DOWNLOAD_TYPES` in the host, `AGENT_BLOCKED_DOWNLOAD_SUFFIXES` in
   `browser_use/policy.py`; the last extension decides, so `.pdf.exe` is an `.exe`) are cancelled before any card,
-  cards on or off. Any other agent download is paused (`awaiting_approval`). Every agent download is reported once
+  cards on or off. Any other agent download is paused (`awaiting_approval`); with browser cards off the host asks `GET /browser/settings` right after pausing and resumes the download at once when `cards_off` is true (if that read fails it stays paused for the gateway). Every agent download is reported once
   in the chat's next agent reply that is not a `user_control` refusal: the oldest as `download`, the others in
   `downloadsPending`, each with the `tab_id` it came from. Its card closes unanswered after about 3 minutes like any card, and the download is cancelled. When the user
   takes over the tab, its paused agent downloads become USER downloads and resume (blocked ones stay blocked).
