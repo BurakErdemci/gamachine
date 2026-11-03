@@ -113,7 +113,7 @@ export interface Message {
   notices?: MessageNotice[];
   /** Written on a paired phone (remote control). Renderer-only: the backend
    *  stores no message source, so a reload drops the marker. */
-  source?: 'phone';
+  source?: 'phone' | 'agent';
   sourceDevice?: string;
 }
 

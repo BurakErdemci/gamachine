@@ -623,6 +623,14 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                     📱 {stripBidi(msg.sourceDevice || '') || t('chat.phoneUnnamed')}
                   </div>
                 )}
+                {msg.source === 'agent' && (() => {
+                  const name = stripBidi(msg.sourceDevice || '') || t('chat.agentUnnamed');
+                  return (
+                    <div data-testid="agent-marker" title={t('chat.fromAgentTitle', { name })} className="msg-phone">
+                      ⌨️ {t('chat.fromAgent', { name })}
+                    </div>
+                  );
+                })()}
                 <div className="msg-body">
                   {msg.images && msg.images.length > 0 && (
                     <div className="msg-images">

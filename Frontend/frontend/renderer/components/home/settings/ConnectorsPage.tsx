@@ -8,6 +8,7 @@ import {
 import { confirmDialog } from '../../ui/ConfirmDialog';
 import { Lamp, SetCard, SetGroup, SetPageHead, SetRow, SetSwitch } from './controls';
 import { ConnectorInstallFlow } from './ConnectorInstallFlow';
+import { agentPasteText } from '../../../lib/agentBridge';
 
 type Toast = (msg: string, type: 'success' | 'error' | 'warning' | 'info') => void;
 
@@ -203,11 +204,103 @@ const Details = ({ view, busy, run, onRepair, onRemove }: {
   );
 };
 
+type BridgeHttp = { get: (...a: any[]) => Promise<any>; put?: (...a: any[]) => Promise<any> };
+
+/** Terminal agents (Claude Code, Codex, opencode) reach the chats through the backend's stdio MCP server; one switch plus one paste-to-your-agent text. */
+const AgentBridgeCard = ({ API, http, token, saved, showToast }: {
+  API: string; http: BridgeHttp; token?: string; saved: () => void; showToast?: Toast;
+}) => {
+  const { t, lang } = useLang();
+  const [state, setState] = useState<{ enabled: boolean; command: string[] } | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+  const headers = { headers: { 'X-Session-Token': token ?? '' } };
+
+  const load = useCallback(async () => {
+    try {
+      const r = await http.get(`${API}/agent-bridge/settings`, headers);
+      if (!alive.current) return;
+      const cmd = Array.isArray(r?.data?.server_command) ? r.data.server_command.map(String) : [];
+      setState({ enabled: r?.data?.enabled === true, command: cmd });
+      setFailed(false);
+    } catch {
+      if (alive.current) setFailed(true);
+    }
+  }, [API, http, token]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { void load(); }, [load]);
+
+  const toggle = async () => {
+    if (!state || busy || !http.put) return;
+    const next = !state.enabled;
+    setBusy(true);
+    try {
+      await http.put(`${API}/agent-bridge/settings`, { enabled: next }, headers);
+      if (!alive.current) return;
+      setState({ ...state, enabled: next });
+      saved();
+    } catch {
+      if (alive.current) showToast?.(t('agentBridge.saveFailed'), 'error');
+    } finally {
+      if (alive.current) setBusy(false);
+    }
+  };
+
+  const text = state?.enabled ? agentPasteText(lang === 'en' ? 'en' : 'tr', state.command) : '';
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast?.(t('agentBridge.copied'), 'success');
+    } catch {
+      showToast?.(t('agentBridge.copyFailed'), 'error');
+    }
+  };
+
+  return (
+    <SetGroup testId="agent-bridge-card">
+      <SetCard>
+        <SetRow
+          name={t('agentBridge.title')}
+          hint={t('agentBridge.desc')}
+          control={state && (
+            <SetSwitch checked={state.enabled} label={t('agentBridge.switch')} busy={busy} disabled={busy}
+              testId="agent-bridge-switch" onToggle={() => { void toggle(); }} />
+          )}
+        />
+        {!state && !failed && <p className="set-hint" role="status">{t('agentBridge.loading')}</p>}
+        {failed && (
+          <p className="set-hint" role="alert" data-testid="agent-bridge-load-failed">
+            {t('agentBridge.loadFailed')}{' '}
+            <button type="button" className="set-link" onClick={() => { void load(); }}>{t('agentBridge.retry')}</button>
+          </p>
+        )}
+        {state?.enabled && (
+          <div className="set-row">
+            <div className="set-rt">
+              <p className="set-hint">{t('agentBridge.pasteLead')}</p>
+              <pre className="set-input-mono" data-testid="agent-bridge-paste"
+                style={{ whiteSpace: 'pre-wrap', userSelect: 'all' }}>{text}</pre>
+              <p className="set-hint">
+                <button type="button" className="btn btn-primary btn-sm" data-testid="agent-bridge-copy"
+                  onClick={() => { void copy(); }}>{t('agentBridge.copy')}</button>
+              </p>
+              <p className="set-hint">{t('agentBridge.approvals')}</p>
+            </div>
+          </div>
+        )}
+      </SetCard>
+    </SetGroup>
+  );
+};
+
 /**
  * Settings > Bağlayıcılar: the external apps the agent can drive, one card each, installed on demand.
  * The install itself (plan, progress, cancel) lives in ConnectorInstallFlow.
  */
-export const ConnectorsPage = ({ saved, showToast }: { saved: () => void; showToast?: Toast }) => {
+export const ConnectorsPage = ({ saved, showToast, API, http, token }: {
+  saved: () => void; showToast?: Toast; API?: string; http?: BridgeHttp; token?: string;
+}) => {
   const { t } = useLang();
   const desktop = connectorsAvailable();
   const [items, setItems] = useState<ConnectorView[] | null>(null);
@@ -243,6 +336,7 @@ export const ConnectorsPage = ({ saved, showToast }: { saved: () => void; showTo
       {(items ?? []).map(v => (
         <ConnectorCard key={v.id} view={v} onChanged={() => { void load(); }} onView={replace} showToast={showToast} saved={saved} />
       ))}
+      {desktop && API && http && <AgentBridgeCard API={API} http={http} token={token} saved={saved} showToast={showToast} />}
       {items !== null && items.length > 0 && <p className="set-hint">{t('conn.switchNote')}</p>}
     </>
   );

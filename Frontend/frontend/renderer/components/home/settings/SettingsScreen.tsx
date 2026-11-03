@@ -252,7 +252,7 @@ export const SettingsScreen = (props: SettingsScreenProps) => {
           {page === 'onay' && <ApprovalPage mode={props.approvalMode} onChange={props.onApprovalModeChange} saved={saved} />}
           {page === 'bilgisayar' && <ComputerUsePage saved={saved} showToast={props.showToast} />}
           {page === 'tarayici' && <BrowserUsePage saved={saved} showToast={props.showToast} />}
-          {page === 'baglayicilar' && <ConnectorsPage saved={saved} showToast={props.showToast} />}
+          {page === 'baglayicilar' && <ConnectorsPage saved={saved} showToast={props.showToast} API={props.API} http={props.http} token={user?.sessionToken} />}
           {page === 'ajan' && <AgentGuidePage lang={lang} API={props.API} http={props.http} token={user?.sessionToken} saved={saved} />}
           {page === 'uzak' && (
             <>

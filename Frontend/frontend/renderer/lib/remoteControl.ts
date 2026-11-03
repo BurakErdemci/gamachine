@@ -81,6 +81,8 @@ export interface RemoteMessage {
   conversationId: number;
   text: string;
   deviceName: string;
+  /** Who sent it: a paired phone, or a terminal agent (its client name is `deviceName`). */
+  source: 'phone' | 'agent';
   /** Chosen on the phone for this message; absent = the page's own level. */
   effort?: RemoteEffort;
 }
@@ -93,7 +95,7 @@ export type RemoteEffort = typeof REMOTE_EFFORTS[number];
 const REQUEST_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 export function parseRemoteMessage(data: any): RemoteMessage | null {
-  if (!data || data.type !== 'remote_message' || data.source !== 'phone') return null;
+  if (!data || data.type !== 'remote_message' || (data.source !== 'phone' && data.source !== 'agent')) return null;
   const conversationId = Number(data.conversation_id);
   if (!Number.isSafeInteger(conversationId) || conversationId <= 0) return null;
   if (typeof data.request_id !== 'string' || !REQUEST_ID.test(data.request_id)) return null;
@@ -106,7 +108,7 @@ export function parseRemoteMessage(data: any): RemoteMessage | null {
     if (typeof data.effort !== 'string' || !(REMOTE_EFFORTS as readonly string[]).includes(data.effort)) return null;
     effort = data.effort as RemoteEffort;
   }
-  return { requestId: data.request_id, conversationId, text: data.text, deviceName, ...(effort ? { effort } : {}) };
+  return { requestId: data.request_id, conversationId, text: data.text, deviceName, source: data.source as 'phone' | 'agent', ...(effort ? { effort } : {}) };
 }
 
 // Every open renderer stream gets the frame, so each window may see it. The

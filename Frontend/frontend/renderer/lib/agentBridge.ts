@@ -1,0 +1,9 @@
+/** The text the owner pastes to a terminal agent so it adds Gamachine's stdio MCP server to its own settings. */
+export function agentPasteText(lang: 'tr' | 'en', argv: string[]): string {
+  const cmd = argv.map(a => '"' + a.replace(/"/g, '\\"') + '"').join(' ');
+  const json = JSON.stringify(argv);
+  if (lang === 'en') {
+    return `I want you to connect to Gamachine. Gamachine is the game-development app open on this computer; you can reach its chats through an MCP server.\n\nAdd a stdio MCP server named \`gamachine\` to your own MCP settings. Command:\n${cmd}\n\n- If you are Claude Code: claude mcp add --scope user gamachine -- ${cmd}\n- If you are Codex: codex mcp add gamachine -- ${cmd}\n- If you are opencode: add it to the "mcp" field in ~/.config/opencode/opencode.json: "gamachine": {"type": "local", "command": ${json}, "enabled": true}\n- If you are another tool: add the same command to your own MCP settings as a stdio server.\n\nTell me if you need to restart. Once connected, call the gamachine_list_chats tool and show me my chats. I approve risky steps myself in Gamachine.`;
+  }
+  return `Gamachine'e bağlanmanı istiyorum. Gamachine bu bilgisayarda açık olan oyun geliştirme uygulamam; sohbetlerine bir MCP sunucusuyla erişebilirsin.\n\nKendi MCP ayarına \`gamachine\` adında bir stdio MCP sunucusu ekle. Komut:\n${cmd}\n\n- Claude Code isen: claude mcp add --scope user gamachine -- ${cmd}\n- Codex isen: codex mcp add gamachine -- ${cmd}\n- opencode isen: ~/.config/opencode/opencode.json dosyasındaki "mcp" alanına ekle: "gamachine": {"type": "local", "command": ${json}, "enabled": true}\n- Başka bir araçsan aynı komutu kendi MCP ayarına stdio sunucusu olarak ekle.\n\nYeniden başlatman gerekiyorsa bana söyle. Bağlanınca gamachine_list_chats aracını çağır ve sohbetlerimi göster. Riskli adımları ben Gamachine'den onaylarım.`;
+}

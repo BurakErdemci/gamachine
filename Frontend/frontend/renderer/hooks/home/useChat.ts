@@ -49,8 +49,8 @@ export type QueuedMessage = {
   chips?: readonly BrowserChip[];
 };
 
-/** A message that came from a paired phone (`remote_message` frame). */
-export type RemoteOrigin = { device: string };
+/** A message that came from a paired phone or a terminal agent (`remote_message` frame); no kind = phone. */
+export type RemoteOrigin = { device: string; kind?: 'phone' | 'agent' };
 type SetArg<T> = T | ((prev: T) => T);
 const resolveArg = <T,>(arg: SetArg<T>, prev: T): T =>
   typeof arg === 'function' ? (arg as (p: T) => T)(prev) : arg;
@@ -934,7 +934,7 @@ export const useChat = (
       smells: [], 
       timestamp: new Date().toISOString(),
       images: images,
-      ...(remote ? { source: 'phone' as const, sourceDevice: remote.device } : {}),
+      ...(remote ? { source: remote.kind ?? 'phone', sourceDevice: remote.device } : {}),
     };
     updateMessages(prev => [...prev, userMsg]);
     // The message box holds the user's draft for the chat on screen; a wake
@@ -1369,7 +1369,7 @@ export const useChat = (
     void sendMessageRef.current(
       m.text, '', args.lang, args.genMode, m.effort ?? args.thinkingLevel,
       args.setPendingGenFiles, args.setPendingDelete,
-      undefined, false, undefined, 'user', m.conversationId, undefined, { device: m.deviceName },
+      undefined, false, undefined, 'user', m.conversationId, undefined, { device: m.deviceName, ...(m.source === 'agent' ? { kind: 'agent' as const } : {}) },
     );
   }, [rt]);
   const compactRef = useRef<(convId?: number) => Promise<void>>(async () => {});
@@ -1394,6 +1394,8 @@ export const useChat = (
   deliverRemoteRef.current = deliverRemote;
   const showToastRef = useRef(showToast);
   showToastRef.current = showToast;
+  const fetchConversationsRef = useRef(fetchConversations);
+  fetchConversationsRef.current = fetchConversations;
 
   // A card a phone answered first (`card_closed`): the next queued card of
   // that chat takes its place, as after a click. Bridge cards (the global
@@ -1508,6 +1510,13 @@ export const useChat = (
                   // the same one).
                   const change = parseChatModelChanged(data);
                   if (change && !iptal) onActiveChatModelChangedRef.current?.(activeConvIdRef.current);
+                  continue;
+                }
+                if (data?.type === 'conversation_created') {
+                  // An agent opened a chat: only the list needs the news; the
+                  // chat on screen stays.
+                  const createdId = Number(data.conversation_id);
+                  if (Number.isSafeInteger(createdId) && createdId > 0 && !iptal) void fetchConversationsRef.current(userId);
                   continue;
                 }
                 if (data?.type !== 'wake' || iptal) continue;
