@@ -29,7 +29,12 @@ namespace MCPForUnity.Runtime.Helpers
             }
 
 #if UNITY_6000_5_OR_NEWER
-            return (int)EntityId.ToULong(obj.GetEntityId());
+            EntityId entityId = obj.GetEntityId();
+            int handle = (int)EntityId.ToULong(entityId);
+#if UNITY_EDITOR && UNITY_6000_6_OR_NEWER
+            lock (s_handles) s_handles[handle] = entityId;
+#endif
+            return handle;
 #else
             // 6.4 GetInstanceID'yi obsolete işaretler ama GetEntityId ancak 6.5'te
             // güvenilir — bu dal bilerek eski API'de (shim'in varlık sebebi).
@@ -40,26 +45,44 @@ namespace MCPForUnity.Runtime.Helpers
         }
 
 #if UNITY_EDITOR
+#if UNITY_6000_6_OR_NEWER
+        // Every int handle GetInstanceIDCompat gave out in this domain, with its full EntityId.
+        // Measured on 6.6.8f1 (3 Nov 2026): EntityIdToObject(EntityId.FromULong(handle)) finds
+        // nothing, so the truncated int cannot be turned back into the EntityId it came from.
+        private static readonly System.Collections.Generic.Dictionary<int, EntityId> s_handles =
+            new System.Collections.Generic.Dictionary<int, EntityId>();
+#endif
+
         /// <summary>
         /// Resolves an int instance ID handle back to a UnityEngine.Object.
         ///   Pre-6.0  : EditorUtility.InstanceIDToObject(int)
         ///   6.0–6.5  : EditorUtility.EntityIdToObject(int)  (implicit int→EntityId cast)
-        ///   6.6+     : EditorUtility.EntityIdToObject(EntityId.FromULong(...)) on the bits
-        ///              <see cref="GetInstanceIDCompat"/> handed out.
+        ///   6.6+     : the EntityId recorded when <see cref="GetInstanceIDCompat"/> handed the
+        ///              int out; after a domain reload, a scan of the loaded objects.
         /// </summary>
         public static Object InstanceIDToObjectCompat(int instanceId)
         {
 #if UNITY_6000_6_OR_NEWER
-            // InstanceIDToObject(int) throws when invoked through reflection on 6.6.8f1 (measured
-            // 3 Nov 2026: every find_gameobjects call failed), so the int goes back to an EntityId.
-            // GetInstanceIDCompat keeps the low 32 bits; sign-extending restores any id that fits.
-            Object found = EditorUtility.EntityIdToObject(EntityId.FromULong((ulong)(long)instanceId));
-            if (found == null && instanceId < 0)
-                found = EditorUtility.EntityIdToObject(EntityId.FromULong((uint)instanceId));
-            return found;
+            // InstanceIDToObject(int) throws when invoked through reflection on 6.6.8f1.
+            EntityId entityId;
+            bool known;
+            lock (s_handles) known = s_handles.TryGetValue(instanceId, out entityId);
+            if (known)
+            {
+                Object recorded = EditorUtility.EntityIdToObject(entityId);
+                if (recorded != null)
+                    return recorded;
+            }
+            // A handle from before the last domain reload (every script compile clears the map).
+            foreach (Object candidate in Resources.FindObjectsOfTypeAll<Object>())
+            {
+                if (candidate != null && candidate.GetInstanceIDCompat() == instanceId)
+                    return candidate;
+            }
+            return null;
 #elif UNITY_6000_3_OR_NEWER
-            // 6.4 implicit int→EntityId cast'i obsolete işaretler; 6.6+ dalı zaten
-            // reflection'a geçiyor — aradaki sürümlerde bilinçli eski davranış.
+            // 6.4 marks the implicit int→EntityId cast obsolete; until 6.6 it still resolves,
+            // so these versions keep the old call on purpose.
 #pragma warning disable CS0618
             return EditorUtility.EntityIdToObject(instanceId);
 #pragma warning restore CS0618
