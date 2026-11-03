@@ -71,8 +71,33 @@ export const RemoteControlSection = ({ onStatus, statusPollMs = STATUS_POLL_MS, 
   const [now, setNow] = useState(() => Date.now());
   const [relayInput, setRelayInput] = useState("");
   const [needsRepair, setNeedsRepair] = useState(false);
+  const [copyState, setCopyState] = useState<"ok" | "fail" | null>(null);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onStatusRef = useRef(onStatus);
   onStatusRef.current = onStatus;
+
+  const clearCopyTimer = () => {
+    if (copyTimer.current) clearTimeout(copyTimer.current);
+    copyTimer.current = null;
+  };
+  useEffect(() => clearCopyTimer, []);
+  // A new offer starts with the plain label again.
+  useEffect(() => {
+    clearCopyTimer();
+    setCopyState(null);
+  }, [offer?.qr_url]);
+
+  const copyPairLink = async (link: string) => {
+    let next: "ok" | "fail" = "ok";
+    try {
+      await navigator.clipboard.writeText(link);
+    } catch {
+      next = "fail";
+    }
+    clearCopyTimer();
+    setCopyState(next);
+    copyTimer.current = setTimeout(() => setCopyState(null), 2000);
+  };
 
   const applyStatus = useCallback((s: RemoteStatus) => {
     setStatus(s);
@@ -331,7 +356,20 @@ export const RemoteControlSection = ({ onStatus, statusPollMs = STATUS_POLL_MS, 
                     {t("remote.pairExpiresIn", { sure: mmss(offer.expires_at - now) })}
                   </span>
                 </div>
+                {status?.relay_url && (
+                  <div className="set-hint" data-testid="remote-pair-browser-hint">
+                    {t("remote.pairBrowserHint", { url: status.relay_url })}
+                  </div>
+                )}
               </div>
+              <button
+                type="button"
+                data-testid="remote-pair-copy"
+                onClick={() => { void copyPairLink(offer.qr_url); }}
+                className="btn btn-ghost btn-sm"
+              >
+                {copyState === "ok" ? t("remote.pairCopied") : copyState === "fail" ? t("remote.pairCopyFailed") : t("remote.pairCopyLink")}
+              </button>
               <button type="button" onClick={cancelPairing} className="btn btn-ghost btn-sm">{t("remote.pairCancel")}</button>
             </div>
           )}
