@@ -1,7 +1,8 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useLang } from '../../lib/i18n';
-import { Gauge, Rocket, Paperclip, Film, Minimize2 } from 'lucide-react';
+import axios from 'axios';
+import { Gauge, Rocket, Paperclip, Film, Minimize2, Terminal } from 'lucide-react';
 import { ContextUsage } from './types';
 import { StripUse } from './UsageMeters';
 import type { UsageFamilyId, UsageLimits } from '../../lib/usageLimits';
@@ -46,7 +47,15 @@ interface ControlPanelProps {
   /** The composer's own pickers (its attach button and its video dialog), reached from the menu. */
   onAttachFile?: () => void;
   onAddVideo?: () => void;
+  /** Backend address, token and toast for the Claude session row; `loading` flipping to false
+   *  (a turn ended) re-reads the chat's session id. */
+  apiBase?: string;
+  sessionToken?: string;
+  loading?: boolean;
+  showToast?: (msg: string, type: 'success' | 'error' | 'warning' | 'info') => void;
 }
+
+interface ClaudeSessionInfo { session_id: string; command: string }
 
 export const ControlPanel: React.FC<ControlPanelProps> = ({
   thinkingLevel,
@@ -66,8 +75,38 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   modelId = null,
   onAttachFile,
   onAddVideo,
+  apiBase = '',
+  sessionToken = '',
+  loading = false,
+  showToast,
 }) => {
   const { t } = useLang();
+  const [claudeSession, setClaudeSession] = useState<ClaudeSessionInfo | null>(null);
+  // Read on chat change and again when a turn of the chat ends (the id can change on a turn).
+  // Nothing is shown on a null id or any failure.
+  useEffect(() => {
+    setClaudeSession(null);
+    if (!isClaudeSubscription || !activeConvId || !apiBase || loading) return;
+    let stale = false;
+    axios.get(`${apiBase}/conversations/${activeConvId}/claude-session`, { headers: { 'X-Session-Token': sessionToken } })
+      .then((res) => {
+        const d = res.data;
+        if (!stale && d && typeof d.session_id === 'string' && d.session_id && typeof d.command === 'string') {
+          setClaudeSession({ session_id: d.session_id, command: d.command });
+        }
+      })
+      .catch(() => { /* no session row */ });
+    return () => { stale = true; };
+  }, [isClaudeSubscription, activeConvId, apiBase, sessionToken, loading]);
+  const copySessionCommand = async () => {
+    if (!claudeSession) return;
+    try {
+      await navigator.clipboard.writeText(claudeSession.command);
+      showToast?.(t('claudeSession.copied'), 'success');
+    } catch {
+      showToast?.(t('claudeSession.copyFailed'), 'error');
+    }
+  };
   const [showThinkingMenu, setShowThinkingMenu] = useState(false);
   const [showMore, setShowMore] = useState(false);
   const moreBtnRef = useRef<HTMLButtonElement>(null);
@@ -346,6 +385,11 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
               key: 'reports', icon: <Gauge size={15} />, title: t('more.reports'), desc: t('more.reportsDesc'),
               run: onToggleReports, reason: !activeConvId ? t('more.noChat') : null,
               testId: 'reports-toggle', checked: reportsOpen,
+            })}
+            {claudeSession && row({
+              key: 'claude-session', icon: <Terminal size={15} />, title: t('claudeSession.copy'),
+              desc: t('claudeSession.row', { id: claudeSession.session_id.slice(0, 8) }),
+              run: () => { void copySessionCommand(); }, testId: 'claude-session-copy',
             })}
           </div>
         </div>

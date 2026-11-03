@@ -42,6 +42,8 @@ interface EmptyChatProps {
   /** The approval mode decides what the greeting promises: "I ask first" was shown in auto mode
    *  too, where nothing asks (Burak, 2 Oct). Absent means step, the strictest promise. */
   approvalMode?: GenerationMode;
+  /** Opens the "import a Claude Code session" dialog; the link is hidden without it. */
+  onImportSession?: () => void;
 }
 
 // Copy per approval mode: what the greeting and the writing cards promise.
@@ -59,7 +61,7 @@ const shield = (
 );
 
 /** Mockup "Yeni sohbet (bos)": the mascot greets as the quest giver, the board lists starters. */
-export const EmptyChat: React.FC<EmptyChatProps> = ({ userName, projectName, onPick, approvalMode = 'step' }) => {
+export const EmptyChat: React.FC<EmptyChatProps> = ({ userName, projectName, onPick, approvalMode = 'step', onImportSession }) => {
   const { t } = useLang();
   const promise = PROMISE[approvalMode] ?? PROMISE.step;
   const name = displayName(userName);
@@ -111,6 +113,12 @@ export const EmptyChat: React.FC<EmptyChatProps> = ({ userName, projectName, onP
           ))}
         </ul>
       </div>
+
+      {onImportSession && (
+        <button type="button" className="btn btn-ghost" data-testid="import-session-open" onClick={onImportSession}>
+          {t('importSession.open')}
+        </button>
+      )}
     </section>
   );
 };

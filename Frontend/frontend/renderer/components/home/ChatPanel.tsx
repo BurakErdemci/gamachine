@@ -88,6 +88,11 @@ export const isMailNote = (msg: Pick<Message, 'role' | 'content'>) =>
 export const UNDELIVERED_MARKER = '📭';
 export const isUndeliveredNote = (msg: Pick<Message, 'role' | 'content'>) =>
   msg.role === 'system' && typeof msg.content === 'string' && msg.content.startsWith(UNDELIVERED_MARKER);
+/** Start of the row that ends history imported from a terminal Claude Code session (backend
+ *  claude_sessions import). Matched on the base character: the emoji selector may be dropped. */
+export const IMPORT_MARKER = '⌨️';
+export const isImportDivider = (msg: Pick<Message, 'role' | 'content'>) =>
+  msg.role === 'system' && typeof msg.content === 'string' && msg.content.startsWith('⌨');
 /** A forwarded reply's header tag (backend `mailbox.AUTO_FORWARD_TAG`): the
  *  other chat ended its turn without sending, so its last message came here. */
 export const MAIL_AUTO_TAG = '[otomatik iletildi]';
@@ -407,6 +412,13 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                 <p className="msg-note-body">
                   {stripBidi(msg.content.slice(UNDELIVERED_MARKER.length).trimStart())}
                 </p>
+              </div>
+            ) : isImportDivider(msg) ? (
+              /* Where the terminal history ends and this chat continues: a divider line, no bubble. */
+              <div data-testid="import-divider" className="msg-event justify-center" data-role="system">
+                <span className="h-px flex-1 bg-current opacity-20" aria-hidden="true" />
+                <span className="msg-event-k">{stripBidi(msg.content)}</span>
+                <span className="h-px flex-1 bg-current opacity-20" aria-hidden="true" />
               </div>
             ) : msg.role === 'system' ? (
               /* AUTO-WAKE row. This branch is MANDATORY: the ternary below only

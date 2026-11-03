@@ -71,6 +71,7 @@ import { usePendingChange } from '../lib/pendingChange';
 import { clearSeen, isUnseen, loadSeen, saveSeen, type Seen } from '../lib/changesSeen';
 import { ThreadHeader } from '../components/home/ThreadHeader';
 import { EmptyChat, questDraft } from '../components/home/EmptyChat';
+import { ImportSessionDialog, samePath, type ImportedSession } from '../components/home/ImportSessionDialog';
 import { AchievementToast } from '../components/home/AchievementToast';
 import { ProfileView } from '../components/home/ProfileView';
 import { useProfileStats } from '../hooks/home/useProfileStats';
@@ -396,6 +397,18 @@ export default function Home() {
   // The file change a card is waiting on, with that card's own Accept / Reject handlers.
   const pendingChange = usePendingChange();
   const [reportsOpen, setReportsOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  // A terminal Claude Code session was imported: switch to its folder when it differs from the open
+  // project, then show the new chat. A failed switch still opens the chat (its history is readable).
+  const onSessionImported = async (result: ImportedSession) => {
+    if (!samePath(result.workspace, fs.workspacePath)) {
+      const opened = await fs.selectWorkspace(result.workspace);
+      if (!opened) showToast(t('importSession.workspaceFail'), 'error' as any);
+    }
+    if (auth.user) await chat.fetchConversations(auth.user.id);
+    setImportOpen(false);
+    await chat.selectConversation({ id: result.chat_id, title: result.title ?? '', created_at: '', updated_at: '' });
+  };
   // The composer's attach/video pickers, opened from the strip's "Add & chat" menu.
   const composerPickers = useRef<ComposerPickers>(null);
   const [isEditorFocused, setIsEditorFocused] = useState(false);
@@ -1176,7 +1189,7 @@ export default function Home() {
             never fire). The empty new chat takes the thread's place. */}
         <div className="thread-wrap">
           {chatEmpty ? (
-            <EmptyChat userName={me.name} projectName={projectName} onPick={pickQuest} approvalMode={chat.generationMode} />
+            <EmptyChat userName={me.name} projectName={projectName} onPick={pickQuest} approvalMode={chat.generationMode} onImportSession={() => setImportOpen(true)} />
           ) : (
             <div className="thread custom-scrollbar" onScroll={chatScroll.onScroll}>
               <ChatPanel
@@ -1265,6 +1278,11 @@ export default function Home() {
             isClaudeSubscription={isClaudeSub} ultracode={ultracode} setUltracode={setUltracode} effortCaps={effortCaps}
             usage={usage.data} usageFamily={stripUsageFamily} modelId={ai.aiConfig.model_name}
             onAttachFile={() => composerPickers.current?.pickImage()} onAddVideo={() => composerPickers.current?.pickVideo()}
+            apiBase={API} sessionToken={auth.user?.sessionToken ?? ''} loading={chat.loading} showToast={showToast as any}
+          />
+          <ImportSessionDialog
+            open={importOpen} onClose={() => setImportOpen(false)} onImported={onSessionImported}
+            API={API || ''} token={auth.user?.sessionToken ?? ''} currentPath={fs.workspacePath}
           />
         </div>
       </main>
