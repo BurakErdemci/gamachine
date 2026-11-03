@@ -12,6 +12,7 @@ through `GET /agent-bridge/requests/{id}` (docs/terminal-agents.md).
 import asyncio
 import os
 import re
+import time
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 import httpx
@@ -27,6 +28,7 @@ UNKNOWN_REQUEST = ("Gamachine restarted or the request expired; "
                    "use gamachine_read_messages(chat_id=...) to read the chat.")
 ENDED_NO_REPLY = "the turn ended without a reply (an error or a stop in Gamachine)"
 NOT_DELIVERED = "Gamachine did not send the message; is its window open?"
+TERMINAL = ("done", "ended_without_reply")
 TRUNCATED_NOTE = "note: the reply was cut; read the full text in Gamachine"
 
 REQUEST_ID_RE = re.compile(r"[0-9a-f]{16}")  # secrets.token_hex(8) in remote/agent_bridge.py
@@ -92,7 +94,9 @@ def format_reply(request_id: str, state: Dict[str, Any]) -> str:
     elif status == "ended_without_reply":
         lines.append(ENDED_NO_REPLY)
     elif status == "not_delivered":
+        # Only said when the wait ran out: a busy window sends the message later.
         lines.append(NOT_DELIVERED)
+        lines.append(f'it may still be sent; call gamachine_wait_reply(request_id="{request_id}")')
     else:
         lines.append(f'still running; call gamachine_wait_reply(request_id="{request_id}")')
     return "\n".join(lines)
@@ -102,9 +106,14 @@ async def wait_for_reply(
     request_id: str, wait_seconds: Any, *,
     fetch_state: Callable[[str], Awaitable[dict]],
     sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
+    clock: Callable[[], float] = time.monotonic,
 ) -> str:
-    """Poll the request until its reply is stored, its turn ended, or the time is up."""
-    waited, limit = 0.0, clamp_wait(wait_seconds)
+    """Poll the request until its reply is stored, its turn ended, or the time is up.
+
+    queued and not_delivered are not terminal: a message waiting behind a long
+    turn is sent when that turn ends. The budget is wall-clock time, so slow
+    polls cannot stretch it (one poll still runs to the HTTP timeout)."""
+    deadline = clock() + clamp_wait(wait_seconds)
     while True:
         try:
             state = await fetch_state(request_id)
@@ -112,10 +121,10 @@ async def wait_for_reply(
             if str(exc).endswith("unknown_request"):
                 return UNKNOWN_REQUEST
             raise
-        if state.get("status") in ("done", "ended_without_reply", "not_delivered") or waited >= limit:
+        left = deadline - clock()
+        if state.get("status") in TERMINAL or left <= 0:
             return format_reply(request_id, state)
-        await sleep(POLL_S)
-        waited += POLL_S
+        await sleep(min(POLL_S, left))
 
 
 # ── HTTP ─────────────────────────────────────────────────────────────────────

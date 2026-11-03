@@ -21,7 +21,7 @@ from typing import Any, Dict, List
 from fastapi import APIRouter, Body, Header, HTTPException, Query
 from fastapi.responses import JSONResponse
 
-from agentic import approval_policy, cards
+from agentic import approval_policy, cards, turn_replies
 from auth_utils import _check_token
 from remote import chats
 from remote.desktop_channel import CHANNEL
@@ -199,11 +199,19 @@ def create_agent_bridge_router(db, bridge) -> APIRouter:
             row = conn.execute("SELECT MAX(id) FROM messages WHERE conversation_id = ?", (chat_id,)).fetchone()
         return int(row[0] or 0)
 
-    def rows_after(chat_id: int, after_id: int) -> List[tuple]:
+    def own_user_row(chat_id: int, after_id: int, text: Any) -> Any:
+        """The first user row after the send with exactly the sent text: the one
+        the window stored for this request (identical texts match in order)."""
         with closing(sqlite3.connect(db.db_path)) as conn:
-            return conn.execute(
-                "SELECT role, content, model FROM messages WHERE conversation_id = ? AND id > ? ORDER BY id",
-                (chat_id, after_id)).fetchall()
+            row = conn.execute(
+                "SELECT id FROM messages WHERE conversation_id = ? AND id > ? AND role = 'user' "
+                "AND content = ? ORDER BY id LIMIT 1", (chat_id, after_id, text)).fetchone()
+        return int(row[0]) if row else None
+
+    def message_row(chat_id: int, row_id: int) -> Any:
+        with closing(sqlite3.connect(db.db_path)) as conn:
+            return conn.execute("SELECT content, model FROM messages WHERE conversation_id = ? AND id = ?",
+                                (chat_id, row_id)).fetchone()
 
     @router.post("/chats/{chat_id}/messages")
     async def send_message(chat_id: int, body: Dict[str, Any] = Body(...),
@@ -232,29 +240,29 @@ def create_agent_bridge_router(db, bridge) -> APIRouter:
         chat_id = req["chat_id"]
         out: Dict[str, Any] = {"request_id": request_id, "chat_id": chat_id, "status": None, "reply": None,
                                "model": None, "waiting_card": None, "truncated": False}
-        in_flight = approval_policy.conversation_turn_in_flight(chat_id)
-        rows = rows_after(chat_id, req["after_id"])
-        own = next((i for i, r in enumerate(rows) if r[0] == "user" and r[1] == req["text"]), None)
+        own = own_user_row(chat_id, req["after_id"], req["text"])
         if own is None:
+            # Not sent yet: the window may still be busy with an earlier turn.
+            # not_delivered only informs; the MCP keeps waiting (agent_server.py).
+            in_flight = approval_policy.conversation_turn_in_flight(chat_id)
             out["status"] = ("queued" if in_flight or time.monotonic() - req["created_at"] < DELIVERY_GRACE_S
                              else "not_delivered")
             return out
-        reply = None
-        for role, content, model in rows[own + 1:]:
-            if role in ("user", "system"):
-                break
-            if role == "assistant":
-                reply = (content, model)
-                break
-        if reply:
-            text = reply[0] or ""
-            out.update(status="done", reply=text[:REPLY_MAX], model=reply[1], truncated=len(text) > REPLY_MAX)
-        elif in_flight:
+        # The reply is what the turn that began with our row recorded
+        # (agentic/turn_replies), never a row found by position: an older
+        # detached turn can store its reply after our row.
+        entry = turn_replies.get(chat_id, own)
+        if entry is None or entry.get("state") != "ended":
             pending = cards.list_pending(chat_id)
             out.update(status="running",
                        waiting_card=(pending[0].get("summary") or pending[0].get("tool")) if pending else None)
-        else:
-            out["status"] = "ended_without_reply"
+            return out
+        row = message_row(chat_id, entry["assistant_row_id"]) if entry.get("assistant_row_id") else None
+        if row is None:
+            out.update(status="ended_without_reply", turn_status=entry.get("status"))
+            return out
+        text = row[0] or ""
+        out.update(status="done", reply=text[:REPLY_MAX], model=row[1], truncated=len(text) > REPLY_MAX)
         return out
 
     @router.get("/chats/{chat_id}/messages")

@@ -12,13 +12,18 @@ from unity_ai_mcp import agent_server as srv  # noqa: E402
 
 
 class Clock:
-    """Fake time: every sleep is recorded, so a timeout takes no real time."""
+    """Fake time: every sleep is recorded and advances `now`, so a timeout takes no real time."""
 
     def __init__(self):
         self.slept = []
+        self.t = 0.0
+
+    def now(self):
+        return self.t
 
     async def sleep(self, seconds):
         self.slept.append(seconds)
+        self.t += seconds
 
 
 def states(*batch):
@@ -35,7 +40,7 @@ def states(*batch):
 async def run(*batch, wait=30):
     clock = Clock()
     fetch_state, calls = states(*batch)
-    out = await srv.wait_for_reply("rid1", wait, fetch_state=fetch_state, sleep=clock.sleep)
+    out = await srv.wait_for_reply("rid1", wait, fetch_state=fetch_state, sleep=clock.sleep, clock=clock.now)
     return out, calls, clock
 
 
@@ -77,12 +82,36 @@ async def test_the_clamped_wait_bounds_the_polling():
     assert len(calls) == srv.WAIT_MIN + 1
 
 
-async def test_ended_without_reply_and_not_delivered_have_their_sentences():
+async def test_ended_without_reply_has_its_sentence():
     out, calls, _ = await run({"status": "ended_without_reply", "reply": None})
     assert "status: ended_without_reply" in out
     assert "the turn ended without a reply (an error or a stop in Gamachine)" in out and len(calls) == 1
-    out, calls, _ = await run({"status": "not_delivered"})
-    assert "Gamachine did not send the message; is its window open?" in out and len(calls) == 1
+
+
+async def test_a_delivery_gap_is_not_terminal():
+    # Queued behind a long turn: not_delivered between turns, then sent and answered.
+    out, calls, _ = await run({"status": "queued"}, {"status": "not_delivered"}, {"status": "not_delivered"},
+                              {"status": "running"}, {"status": "done", "reply": "LATE"})
+    assert "status: done" in out and out.endswith("LATE") and len(calls) == 5
+
+
+async def test_timeout_while_not_delivered_says_so_with_the_wait_hint():
+    out, calls, _ = await run({"status": "not_delivered"}, wait=5)
+    assert "Gamachine did not send the message; is its window open?" in out
+    assert 'gamachine_wait_reply(request_id="rid1")' in out and len(calls) == srv.WAIT_MIN + 1
+
+
+async def test_slow_polls_cannot_stretch_the_wait_past_its_budget():
+    clock = Clock()
+    calls = []
+
+    async def slow_fetch(request_id):
+        calls.append(clock.now())
+        clock.t += 3.0  # each poll takes 3 s of wall-clock time
+        return {"status": "running"}
+
+    out = await srv.wait_for_reply("rid1", 5, fetch_state=slow_fetch, sleep=clock.sleep, clock=clock.now)
+    assert "still running" in out and calls == [0.0, 4.0] and clock.t <= 5 + 3.0
 
 
 async def test_a_truncated_reply_says_so():

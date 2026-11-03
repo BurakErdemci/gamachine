@@ -28,6 +28,7 @@ from agentic import chat_model
 from agentic import chat_titles
 from agentic import mailbox
 from agentic import turn_events
+from agentic import turn_replies
 from computer_use import activity as computer_activity
 from computer_use import gate as computer_gate
 from computer_use import policy as computer_policy
@@ -1324,10 +1325,38 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
                     conv_id, owed[0], res.get("mail_id"))
         return res.get("mail_id")
 
+    # ── Turn replies: which assistant row answered a user row (agent bridge) ─
+    # A Claude turn whose stream went away without a terminal event keeps
+    # running in its session and stores its reply through
+    # `_save_detached_claude_turn`; its user row id waits here until then, or
+    # until the chat's next turn or its sessions close (agentic/turn_replies).
+    _turn_reply_detached: Dict[int, int] = {}
+
+    def _begin_turn_reply(conv_id: int, user_row_id: Optional[int]) -> None:
+        if user_row_id is None:
+            return
+        try:
+            turn_replies.begin(conv_id, user_row_id)
+        except Exception:
+            logger.exception("[turn-replies] conv=%s begin not recorded", conv_id)
+
+    def _end_turn_reply(conv_id: int, user_row_id: Optional[int],
+                        assistant_row_id: Optional[int], status: str) -> None:
+        if user_row_id is None:
+            return
+        try:
+            turn_replies.end(conv_id, user_row_id, assistant_row_id, status)
+        except Exception:
+            logger.exception("[turn-replies] conv=%s end not recorded", conv_id)
+
+    def _abandon_detached_turn_reply(conv_id: int) -> None:
+        _end_turn_reply(conv_id, _turn_reply_detached.pop(conv_id, None), None, "stopped")
+
     # Claude session'ı: SSE koptuktan sonra (Durdur / pencere kapatma) biten turun
     # asistan metnini kaybetmemek için DB'ye yazma köprüsü (provider→DB tek yönlü).
     def _save_detached_claude_turn(cid, text, model=None):
-        db.add_message(cid, "assistant", text, provider="claude", model=model)
+        row_id = db.add_message(cid, "assistant", text, provider="claude", model=model)
+        _end_turn_reply(cid, _turn_reply_detached.pop(cid, None), row_id, "done")
         # A mail wake turn whose stream closed ends here, not in chat-stream.
         entry = _reply_owed.get(cid)
         if entry is None or entry.get("agent") != "claude":
@@ -1753,6 +1782,7 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
         from agentic import wake_queue
         wake_queue.reset(conv_id)
         _reply_owed.pop(conv_id, None)
+        _abandon_detached_turn_reply(conv_id)
 
     @router.delete("/conversations/{conv_id}")
     async def delete_conversation(conv_id: int, x_session_token: str = Header(alias="X-Session-Token")):
@@ -2087,6 +2117,7 @@ Max 300 kelime. Türkçe yaz.
         # A reply still owed by an earlier turn of this chat (its stream went
         # away and it never stored) is not this turn's to settle.
         _reply_owed.pop(request.conversation_id, None)
+        _abandon_detached_turn_reply(request.conversation_id)
 
         ticketed_wake = request.origin == "wake" and wake_queue.consume_ticket(
             request.conversation_id)
@@ -2101,6 +2132,8 @@ Max 300 kelime. Türkçe yaz.
         mail_note = ""
         mail_depth = 0
         mail_rows: Optional[List[dict]] = None
+        # The user row this turn began with (agentic/turn_replies); wakes have none.
+        _turn_user_row: Optional[int] = None
 
         if ticketed_wake:
             # Consecutive-wake safety valve: a wake starts a turn, a turn can
@@ -2173,56 +2206,66 @@ Max 300 kelime. Türkçe yaz.
             # The user's next message ends a computer-use Stop; a wake that lost its ticket is not one.
             if request.origin != "wake":
                 _computer_halted.discard(request.conversation_id)
-            db.add_message(request.conversation_id, "user", request.message)
-            turn_message = _with_mentions(request.conversation_id, user_id, request.message)
+            _turn_user_row = db.add_message(request.conversation_id, "user", request.message)
+            _begin_turn_reply(request.conversation_id, _turn_user_row)
+            try:
+                turn_message = _with_mentions(request.conversation_id, user_id, request.message)
+            except Exception:
+                _end_turn_reply(request.conversation_id, _turn_user_row, None, "error")
+                raise
 
-        # Eğer varsa kod düzenleyicisinden gelen kodu ekle
-        if request.editor_code:
-            combined_msg = f"{turn_message}\n\n```csharp\n{request.editor_code}\n```"
-        else:
-            combined_msg = turn_message
+        # A turn that fails before its stream starts still ends its record.
+        try:
+            # Eğer varsa kod düzenleyicisinden gelen kodu ekle
+            if request.editor_code:
+                combined_msg = f"{turn_message}\n\n```csharp\n{request.editor_code}\n```"
+            else:
+                combined_msg = turn_message
 
-        # The chat's own model, whatever any window shows (per-chat model).
-        provider_type, model_name = chat_model.turn_model(db, user_id, request.conversation_id)
-        api_key = (db.get_api_key(user_id, provider_type) or "")
-        workspace_path = db.get_last_workspace(user_id) or ""
+            # The chat's own model, whatever any window shows (per-chat model).
+            provider_type, model_name = chat_model.turn_model(db, user_id, request.conversation_id)
+            api_key = (db.get_api_key(user_id, provider_type) or "")
+            workspace_path = db.get_last_workspace(user_id) or ""
 
-        # CLI'lar arası "kaldığı yerden devam": tam transcript (her iki rol). Yeni
-        # provider'ın ilk turunda enjekte edilir (agent_runner switch'te session'ı resetler).
-        memory = db.get_memory(request.conversation_id)
-        history_messages = db.get_conversation_messages(request.conversation_id)
-        context_summary = _build_handoff_context(
-            memory, history_messages,
-            history_header=mailbox.MAIL_WAKE_HISTORY_HEADER if mail_note else None)
+            # CLI'lar arası "kaldığı yerden devam": tam transcript (her iki rol). Yeni
+            # provider'ın ilk turunda enjekte edilir (agent_runner switch'te session'ı resetler).
+            memory = db.get_memory(request.conversation_id)
+            history_messages = db.get_conversation_messages(request.conversation_id)
+            context_summary = _build_handoff_context(
+                memory, history_messages,
+                history_header=mailbox.MAIL_WAKE_HISTORY_HEADER if mail_note else None)
 
-        # Kaldığın yerden devam: CLI kendi tam transcript'ini diskte tutuyor, biz
-        # yalnız kimliği saklıyoruz. Workspace değişmişse `None` döner (yanlış
-        # projenin geçmişini açmamak için) → eski transcript enjeksiyonuna düşülür.
-        _oturum_anahtari = _oturum_saglayici_anahtari(provider_type, model_name)
-        _resume_id = db.get_cli_session(request.conversation_id, _oturum_anahtari, workspace_path)
-        _turn_agent = _message_agent(provider_type, model_name)
-        reply_entry = (_owe_reply(request.conversation_id, mail_rows, user_id, _turn_agent)
-                       if mail_note and mail_rows else None)
+            # Kaldığın yerden devam: CLI kendi tam transcript'ini diskte tutuyor, biz
+            # yalnız kimliği saklıyoruz. Workspace değişmişse `None` döner (yanlış
+            # projenin geçmişini açmamak için) → eski transcript enjeksiyonuna düşülür.
+            _oturum_anahtari = _oturum_saglayici_anahtari(provider_type, model_name)
+            _resume_id = db.get_cli_session(request.conversation_id, _oturum_anahtari, workspace_path)
+            _turn_agent = _message_agent(provider_type, model_name)
+            reply_entry = (_owe_reply(request.conversation_id, mail_rows, user_id, _turn_agent)
+                           if mail_note and mail_rows else None)
 
-        runner = AgentRunner(
-            provider_type=provider_type,
-            api_key=api_key,
-            model_name=model_name,
-            workspace_path=workspace_path,
-            language=request.language,
-            context=context_summary,
-            thinking_level=request.thinking_level,
-            conversation_id=request.conversation_id,
-            images=request.images,
-            videos=request.videos,
-            # The global mode decides; `request.generation_mode` is still
-            # accepted for old clients but no longer trusted for approval.
-            generation_mode=approval_mode.current_mode(),
-            effort_level=request.effort_level,
-            ultracode=request.ultracode,
-            resume_id=_resume_id,
-            mail_depth=mail_depth,
-        )
+            runner = AgentRunner(
+                provider_type=provider_type,
+                api_key=api_key,
+                model_name=model_name,
+                workspace_path=workspace_path,
+                language=request.language,
+                context=context_summary,
+                thinking_level=request.thinking_level,
+                conversation_id=request.conversation_id,
+                images=request.images,
+                videos=request.videos,
+                # The global mode decides; `request.generation_mode` is still
+                # accepted for old clients but no longer trusted for approval.
+                generation_mode=approval_mode.current_mode(),
+                effort_level=request.effort_level,
+                ultracode=request.ultracode,
+                resume_id=_resume_id,
+                mail_depth=mail_depth,
+            )
+        except Exception:
+            _end_turn_reply(request.conversation_id, _turn_user_row, None, "error")
+            raise
 
         async def event_generator():
             entry = _TurnRecord()
@@ -2240,6 +2283,9 @@ Max 300 kelime. Türkçe yaz.
             # the UI both that the turn completed and that it failed
             # (audit, 30 Aug 2026).
             terminal_gitti = False
+            # This turn's turn_replies record: its outcome, and whether it ended.
+            _tr_status: Optional[str] = None
+            _tr_ended = False
             # Every provider path runs through `runner.run` below, so this one
             # tap feeds the turn-event ring for all of them.
             tap = turn_events.TurnTap(request.conversation_id, _turn_agent, model_name,
@@ -2260,8 +2306,10 @@ Max 300 kelime. Türkçe yaz.
                     if event.type == "done":
                         ended_normally = ((event.data or {}).get("stop_reason")
                                           or "complete") == "complete"
+                        _tr_status = "done" if ended_normally else "stopped"
                     elif event.type == "error":
                         ended_normally = False
+                        _tr_status = "error"
                     # Turun gerçek token'ları yalnız akışta geçiyor, DB'ye
                     # yazılmıyor: sondaki context_usage'a iliştirmezsek gösterge
                     # elimizdeki tek ÖLÇÜLMÜŞ sayıyı hiç görmüyor.
@@ -2286,10 +2334,11 @@ Max 300 kelime. Türkçe yaz.
                 # duruyor ama kaydedilmedi, bunu bilmesi gerek; `warning`
                 # terminal olmayan bir olay, o yüzden sözleşmeyi bozmuyor.
                 full_response = entry.value()
+                _tr_row: Optional[int] = None
                 if full_response:
                     try:
-                        db.add_message(request.conversation_id, "assistant", full_response,
-                                       provider=_turn_agent, model=model_name)
+                        _tr_row = db.add_message(request.conversation_id, "assistant", full_response,
+                                                 provider=_turn_agent, model=model_name)
                         if ended_normally and not ticketed_wake:
                             db.record_activity("turn_done", request.conversation_id,
                                                provider=_turn_agent, model=model_name)
@@ -2312,6 +2361,10 @@ Max 300 kelime. Türkçe yaz.
                               "detail": "aşama: kayıt"}
                         yield f"data: {json.dumps(_w)}\n\n"
 
+                _tr_ended = True
+                _end_turn_reply(request.conversation_id, _turn_user_row, _tr_row,
+                                _tr_status or "error")
+
                 if reply_entry is not None:
                     reply_settled = True
                     try:
@@ -2333,6 +2386,9 @@ Max 300 kelime. Türkçe yaz.
                 # log'a yazılır, istemci sabit/anlaşılır bir mesaj görür.
                 logger.exception("Streaming hatası")
                 tap.end("error")
+                if not _tr_ended:
+                    _tr_ended = True
+                    _end_turn_reply(request.conversation_id, _turn_user_row, None, "error")
                 # json.dumps şart: elle kurulan JSON'da hata metnindeki bir tırnak
                 # ya da satır sonu SSE event framing'ini bozuyor ve istemci akışın
                 # geri kalanını kaybediyordu (3 satır yukarıdaki kalıpla aynı).
@@ -2367,6 +2423,13 @@ Max 300 kelime. Türkçe yaz.
                 if reply_entry is not None and not reply_settled and (
                         terminal_gitti or _turn_agent != "claude"):
                     _drop_owed_reply(request.conversation_id, reply_entry)
+                # The same split for this turn's record: a detached Claude turn
+                # ends when `_save_detached_claude_turn` stores its reply.
+                if not _tr_ended and _turn_user_row is not None:
+                    if terminal_gitti or _turn_agent != "claude":
+                        _end_turn_reply(request.conversation_id, _turn_user_row, None, "stopped")
+                    else:
+                        _turn_reply_detached[request.conversation_id] = _turn_user_row
 
         return StreamingResponse(
             localize_sse(_tag_sse_stream(event_generator(), request.conversation_id), _stream_language(request, x_ui_lang)),

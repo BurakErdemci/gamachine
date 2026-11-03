@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "app")))
 
 import local_token_file  # noqa: E402
-from agentic import approval_policy  # noqa: E402
+from agentic import approval_policy, turn_replies  # noqa: E402
 from database import DatabaseManager  # noqa: E402
 from remote import agent_bridge, rpc, ui_dispatch  # noqa: E402
 from remote.rpc import Dispatcher  # noqa: E402
@@ -47,6 +47,7 @@ class Bridge:
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     agent_bridge._REQUESTS.clear()
+    turn_replies.clear()
     monkeypatch.setenv("LOCAL_APP_TOKEN", "t")
     db = DatabaseManager(db_path=str(tmp_path / "bridge.db"))
     channel = FakeChannel()
@@ -65,6 +66,7 @@ def env(tmp_path, monkeypatch):
     client.db, client.channel, client.bridge = db, channel, bridge
     yield client
     agent_bridge._REQUESTS.clear()
+    turn_replies.clear()
 
 
 def enable(client):
@@ -195,14 +197,20 @@ def state(env, request_id):
     return r.json()
 
 
-def turn(env, conv, user=None, reply=None, system=None):
-    """What the desktop stores for one turn (the in-flight flag is the caller's business)."""
+def turn(env, conv, user=None, reply=None, system=None, mid_system=None):
+    """What chat-stream stores and records for one turn (the in-flight flag is the
+    caller's business): the user row and begin, the reply row and end. A wake turn
+    has no user row and records nothing."""
     if system:
         env.db.add_message(conv, "system", system)
-    if user is not None:
-        env.db.add_message(conv, "user", user)
-    if reply:
-        env.db.add_message(conv, "assistant", reply, provider="claude", model="m1")
+    uid = env.db.add_message(conv, "user", user) if user is not None else None
+    if uid:
+        turn_replies.begin(conv, uid)
+    if mid_system:
+        env.db.add_message(conv, "system", mid_system)
+    aid = env.db.add_message(conv, "assistant", reply, provider="claude", model="m1") if reply else None
+    if uid:
+        turn_replies.end(conv, uid, aid, "done" if reply else "error")
 
 
 def test_new_chat_null_title_is_400_and_absent_title_is_the_default(env):
@@ -289,14 +297,56 @@ def test_a_wake_turn_before_ours_is_skipped(env):
     assert state(env, rid)["reply"] == "MINE-3"
 
 
-def test_the_reply_stops_at_the_next_system_or_user_row(env):
+def test_a_system_row_inside_our_turn_does_not_hide_the_reply(env):
+    enable(env)
+    conv = env.db.create_conversation(1, "c")
+    rid = send(env, conv, "q")["request_id"]
+    turn(env, conv, "q", "MINE", mid_system="(note) something happened")
+    got = state(env, rid)
+    assert got["status"] == "done" and got["reply"] == "MINE"
+
+
+def test_an_assistant_row_no_turn_recorded_for_us_is_never_the_reply(env):
     enable(env)
     conv = env.db.create_conversation(1, "c")
     rid = send(env, conv, "q")["request_id"]
     env.db.add_message(conv, "user", "q")
-    env.db.add_message(conv, "system", "(mail) note")
     env.db.add_message(conv, "assistant", "NOT-OURS")
-    assert state(env, rid)["status"] == "ended_without_reply"
+    got = state(env, rid)
+    assert got["status"] == "running" and got["reply"] is None
+
+
+def test_a_detached_older_turn_storing_after_our_row_is_not_our_reply(env):
+    enable(env)
+    conv = env.db.create_conversation(1, "c")
+    old = env.db.add_message(conv, "user", "old question")
+    turn_replies.begin(conv, old)
+    rid = send(env, conv, "q10")["request_id"]
+    mine = env.db.add_message(conv, "user", "q10")
+    turn_replies.begin(conv, mine)
+    late = env.db.add_message(conv, "assistant", "OLD-LATE", provider="claude", model="m1")
+    turn_replies.end(conv, old, late, "done")
+    got = state(env, rid)
+    assert got["status"] == "running" and got["reply"] is None
+    reply = env.db.add_message(conv, "assistant", "MINE-10", provider="claude", model="m2")
+    turn_replies.end(conv, mine, reply, "done")
+    got = state(env, rid)
+    assert got["status"] == "done" and got["reply"] == "MINE-10" and got["model"] == "m2"
+
+
+def test_ended_without_reply_carries_the_turn_status(env):
+    enable(env)
+    conv = env.db.create_conversation(1, "c")
+    rid = send(env, conv, "q")["request_id"]
+    uid = env.db.add_message(conv, "user", "q")
+    turn_replies.begin(conv, uid)
+    turn_replies.end(conv, uid, None, "stopped")
+    got = state(env, rid)
+    assert got["status"] == "ended_without_reply" and got["turn_status"] == "stopped"
+    # A Claude turn whose window went away stores its reply later: it upgrades.
+    late = env.db.add_message(conv, "assistant", "LATE", provider="claude", model="m1")
+    turn_replies.end(conv, uid, late, "done")
+    assert state(env, rid)["reply"] == "LATE"
 
 
 def test_error_turn_without_a_reply_does_not_return_an_older_answer(env):
