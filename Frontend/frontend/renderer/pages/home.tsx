@@ -71,7 +71,7 @@ import { usePendingChange } from '../lib/pendingChange';
 import { clearSeen, isUnseen, loadSeen, saveSeen, type Seen } from '../lib/changesSeen';
 import { ThreadHeader } from '../components/home/ThreadHeader';
 import { EmptyChat, questDraft } from '../components/home/EmptyChat';
-import { ImportSessionDialog, samePath, type ImportedSession } from '../components/home/ImportSessionDialog';
+import { ImportSessionDialog, type ImportedSession } from '../components/home/ImportSessionDialog';
 import { AchievementToast } from '../components/home/AchievementToast';
 import { ProfileView } from '../components/home/ProfileView';
 import { useProfileStats } from '../hooks/home/useProfileStats';
@@ -401,7 +401,8 @@ export default function Home() {
   // A terminal Claude Code session was imported: switch to its folder when it differs from the open
   // project, then show the new chat. A failed switch still opens the chat (its history is readable).
   const onSessionImported = async (result: ImportedSession) => {
-    if (!samePath(result.workspace, fs.workspacePath)) {
+    // Exact string: the backend's resume only finds the session when the turn's workspace equals the stored cwd.
+    if (result.workspace !== fs.workspacePath) {
       const opened = await fs.selectWorkspace(result.workspace);
       if (!opened) showToast(t('importSession.workspaceFail'), 'error' as any);
     }

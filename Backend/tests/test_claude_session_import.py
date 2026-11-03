@@ -1,6 +1,7 @@
 """Import of an existing Claude Code session into a chat (synthetic session files only)."""
 import json
 import os
+import shutil
 import sqlite3
 import time
 
@@ -172,3 +173,61 @@ def test_command_for_drops_cd_on_shell_special_chars():
     # Turkish letters and parentheses are safe inside "..." in all three shells.
     assert (claude_sessions.command_for("C:\\Oyunçuk 2 (yedek)", SID)
             == f'cd "C:\\Oyunçuk 2 (yedek)"; claude --resume {SID}')
+
+
+def _session_with(env, cwd, lines):
+    base = {"sessionId": SID, "cwd": cwd, "isSidechain": False}
+    _write(env["cfg"], env["work"], [{**base, **x} for x in lines])
+
+
+def test_image_prompt_and_wrapper_lines(env):
+    user = lambda c: {"type": "user", "message": {"role": "user", "content": c}}
+    _session_with(env, str(env["work"]), [
+        user([{"type": "text", "text": "Bu resme bak"}, {"type": "image", "source": {"type": "base64", "data": "AA"}}]),
+        user([{"type": "image", "source": {"type": "base64", "data": "AA"}}]),
+        user("<bash-input>ls</bash-input>"), user("<bash-stdout>x</bash-stdout>"), user("<bash-stderr>e</bash-stderr>"),
+        user("<command-message>m</command-message>"), user("<command-args>a</command-args>"),
+        user("<user-prompt-submit-hook>h</user-prompt-submit-hook>"), user("Caveat: generated locally"),
+        user([{"type": "tool_result", "tool_use_id": "t", "content": "OUT"}, {"type": "text", "text": "T"}]),
+    ])
+    info = claude_sessions.read_session(env["path"])
+    assert [m["content"] for m in info["messages"]] == ["Bu resme bak", "[resim]"]
+
+
+def test_session_id_with_trailing_newline_is_400(env):
+    c = env["client"]
+    bad = SID + "\n"
+    assert claude_sessions.find_session(bad) is None
+    r = c.post("/claude-sessions/import", json={"session_id": bad})
+    assert r.status_code == 400 and r.json() == {"error": "bad_session_id"}
+
+
+@pytest.mark.parametrize("cwd", [".", "..", "rel/dir", "\\\\server\\share\\x", "//server/share", "C:\\a\nb"])
+def test_unusable_cwd_never_reaches_isdir(env, monkeypatch, cwd):
+    assert claude_sessions.cwd_usable(cwd) is False
+    _session_with(env, cwd, [{"type": "user", "message": {"role": "user", "content": "hi"}}])
+    calls = []
+    monkeypatch.setattr(claude_session_routes.os.path, "isdir", lambda p: calls.append(p) or True)
+    pv = env["client"].get(f"/claude-sessions/{SID}/preview").json()
+    assert pv["cwd_exists"] is False
+    r = env["client"].post("/claude-sessions/import", json={"session_id": SID})
+    assert r.status_code == 409 and r.json() == {"error": "cwd_unsupported", "cwd": cwd}
+    assert calls == []
+
+
+def test_linked_folder_outside_the_store_is_ignored(env):
+    outside = env["tmp"] / "outside"
+    outside.mkdir()
+    (outside / f"{SID}.jsonl").write_text("{}", encoding="utf-8")
+    shutil.rmtree(env["path"].parent)
+    try:
+        os.symlink(outside, env["cfg"] / "projects" / "linked", target_is_directory=True)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"symlink creation not permitted: {exc}")
+    assert claude_sessions.find_session(SID) is None
+    assert env["client"].get(f"/claude-sessions/{SID}/preview").status_code == 404
+
+
+def test_command_for_drops_cd_on_trailing_separator():
+    for cwd in ("C:\\Users\\x\\", "/home/x/"):
+        assert claude_sessions.command_for(cwd, SID) == f"claude --resume {SID}"

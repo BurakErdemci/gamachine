@@ -10,14 +10,16 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 SESSION_ID_RE = re.compile(
-    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\Z")
 
 MESSAGE_CAP_CHARS = 100_000
 TITLE_MAX = 80
 
 # Wrapper text Claude Code stores as user lines that no person typed.
 _SKIP_USER_PREFIXES = ("<command-name>", "<local-command-", "<system-reminder>",
-                       "[Request interrupted", "Base directory for this skill")
+                       "[Request interrupted", "Base directory for this skill",
+                       "<bash-input>", "<bash-stdout>", "<bash-stderr>", "<command-message>",
+                       "<command-args>", "<user-prompt-submit-hook>", "Caveat:")
 
 
 def projects_dir() -> Path:
@@ -25,19 +27,34 @@ def projects_dir() -> Path:
     return Path(base) / "projects"
 
 
+def valid_session_id(session_id: Any) -> bool:
+    return isinstance(session_id, str) and SESSION_ID_RE.fullmatch(session_id) is not None
+
+
+def cwd_usable(cwd: Any) -> bool:
+    """An absolute local folder string: no relative path, no UNC share (isdir on it can touch the network)."""
+    return (isinstance(cwd, str) and os.path.isabs(cwd) and not cwd.startswith(("\\\\", "//", "\\/", "/\\"))
+            and not any(ord(ch) < 32 or ord(ch) == 127 for ch in cwd))
+
+
 def find_session(session_id: str) -> Optional[Path]:
     """The session file for a UUID, or None. Only the validated id is joined into a path."""
-    if not isinstance(session_id, str) or not SESSION_ID_RE.match(session_id):
+    if not valid_session_id(session_id):
         return None
     try:
         folders = [d for d in projects_dir().iterdir() if d.is_dir()]
     except OSError:
         return None
     found = []
+    try:
+        root = projects_dir().resolve()
+    except OSError:
+        return None
     for folder in folders:
         candidate = folder / f"{session_id}.jsonl"
         try:
-            if candidate.is_file():
+            # A link inside the store must not lead to a file outside it.
+            if candidate.is_file() and candidate.resolve().is_relative_to(root):
                 found.append((candidate.stat().st_mtime, candidate))
         except OSError:
             continue
@@ -52,9 +69,12 @@ def _human_text(message: Any) -> Optional[str]:
     if isinstance(content, str):
         text = content
     elif isinstance(content, list):
-        if not content or any(not isinstance(b, dict) or b.get("type") != "text" for b in content):
+        blocks = [b for b in content if isinstance(b, dict)]
+        if any(b.get("type") == "tool_result" for b in blocks):
             return None
-        text = "".join(str(b.get("text") or "") for b in content)
+        text = "".join(str(b.get("text") or "") for b in blocks if b.get("type") == "text")
+        if not text.strip() and any(b.get("type") == "image" for b in blocks):
+            text = "[resim]"
     else:
         return None
     text = text.strip()
@@ -77,6 +97,7 @@ def _assistant_text(message: Any) -> Optional[str]:
 
 def read_session(path: Path, limit: int = 300) -> Dict[str, Any]:
     """Visible messages of a session file (the last `limit`), plus its first cwd and last model."""
+    path = Path(path)
     cwd = None
     model = None
     title = None
@@ -139,6 +160,6 @@ def command_for(cwd: Optional[str], session_id: str) -> str:
     a command that does something else; the caller shows the plain resume command.
     """
     resume = f"claude --resume {session_id}"
-    if not cwd or not _cd_safe(cwd):
+    if not cwd or cwd[-1] in "\\/" or not _cd_safe(cwd):
         return resume
     return f'cd "{cwd}"; {resume}'

@@ -18,7 +18,7 @@ interface SessionPreview {
   cwd_exists?: boolean;
   title?: string;
   total: number;
-  importable?: boolean;
+  importable?: number;
   modified_recently?: boolean;
 }
 
@@ -31,11 +31,6 @@ interface Props {
   /** The open project's folder; a session from another folder switches the project on import. */
   currentPath?: string | null;
 }
-
-const norm = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
-/** Same folder, ignoring separator style, trailing slash and case (Windows paths). */
-export const samePath = (a?: string | null, b?: string | null): boolean =>
-  !!a && !!b && norm(a) === norm(b);
 
 /** The backend's error code (400/404/409 body) or '' when the failure has none. */
 const errorCode = (err: any): string => {
@@ -72,6 +67,7 @@ export const ImportSessionDialog: React.FC<Props> = ({ open, onClose, onImported
     const key: TKey = code === 'bad_session_id' ? 'importSession.errBadId'
       : code === 'session_not_found' ? 'importSession.errNotFound'
       : code === 'cwd_missing' ? 'importSession.errCwdMissing'
+      : code === 'cwd_unsupported' ? 'importSession.cwdUnsupported'
       : 'importSession.errGeneric';
     setError(t(key, { cwd: err?.response?.data?.cwd ?? cwd ?? '' }));
   };
@@ -84,7 +80,7 @@ export const ImportSessionDialog: React.FC<Props> = ({ open, onClose, onImported
       if (!preview || preview.session_id !== id) {
         const res = await axios.get(`${API}/claude-sessions/${encodeURIComponent(id)}/preview`, { headers });
         const p = res.data as SessionPreview;
-        if (p.importable === false) { setPreview(null); setError(t('importSession.errGeneric')); return; }
+        if (p.importable === 0) { setPreview(null); setError(t('importSession.empty')); return; }
         if (p.cwd_exists === false) { setPreview(null); setError(t('importSession.errCwdMissing', { cwd: p.cwd })); return; }
         setPreview({ ...p, session_id: id });
         return;
@@ -130,7 +126,7 @@ export const ImportSessionDialog: React.FC<Props> = ({ open, onClose, onImported
                 <p className="menu-row-t">{preview.title || preview.session_id}</p>
                 <p className="menu-row-d">{t('importSession.folder')}: {preview.cwd}</p>
                 <p className="menu-row-d">{t('importSession.count', { n: preview.total })}</p>
-                {currentPath && !samePath(preview.cwd, currentPath) && (
+                {currentPath && preview.cwd !== currentPath && (
                   <p className="menu-row-d" data-testid="import-session-switch">
                     {t('importSession.switch', { cwd: preview.cwd })}
                   </p>

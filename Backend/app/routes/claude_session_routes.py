@@ -54,7 +54,7 @@ def create_claude_session_router(db) -> APIRouter:
     router = APIRouter()
 
     def _load(session_id: Any, limit: int):
-        if not isinstance(session_id, str) or not claude_sessions.SESSION_ID_RE.match(session_id):
+        if not claude_sessions.valid_session_id(session_id):
             return None, _error(400, "bad_session_id")
         path = claude_sessions.find_session(session_id)
         if path is None:
@@ -72,7 +72,7 @@ def create_claude_session_router(db) -> APIRouter:
             return err
         cwd = info["cwd"]
         return {"session_id": info["session_id"], "cwd": cwd,
-                "cwd_exists": bool(cwd) and os.path.isdir(cwd),
+                "cwd_exists": claude_sessions.cwd_usable(cwd) and os.path.isdir(cwd),
                 "title": info["title"], "model": info["model"], "total": info["total"],
                 "importable": info["total"],
                 "modified_recently": _modified_recently(info["modified_at"]),
@@ -86,6 +86,8 @@ def create_claude_session_router(db) -> APIRouter:
         if err:
             return err
         cwd = info["cwd"]
+        if cwd and not claude_sessions.cwd_usable(cwd):
+            return _error(409, "cwd_unsupported", cwd=cwd)
         if not cwd or not os.path.isdir(cwd):
             return _error(409, "cwd_missing", cwd=cwd)
         session_id = info["session_id"]

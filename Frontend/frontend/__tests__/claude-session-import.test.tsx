@@ -5,6 +5,8 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import React from 'react'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 
 vi.mock('axios', () => {
@@ -14,7 +16,7 @@ vi.mock('axios', () => {
 })
 
 import axios from 'axios'
-import { ImportSessionDialog, samePath } from '../renderer/components/home/ImportSessionDialog'
+import { ImportSessionDialog } from '../renderer/components/home/ImportSessionDialog'
 import { ChatPanel } from '../renderer/components/home/ChatPanel'
 import { ControlPanel } from '../renderer/components/home/ControlPanel'
 import { EmptyChat } from '../renderer/components/home/EmptyChat'
@@ -75,10 +77,17 @@ describe('ImportSessionDialog', () => {
     expect(note.textContent).toBe('Gamachine bu klasöre geçecek: D:\\Other')
   })
 
-  it('treats separator style, case and a trailing slash as the same folder', () => {
-    expect(samePath('C:\\Projects\\Game\\', 'c:/projects/game')).toBe(true)
-    expect(samePath('C:\\Projects\\Game', 'C:\\Projects\\Other')).toBe(false)
-    expect(samePath('C:\\Projects\\Game', null)).toBe(false)
+  it('says the project will switch when the folder differs only in case (exact match)', async () => {
+    mocked.get.mockResolvedValue(preview({ cwd: 'c:\\projects\\game' }))
+    dialog()
+    typeId(); press()
+    expect((await screen.findByTestId('import-session-switch')).textContent).toBe('Gamachine bu klasöre geçecek: c:\\projects\\game')
+  })
+
+  it('home switches the project on any string difference and not on exact equality', () => {
+    const src = readFileSync(resolve(__dirname, '../renderer/pages/home.tsx'), 'utf8')
+    expect(src).toContain('if (result.workspace !== fs.workspacePath) {')
+    expect(src).not.toContain('samePath')
   })
 
   it.each([
@@ -114,6 +123,25 @@ describe('ImportSessionDialog', () => {
     press()
     expect((await screen.findByTestId('import-session-error')).textContent).toBe('Oturumun klasörü artık yok: C:\\Gone')
     expect(onImported).not.toHaveBeenCalled()
+  })
+
+  it('shows the unsupported-folder error from the import', async () => {
+    mocked.get.mockResolvedValue(preview())
+    mocked.post.mockRejectedValue(apiError(409, { error: 'cwd_unsupported', cwd: '\\\\srv\\share' }))
+    const { onImported } = dialog()
+    typeId(); press()
+    await screen.findByTestId('import-session-preview')
+    press()
+    expect((await screen.findByTestId('import-session-error')).textContent).toBe('Bu oturumun klasörü kullanılamıyor: \\\\srv\\share')
+    expect(onImported).not.toHaveBeenCalled()
+  })
+
+  it('says there is nothing to import when the session has no visible messages', async () => {
+    mocked.get.mockResolvedValue(preview({ importable: 0, total: 0 }))
+    dialog()
+    typeId(); press()
+    expect((await screen.findByTestId('import-session-error')).textContent).toBe('Bu oturumda aktarılacak mesaj yok.')
+    expect(screen.queryByTestId('import-session-preview')).toBeNull()
   })
 
   it('disables the buttons while a request is running', async () => {
