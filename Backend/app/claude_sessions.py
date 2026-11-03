@@ -1,0 +1,134 @@
+"""Read Claude Code session files (<claude config dir>/projects/<folder>/<id>.jsonl).
+
+Pure helpers, no FastAPI: find a session by id, extract the text a person
+would have seen in the terminal, and build the command that resumes it there.
+"""
+import json
+import os
+import re
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+SESSION_ID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+MESSAGE_CAP_CHARS = 100_000
+TITLE_MAX = 80
+
+# Wrapper text Claude Code stores as user lines that no person typed.
+_SKIP_USER_PREFIXES = ("<command-name>", "<local-command-", "<system-reminder>",
+                       "[Request interrupted", "Base directory for this skill")
+
+
+def projects_dir() -> Path:
+    base = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+    return Path(base) / "projects"
+
+
+def find_session(session_id: str) -> Optional[Path]:
+    """The session file for a UUID, or None. Only the validated id is joined into a path."""
+    if not isinstance(session_id, str) or not SESSION_ID_RE.match(session_id):
+        return None
+    try:
+        folders = [d for d in projects_dir().iterdir() if d.is_dir()]
+    except OSError:
+        return None
+    found = []
+    for folder in folders:
+        candidate = folder / f"{session_id}.jsonl"
+        try:
+            if candidate.is_file():
+                found.append((candidate.stat().st_mtime, candidate))
+        except OSError:
+            continue
+    if not found:
+        return None
+    return max(found, key=lambda item: item[0])[1]
+
+
+def _human_text(message: Any) -> Optional[str]:
+    """A person's prompt from a user line, or None for tool results and wrappers."""
+    content = message.get("content") if isinstance(message, dict) else None
+    if isinstance(content, str):
+        text = content
+    elif isinstance(content, list):
+        if not content or any(not isinstance(b, dict) or b.get("type") != "text" for b in content):
+            return None
+        text = "".join(str(b.get("text") or "") for b in content)
+    else:
+        return None
+    text = text.strip()
+    if not text or text.startswith(_SKIP_USER_PREFIXES):
+        return None
+    return text
+
+
+def _assistant_text(message: Any) -> Optional[str]:
+    content = message.get("content") if isinstance(message, dict) else None
+    if isinstance(content, str):
+        text = content
+    elif isinstance(content, list):
+        text = "".join(str(b.get("text") or "") for b in content
+                       if isinstance(b, dict) and b.get("type") == "text")
+    else:
+        return None
+    return text.strip() or None
+
+
+def read_session(path: Path, limit: int = 300) -> Dict[str, Any]:
+    """Visible messages of a session file (the last `limit`), plus its first cwd and last model."""
+    cwd = None
+    model = None
+    title = None
+    total = 0
+    kept: list = []
+    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        for raw in fh:
+            try:
+                line = json.loads(raw)
+            except ValueError:
+                continue
+            if not isinstance(line, dict):
+                continue
+            kind = line.get("type")
+            if kind not in ("user", "assistant"):
+                continue
+            # The first line's cwd wins: a later Bash `cd` changes it inside one file.
+            if cwd is None and isinstance(line.get("cwd"), str) and line["cwd"]:
+                cwd = line["cwd"]
+            if line.get("isSidechain") or line.get("isMeta") or line.get("isCompactSummary"):
+                continue
+            message = line.get("message")
+            if kind == "user":
+                if "toolUseResult" in line:
+                    continue
+                text = _human_text(message)
+            else:
+                text = _assistant_text(message)
+                msg_model = message.get("model") if isinstance(message, dict) else None
+                if text and isinstance(msg_model, str) and msg_model:
+                    model = msg_model
+            if not text:
+                continue
+            if kind == "user" and title is None:
+                title = text.splitlines()[0].strip()[:TITLE_MAX]
+            total += 1
+            kept.append({"role": kind, "content": text[:MESSAGE_CAP_CHARS],
+                         "timestamp": line.get("timestamp")})
+            if limit > 0 and len(kept) > limit:
+                kept.pop(0)
+    return {"session_id": path.stem, "cwd": cwd, "model": model, "title": title or "",
+            "messages": kept, "total": total, "modified_at": path.stat().st_mtime}
+
+
+def command_for(cwd: Optional[str], session_id: str) -> str:
+    """`cd "<cwd>"; claude --resume <id>`, valid in PowerShell, bash and zsh.
+
+    A cwd holding a double quote or a control character cannot be quoted the
+    same way in all three shells, so the cd part is dropped rather than risk a
+    command that does something else; the caller shows the plain resume command.
+    """
+    resume = f"claude --resume {session_id}"
+    if not cwd or '"' in cwd or any(ord(ch) < 32 or ord(ch) == 127 for ch in cwd):
+        return resume
+    return f'cd "{cwd}"; {resume}'

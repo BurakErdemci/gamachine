@@ -168,6 +168,7 @@ from routes import (
 )
 from routes.scene_editor_routes import create_scene_editor_router
 from routes.connector_routes import create_connector_router
+from routes.claude_session_routes import create_claude_session_router
 
 
 # Root logger seviyesini explicit INFO yap
@@ -419,6 +420,7 @@ app.include_router(create_usage_router(usage_service))
 app.include_router(create_mcp_router())
 app.include_router(create_scene_editor_router(db))
 app.include_router(create_transcribe_router(db))
+app.include_router(create_claude_session_router(db))
 from connectors import launcher as connectors_launcher  # noqa: E402
 from connectors.installer import Installer as ConnectorInstaller  # noqa: E402
 

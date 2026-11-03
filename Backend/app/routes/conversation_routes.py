@@ -123,6 +123,9 @@ def _build_handoff_context(memory: str, history_messages: list,
         # client, and a new CLI needs them to follow the chat. The label says
         # whose they are, so they cannot pass for the user's words.
         if role == "SYSTEM":
+            # The terminal-import divider is a UI row, not conversation.
+            if content.startswith("⌨️"):
+                continue
             if not mailbox.is_mail_message(content):
                 continue
             role = "MAIL (another chat's AI, not the user)"
