@@ -10,6 +10,11 @@ export function isRemotePage(win: any = typeof window === 'undefined' ? undefine
   return loc?.protocol === 'https:' && loc.hostname !== 'localhost' && loc.hostname !== '127.0.0.1'
 }
 
+/** The desktop runs at most 16 requests of one session at once (Backend/app/remote/session.py
+ *  MAX_TASKS) and answers the rest "busy" or not at all. The page opens with over 30 at once;
+ *  measured 3 Nov 2026, the chat list got "busy" and the sidebar stayed empty. The rest wait. */
+const MAX_IN_FLIGHT = 12
+
 /** The part of relay/public/net.js `Link` the transport uses. */
 export interface RemoteLink {
   /** Resolves with `{id, ok, result}` or `{id, ok: false, error}`; rejects on transport failure. */
@@ -94,6 +99,8 @@ export class RemoteTransport {
   private early = new Map<string, Array<{ type: string; data_b64?: string; error?: string }>>()
   private ipcListeners = new Map<string, Set<(...args: unknown[]) => void>>()
   private statusListeners = new Set<(status: LinkStatus, info?: unknown) => void>()
+  private inFlight = 0
+  private slotWaiters: Array<() => void> = []
 
   // The shims exist from page load, before pairing gives us a Link; requests wait for one.
   constructor(private link: RemoteLink | null = null, private readyWaitMs = READY_WAIT_MS) {}
@@ -196,15 +203,35 @@ export class RemoteTransport {
   /** One request; resolves with `result`, rejects with RemoteError carrying the desktop's code. */
   async request(type: string, params: Record<string, unknown> = {}): Promise<any> {
     await this.waitReady()
-    if (!this.link) throw new RemoteError('not_ready')
+    await this.takeSlot()
     let reply: RemoteReply
     try {
-      reply = await this.link.request(type, params)
-    } catch (err) {
-      throw new RemoteError(err instanceof Error ? err.message : String(err))
+      if (!this.link) throw new RemoteError('not_ready')
+      try {
+        reply = await this.link.request(type, params)
+      } catch (err) {
+        throw new RemoteError(err instanceof Error ? err.message : String(err))
+      }
+    } finally {
+      this.releaseSlot()
     }
     if (!reply || reply.ok !== true) throw new RemoteError(reply?.error || 'internal', reply)
     return reply.result
+  }
+
+  private takeSlot(): Promise<void> {
+    if (this.inFlight < MAX_IN_FLIGHT) {
+      this.inFlight++
+      return Promise.resolve()
+    }
+    return new Promise((resolve) => this.slotWaiters.push(resolve))
+  }
+
+  /** A waiting request takes the freed slot over, so inFlight only drops when nobody waits. */
+  private releaseSlot(): void {
+    const next = this.slotWaiters.shift()
+    if (next) next()
+    else this.inFlight--
   }
 
   /** Builds ui_http / ui_stream_open params, uploading a body that would not fit one frame. */
