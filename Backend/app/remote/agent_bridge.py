@@ -262,7 +262,9 @@ def create_agent_bridge_router(db, bridge) -> APIRouter:
             out.update(status="ended_without_reply", turn_status=entry.get("status"))
             return out
         text = row[0] or ""
-        out.update(status="done", reply=text[:REPLY_MAX], model=row[1], truncated=len(text) > REPLY_MAX)
+        # turn_status tells the agent a stopped or failed turn's stored text may be partial.
+        out.update(status="done", reply=text[:REPLY_MAX], model=row[1], truncated=len(text) > REPLY_MAX,
+                   turn_status=entry.get("status"))
         return out
 
     @router.get("/chats/{chat_id}/messages")

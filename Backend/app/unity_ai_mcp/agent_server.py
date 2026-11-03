@@ -30,6 +30,7 @@ ENDED_NO_REPLY = "the turn ended without a reply (an error or a stop in Gamachin
 NOT_DELIVERED = "Gamachine did not send the message; is its window open?"
 TERMINAL = ("done", "ended_without_reply")
 TRUNCATED_NOTE = "note: the reply was cut; read the full text in Gamachine"
+PARTIAL_NOTE = "note: the turn ended as '{}' in Gamachine; this reply may be incomplete"
 
 REQUEST_ID_RE = re.compile(r"[0-9a-f]{16}")  # secrets.token_hex(8) in remote/agent_bridge.py
 
@@ -91,6 +92,8 @@ def format_reply(request_id: str, state: Dict[str, Any]) -> str:
         lines.append(state.get("reply") or "")
         if state.get("truncated"):
             lines.append(TRUNCATED_NOTE)
+        if state.get("turn_status") in ("stopped", "error"):
+            lines.append(PARTIAL_NOTE.format(state["turn_status"]))
     elif status == "ended_without_reply":
         lines.append(ENDED_NO_REPLY)
     elif status == "not_delivered":

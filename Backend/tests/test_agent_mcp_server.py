@@ -114,6 +114,14 @@ async def test_slow_polls_cannot_stretch_the_wait_past_its_budget():
     assert "still running" in out and calls == [0.0, 4.0] and clock.t <= 5 + 3.0
 
 
+async def test_a_stopped_or_failed_turn_marks_its_reply_as_maybe_incomplete():
+    for status in ("stopped", "error"):
+        out, _, _ = await run({"status": "done", "reply": "half", "turn_status": status})
+        assert "reply:\nhalf" in out and srv.PARTIAL_NOTE.format(status) in out
+    out, _, _ = await run({"status": "done", "reply": "whole", "turn_status": "done"})
+    assert "may be incomplete" not in out
+
+
 async def test_a_truncated_reply_says_so():
     out, _, _ = await run({"status": "done", "reply": "abc", "truncated": True})
     assert "reply:\nabc" in out and srv.TRUNCATED_NOTE in out

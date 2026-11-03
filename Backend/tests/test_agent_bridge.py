@@ -269,6 +269,19 @@ def test_idle_chat_reply_is_the_stored_assistant_row(env):
     got = state(env, rid)
     assert got["status"] == "done" and got["reply"] == "MINE" and got["model"] == "m1"
     assert got["chat_id"] == conv and got["truncated"] is False and got["waiting_card"] is None
+    assert got["turn_status"] == "done"
+
+
+def test_a_stopped_turns_partial_reply_carries_its_turn_status(env):
+    enable(env)
+    conv = env.db.create_conversation(1, "c")
+    rid = send(env, conv, "q-stop")["request_id"]
+    uid = env.db.add_message(conv, "user", "q-stop")
+    turn_replies.begin(conv, uid)
+    aid = env.db.add_message(conv, "assistant", "half an answer", provider="claude", model="m1")
+    turn_replies.end(conv, uid, aid, "stopped")
+    got = state(env, rid)
+    assert got["status"] == "done" and got["reply"] == "half an answer" and got["turn_status"] == "stopped"
 
 
 def test_an_old_turn_running_at_send_is_never_the_reply(env):
