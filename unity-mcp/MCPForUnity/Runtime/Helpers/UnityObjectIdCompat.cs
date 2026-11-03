@@ -1,6 +1,5 @@
 using UnityEngine;
 #if UNITY_EDITOR
-using System.Reflection;
 using UnityEditor;
 #endif
 
@@ -41,33 +40,23 @@ namespace MCPForUnity.Runtime.Helpers
         }
 
 #if UNITY_EDITOR
-#if UNITY_6000_6_OR_NEWER
-        private static MethodInfo _instanceIdToObject;
-        private static bool _instanceIdToObjectInitialized;
-#endif
-
         /// <summary>
         /// Resolves an int instance ID handle back to a UnityEngine.Object.
         ///   Pre-6.0  : EditorUtility.InstanceIDToObject(int)
         ///   6.0–6.5  : EditorUtility.EntityIdToObject(int)  (implicit int→EntityId cast)
-        ///   6.6+     : reflection on InstanceIDToObject(int) — the API still exists at runtime
-        ///              but is obsolete-as-error; reflection bypasses CS0619 until the public
-        ///              EntityId(int) ctor stabilizes.
+        ///   6.6+     : EditorUtility.EntityIdToObject(EntityId.FromULong(...)) on the bits
+        ///              <see cref="GetInstanceIDCompat"/> handed out.
         /// </summary>
         public static Object InstanceIDToObjectCompat(int instanceId)
         {
 #if UNITY_6000_6_OR_NEWER
-            if (!_instanceIdToObjectInitialized)
-            {
-                _instanceIdToObject = typeof(EditorUtility).GetMethod(
-                    "InstanceIDToObject",
-                    BindingFlags.Public | BindingFlags.Static,
-                    null,
-                    new[] { typeof(int) },
-                    null);
-                _instanceIdToObjectInitialized = true;
-            }
-            return _instanceIdToObject?.Invoke(null, new object[] { instanceId }) as Object;
+            // InstanceIDToObject(int) throws when invoked through reflection on 6.6.8f1 (measured
+            // 3 Nov 2026: every find_gameobjects call failed), so the int goes back to an EntityId.
+            // GetInstanceIDCompat keeps the low 32 bits; sign-extending restores any id that fits.
+            Object found = EditorUtility.EntityIdToObject(EntityId.FromULong((ulong)(long)instanceId));
+            if (found == null && instanceId < 0)
+                found = EditorUtility.EntityIdToObject(EntityId.FromULong((uint)instanceId));
+            return found;
 #elif UNITY_6000_3_OR_NEWER
             // 6.4 implicit int→EntityId cast'i obsolete işaretler; 6.6+ dalı zaten
             // reflection'a geçiyor — aradaki sürümlerde bilinçli eski davranış.
