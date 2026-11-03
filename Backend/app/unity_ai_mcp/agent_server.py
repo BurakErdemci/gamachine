@@ -11,6 +11,7 @@ through `GET /agent-bridge/requests/{id}` (docs/terminal-agents.md).
 """
 import asyncio
 import os
+import re
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 import httpx
@@ -27,6 +28,8 @@ UNKNOWN_REQUEST = ("Gamachine restarted or the request expired; "
 ENDED_NO_REPLY = "the turn ended without a reply (an error or a stop in Gamachine)"
 NOT_DELIVERED = "Gamachine did not send the message; is its window open?"
 TRUNCATED_NOTE = "note: the reply was cut; read the full text in Gamachine"
+
+REQUEST_ID_RE = re.compile(r"[0-9a-f]{16}")  # secrets.token_hex(8) in remote/agent_bridge.py
 
 POLL_S = 1.0
 WAIT_MIN, WAIT_MAX = 5, 170
@@ -201,7 +204,11 @@ async def send_message(ctx: Any, chat_id: int, text: str, wait_seconds: int = 12
 
 
 async def wait_reply(request_id: str, wait_seconds: int = 120) -> str:
-    return await wait_for_reply(str(request_id), wait_seconds, fetch_state=_state_fetcher)
+    # The id comes from the model and is joined into a URL: anything but the backend's
+    # own 16-hex form could walk out of /agent-bridge (e.g. "../../remote/devices").
+    if not isinstance(request_id, str) or not REQUEST_ID_RE.fullmatch(request_id):
+        return UNKNOWN_REQUEST
+    return await wait_for_reply(request_id, wait_seconds, fetch_state=_state_fetcher)
 
 
 async def read_messages(chat_id: int, limit: int = 10) -> str:
@@ -215,6 +222,8 @@ async def read_messages(chat_id: int, limit: int = 10) -> str:
 
 
 async def _state_fetcher(request_id: str) -> dict:
+    if not REQUEST_ID_RE.fullmatch(request_id):
+        raise Failure(UNKNOWN_REQUEST)
     return await _request("GET", f"/requests/{request_id}")
 
 

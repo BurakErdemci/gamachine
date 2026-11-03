@@ -97,18 +97,31 @@ async def test_unknown_request_says_gamachine_restarted(monkeypatch):
     assert out == srv.UNKNOWN_REQUEST and "restarted" in out
 
 
+async def test_wait_reply_refuses_a_malformed_request_id_without_any_request(monkeypatch):
+    seen = []
+
+    async def fake_request(method, path, **kw):
+        seen.append(path)
+        return {}
+
+    monkeypatch.setattr(srv, "_request", fake_request)
+    for bad in ("../../remote/devices", "ABCDEF0123456789", "0123456789abcde", "0123456789abcdef/../x", 5):
+        assert await srv._guard(srv.wait_reply(bad, 5)) == srv.UNKNOWN_REQUEST
+    assert seen == []
+
+
 async def test_send_message_posts_then_polls_the_request(monkeypatch):
     seen = []
 
     async def fake_request(method, path, **kw):
         seen.append((method, path))
         if method == "POST":
-            return {"status": "accepted", "request_id": "abc123"}
+            return {"status": "accepted", "request_id": "0123456789abcdef"}
         return {"status": "done", "reply": "hi back", "model": "m"}
 
     monkeypatch.setattr(srv, "_request", fake_request)
     out = await srv.send_message(None, 4, "hi", 10)
-    assert seen == [("POST", "/chats/4/messages"), ("GET", "/requests/abc123")]
+    assert seen == [("POST", "/chats/4/messages"), ("GET", "/requests/0123456789abcdef")]
     assert "status: done" in out and "hi back" in out
 
 
