@@ -7,8 +7,11 @@ rides `/wake-stream-all`, the one server -> renderer stream that stays open
 for every chat. Frame shape (step 4 acts on it):
 
     {"type": "remote_message", "request_id": str, "conversation_id": int,
-     "text": str, "source": "phone", "device_id": str, "device_name": str,
+     "text": str, "source": "phone" | "agent", "device_id": str, "device_name": str,
      "at": <ms>, "effort"?: str}
+
+`device_id` / `device_name` carry the agent's client name for source "agent"
+(a terminal agent reaching Gamachine through /agent-bridge).
 
 `effort` is present only when the phone chose one (already checked against the
 chat's model); the renderer sends that message with it instead of its default.

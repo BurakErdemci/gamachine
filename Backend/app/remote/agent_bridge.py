@@ -55,12 +55,16 @@ def server_argv() -> List[str]:
     return [sys.executable, main_py, "agent-mcp-server"]
 
 
+def _clean(value: Any, limit: int, default: str) -> str:
+    if not isinstance(value, str):
+        return default
+    kept = "".join(ch for ch in value if ch.isspace() or (ch.isprintable() and ord(ch) not in _BIDI))
+    text = " ".join(kept.split())[:limit].strip()
+    return text or default
+
+
 def clean_client(name: Any) -> str:
-    if not isinstance(name, str):
-        return DEFAULT_CLIENT
-    kept = "".join(ch for ch in name if ch.isspace() or (ch.isprintable() and ord(ch) not in _BIDI))
-    text = " ".join(kept.split())[:CLIENT_MAX].strip()
-    return text or DEFAULT_CLIENT
+    return _clean(name, CLIENT_MAX, DEFAULT_CLIENT)
 
 
 class AgentSession:
@@ -131,11 +135,12 @@ def create_agent_bridge_router(db, bridge) -> APIRouter:
                        x_session_token: str = Header(alias="X-Session-Token", default="")):
         gate(x_session_token)
         title = body.get("title")
-        if title is not None and (not isinstance(title, str) or len(title) > TITLE_MAX):
+        if title is not None and not isinstance(title, str):
             raise HTTPException(status_code=400, detail="bad_title")
+        title = _clean(title, TITLE_MAX, "Yeni Sohbet")
         provider_type, model_name = body.get("provider_type"), body.get("model_name")
         # No workspace argument: the chat binds the project open in Gamachine.
-        conv = db.create_conversation(chats.LOCAL_USER_ID, title or "Yeni Sohbet")
+        conv = db.create_conversation(chats.LOCAL_USER_ID, title)
         model_error = None
         if provider_type and model_name:
             try:
@@ -150,7 +155,7 @@ def create_agent_bridge_router(db, bridge) -> APIRouter:
         except Exception:
             logger.exception("[agent-bridge] conversation_created publish failed")
         row = chats.chat_row(db, conv) or {}
-        reply = {"chat_id": conv, "title": row.get("title", title or "Yeni Sohbet"),
+        reply = {"chat_id": conv, "title": row.get("title", title),
                  "provider_type": row.get("provider_type"), "model_name": row.get("model_name")}
         if model_error:
             reply["model_error"] = model_error

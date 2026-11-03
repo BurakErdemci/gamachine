@@ -117,13 +117,13 @@ async def test_card_waiting_is_said_when_time_runs_out():
     assert "status: running" in out
     assert "waiting for the user's approval in Gamachine: rm build/" in out
     assert "the reply turn has started" in out
-    assert "gamachine_wait_reply(chat_id=7, since=0)" in out and "part" in out
+    assert 'gamachine_wait_reply(chat_id=7, since=0, epoch="e1")' in out and "part" in out
 
 
 async def test_timeout_before_the_turn_starts_resumes_from_the_last_seq_seen():
     out, _ = await run([[ev(4, "text", content="x")]], busy=True, wait=5, since=3)
     assert "status: running" in out and "has not started yet" in out
-    assert "since=4)" in out
+    assert "since=4," in out
 
 
 async def test_epoch_change_says_the_reply_may_be_lost():
@@ -142,6 +142,58 @@ async def test_gap_takes_the_last_assistant_message_after_turn_end():
 async def test_wait_reply_without_an_epoch_adopts_the_first_one():
     out, _ = await run([[ev(1, "turn_start", **START), ev(2, "turn_end", status="done")]], epoch=None)
     assert out.startswith("status: done")
+
+
+WAKE = dict(provider="claude", model="opus", origin="wake")
+USER = dict(provider="claude", model="opus", origin="user")
+
+
+def test_wake_turn_is_never_the_reply_on_an_idle_chat():
+    events = [ev(1, "turn_start", **WAKE), ev(2, "text", content="WAKE"), ev(3, "turn_end", status="done"),
+              ev(4, "turn_start", **USER), ev(5, "text", content="MINE"), ev(6, "turn_end", status="done")]
+    assert srv.analyze_reply(events)["text"] == "MINE"
+    assert srv.analyze_reply(events[:3])["started"] is False
+
+
+def test_wake_turn_between_the_old_turn_and_the_reply_is_skipped_when_busy():
+    events = [ev(1, "turn_end", status="done"),
+              ev(2, "turn_start", **WAKE), ev(3, "text", content="WAKE"), ev(4, "turn_end", status="done"),
+              ev(5, "turn_start", **USER), ev(6, "text", content="MINE"), ev(7, "turn_end", status="done")]
+    verdict = srv.analyze_reply(events, busy_at_send=True)
+    assert verdict["text"] == "MINE" and verdict["ended"]
+
+
+async def test_gap_with_the_turn_start_evicted_returns_the_stored_reply():
+    batch = [ev(30, "tool_call", tool="t"), ev(31, "turn_end", status="done")]
+    out, _ = await run([batch], gap=True, messages=[{"role": "assistant", "text": "stored answer"}])
+    assert out.startswith("status: done")
+    assert srv.STORED_NOTE in out and out.endswith("reply:\nstored answer")
+
+
+async def test_gap_with_the_turn_still_open_keeps_waiting():
+    batch = [ev(30, "tool_call", tool="t"), ev(31, "tool_call", tool="t")]
+    out, _ = await run([batch], gap=True, wait=5, messages=[{"role": "assistant", "text": "old"}])
+    assert "status: running" in out and "old" not in out
+    assert 'gamachine_wait_reply(chat_id=7, since=31, epoch="e1")' in out
+
+
+async def test_wait_reply_with_another_epoch_reports_the_restart():
+    out, _ = await run([[ev(1, "turn_start", **START), ev(2, "turn_end", status="done")]],
+                       epoch="old", served="new")
+    assert out == srv.RESTARTED
+
+
+async def test_read_messages_clamps_the_limit(monkeypatch):
+    seen = []
+
+    async def fake_request(method, path, **kw):
+        seen.append(kw["params"]["limit"])
+        return {"messages": []}
+
+    monkeypatch.setattr(srv, "_request", fake_request)
+    for given in (100, 0, -3, "x", None):
+        await srv.read_messages(1, given)
+    assert seen == [50, 1, 1, 10, 10]
 
 
 # ── HTTP failures become plain sentences ─────────────────────────────────────

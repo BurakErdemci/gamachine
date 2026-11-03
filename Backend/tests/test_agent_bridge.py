@@ -157,7 +157,21 @@ def test_new_chat_keeps_the_chat_when_the_model_is_refused(env):
     enable(env)
     r = env.post("/agent-bridge/chats", headers=H, json={"provider_type": "nope", "model_name": "x"})
     assert r.status_code == 200 and r.json()["model_error"]
-    assert env.post("/agent-bridge/chats", headers=H, json={"title": "t" * 201}).status_code == 400
+    assert env.post("/agent-bridge/chats", headers=H, json={"title": 5}).status_code == 400
+
+
+@pytest.mark.parametrize("given,expected", [
+    ("\u202eEvil\x07\nTitle  x", "Evil Title x"),
+    ("   ", "Yeni Sohbet"),
+    ("", "Yeni Sohbet"),
+    ("\x07\u202e", "Yeni Sohbet"),
+    ("  a \t b  ", "a b"),
+    ("t" * 201, "t" * 200),
+])
+def test_new_chat_title_is_cleaned(env, given, expected):
+    enable(env)
+    r = env.post("/agent-bridge/chats", headers=H, json={"title": given})
+    assert r.status_code == 200 and r.json()["title"] == expected
 
 
 def test_set_model_error_is_a_400_with_the_code(env):
