@@ -51,12 +51,13 @@ os.environ["PATH"] = os.pathsep.join(
 #   backend codex-mcp-bridge <http_url> → providers.codex_unitymcp_bridge (Codex stdio köprüsü)
 #   backend agy-hook --state <file>     → agy_step_gate.main (agy PreToolUse hook, every approval mode)
 #   backend mail-mcp-server             → unity_ai_mcp.mail_server.main (Claude chats' mail tools)
+#   backend agent-mcp-server            → unity_ai_mcp.agent_server.main (terminal agents' Gamachine tools)
 #   backend computer-mcp-server         → computer_use.server.main (computer-use tools)
 #   backend browser-mcp-server          → browser_use.server.main (agent browser tools)
 #   backend connectors-mcp-server       → connectors.mcp_server.main (agent connector tools, e.g. Blender)
 # FastAPI/uvicorn app'i kurmadan erken dön — bu komutlar HTTP server başlatmaz.
 if len(sys.argv) > 1 and sys.argv[1] in ("mcp-server", "unityai", "codex-mcp-bridge", "agy-hook",
-                                         "mail-mcp-server", "computer-mcp-server", "computer-mcp-standalone",
+                                         "mail-mcp-server", "agent-mcp-server", "computer-mcp-server", "computer-mcp-standalone",
                                          "browser-mcp-server", "connectors-mcp-server"):
     _sub_mode = sys.argv[1]
     sys.argv = [sys.argv[0]] + sys.argv[2:]
@@ -66,6 +67,10 @@ if len(sys.argv) > 1 and sys.argv[1] in ("mcp-server", "unityai", "codex-mcp-bri
         sys.exit(0)
     elif _sub_mode == "mail-mcp-server":
         from unity_ai_mcp.mail_server import main as _sub_main
+        _sub_main()
+        sys.exit(0)
+    elif _sub_mode == "agent-mcp-server":
+        from unity_ai_mcp.agent_server import main as _sub_main
         _sub_main()
         sys.exit(0)
     elif _sub_mode == "computer-mcp-server":
@@ -195,6 +200,16 @@ _host = os.environ.get("HOST", "127.0.0.1")
 _port = os.environ.get("PORT", "8000")
 os.environ["ANTIGRAVITY_URL"] = f"http://{_host}:{_port}"  # Her başlatmada güncelle
 
+# The terminal agents' stdio MCP server (agent-mcp-server) is started by a CLI
+# and finds this backend through the token file's neighbour; the port is random.
+from local_token_file import read_backend_url, write_backend_url  # noqa: E402
+
+try:
+    if not write_backend_url(os.environ["ANTIGRAVITY_URL"]):
+        logger.warning("[Startup] backend URL file not written; terminal agents cannot find Gamachine.")
+except Exception as e:
+    logger.warning(f"[Startup] backend URL file not written: {e}")
+
 
 def _resolve_db_path() -> str:
     db_path = os.environ.get("DB_PATH")
@@ -275,6 +290,13 @@ async def lifespan(app: FastAPI):
         await remote_bridge.shutdown()
     except Exception as e:
         logger.warning(f"[Shutdown] remote control not stopped: {e}")
+
+    # Only our own URL: a newer backend may have replaced the file already.
+    try:
+        if read_backend_url() == os.environ.get("ANTIGRAVITY_URL"):
+            write_backend_url("")
+    except Exception as e:
+        logger.warning(f"[Shutdown] backend URL file not removed: {e}")
 
     side_sweeper.cancel()
     try:
@@ -405,6 +427,7 @@ _connector_installer = ConnectorInstaller()
 connectors_launcher.bind(installer=_connector_installer)
 app.include_router(create_connector_router(db, installer=_connector_installer))
 
+from remote.agent_bridge import create_agent_bridge_router  # noqa: E402
 from remote.bridge import RemoteBridge  # noqa: E402
 
 remote_bridge = RemoteBridge(db, stop_chat=_conversation_router.stop_chat,
@@ -415,6 +438,7 @@ remote_bridge = RemoteBridge(db, stop_chat=_conversation_router.stop_chat,
                              halt_computer=_conversation_router.halt_computer,
                              app=app)
 app.include_router(create_remote_router(remote_bridge))
+app.include_router(create_agent_bridge_router(db, remote_bridge))
 # A desktop renderer's /wake-stream-all asks it to re-attach the event
 # channels browsers still listen to (its listeners died with a reload).
 _conversation_router.remote_subscriptions = remote_bridge.rpc.ui.subscribed_channels

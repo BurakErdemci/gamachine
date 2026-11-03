@@ -240,3 +240,33 @@ def read_local_app_token() -> str:
     if token:
         return token
     return read_secret_file(_TOKEN_PATH)
+
+
+def backend_url_path() -> str:
+    return os.path.join(os.path.dirname(_TOKEN_PATH), "backend-url")
+
+
+def write_backend_url(url: str) -> bool:
+    """Writes the running backend's URL next to the token so a terminal agent's
+    stdio MCP server can find it. An empty url deletes the file."""
+    path = backend_url_path()
+    try:
+        if not url:
+            if os.path.exists(path):
+                os.remove(path)
+            return True
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with os.fdopen(_open_secret_for_write(path), "w", encoding="utf-8") as f:
+            f.write(url)
+        return True
+    except OSError as e:
+        logger.error(f"[local-token] backend URL could not be written: {e}")
+        return False
+
+
+def read_backend_url() -> str:
+    """The URL written by the running backend; "" when missing or unreadable."""
+    try:
+        return read_secret_file(backend_url_path())
+    except Exception:
+        return ""

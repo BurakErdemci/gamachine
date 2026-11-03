@@ -294,7 +294,7 @@ class Dispatcher:
         if not isinstance(text, str) or not text.strip() or len(text) > TEXT_MAX:
             raise RpcError("bad_text")
         frame = {"type": FRAME_TYPE, "request_id": secrets.token_hex(8), "conversation_id": row["id"],
-                 "text": text, "source": "phone", "device_id": session.device.device_id,
+                 "text": text, "source": getattr(session, "source", "phone"), "device_id": session.device.device_id,
                  "device_name": session.device.name, "at": int(time.time() * 1000)}
         effort = req.get("effort")
         if effort is not None:
