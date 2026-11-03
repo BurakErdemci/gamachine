@@ -121,21 +121,24 @@ def read_session(path: Path, limit: int = 300) -> Dict[str, Any]:
             "messages": kept, "total": total, "modified_at": path.stat().st_mtime}
 
 
-# Characters PowerShell, bash or zsh treat specially inside "...", plus PowerShell's
-# wildcard brackets and cmd's %: such a cwd gets no cd part. Letters (Turkish ones
-# included), digits, spaces and \ : . - _ ( ) stay allowed.
-_SHELL_SPECIAL = frozenset("\"$`'!;&|<>*?{}[]^%")
+# Allowlist, not a denylist: PowerShell also reads Unicode quotes (U+2018-U+201E)
+# and dashes as syntax, so anything outside letters, digits (str.isalnum, Turkish
+# letters included) and these few characters gets no cd part.
+_CD_SAFE = frozenset(" \\/:._-()")
+
+
+def _cd_safe(cwd: str) -> bool:
+    return all(ch.isalnum() or ch in _CD_SAFE for ch in cwd)
 
 
 def command_for(cwd: Optional[str], session_id: str) -> str:
     """`cd "<cwd>"; claude --resume <id>`, valid in PowerShell, bash and zsh.
 
-    A cwd holding a shell-special character (_SHELL_SPECIAL) or a control
-    character cannot be quoted the same way in all three shells, so the cd part
-    is dropped rather than risk a command that does something else; the caller
-    shows the plain resume command.
+    A cwd with any character outside the allowlist (_cd_safe) cannot be quoted
+    the same way in all three shells, so the cd part is dropped rather than risk
+    a command that does something else; the caller shows the plain resume command.
     """
     resume = f"claude --resume {session_id}"
-    if not cwd or any(ch in _SHELL_SPECIAL or ord(ch) < 32 or ord(ch) == 127 for ch in cwd):
+    if not cwd or not _cd_safe(cwd):
         return resume
     return f'cd "{cwd}"; {resume}'
