@@ -403,7 +403,20 @@ export default function Home() {
   const onSessionImported = async (result: ImportedSession) => {
     // Exact string: the backend's resume only finds the session when the turn's workspace equals the stored cwd.
     if (result.workspace !== fs.workspacePath) {
-      const opened = await fs.selectWorkspace(result.workspace);
+      // The desktop only opens folders the user picked (trusted roots), and selectWorkspace
+      // clears the open project for an untrusted one. A session's folder may never have
+      // been opened here, so the user grants it in the folder picker, opened on that folder.
+      const norm = (p: unknown) => (typeof p === 'string' ? p.replace(/[\\/]+$/, '').toLowerCase() : '');
+      let trusted = true;
+      if (ipc) {
+        const info = await ipc.invoke('workspace-info', [result.workspace]).catch(() => null);
+        if (!Array.isArray(info) || info[0]?.status === 'untrusted') {
+          showToast(t('importSession.pickFolder', { cwd: result.workspace }), 'info' as any);
+          const picked = await ipc.invoke('open-folder-dialog', result.workspace).catch(() => null);
+          trusted = !!picked && norm(picked) === norm(result.workspace);
+        }
+      }
+      const opened = trusted && await fs.selectWorkspace(result.workspace);
       if (!opened) showToast(t('importSession.workspaceFail'), 'error' as any);
     }
     if (auth.user) await chat.fetchConversations(auth.user.id);
