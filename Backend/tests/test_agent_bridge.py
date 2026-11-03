@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "app")))
 
 import local_token_file  # noqa: E402
-from agentic import turn_events  # noqa: E402
+from agentic import approval_policy  # noqa: E402
 from database import DatabaseManager  # noqa: E402
 from remote import agent_bridge, rpc, ui_dispatch  # noqa: E402
 from remote.rpc import Dispatcher  # noqa: E402
@@ -46,8 +46,7 @@ class Bridge:
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    # Every test's database numbers its chats from 1, and the ring is per process.
-    turn_events.RING.reset()
+    agent_bridge._REQUESTS.clear()
     monkeypatch.setenv("LOCAL_APP_TOKEN", "t")
     db = DatabaseManager(db_path=str(tmp_path / "bridge.db"))
     channel = FakeChannel()
@@ -65,7 +64,7 @@ def env(tmp_path, monkeypatch):
     client = TestClient(app)
     client.db, client.channel, client.bridge = db, channel, bridge
     yield client
-    turn_events.RING.reset()
+    agent_bridge._REQUESTS.clear()
 
 
 def enable(client):
@@ -78,7 +77,7 @@ GATED = [
     ("post", "/agent-bridge/chats", {"title": "x"}),
     ("put", "/agent-bridge/chats/1/model", {"provider_type": "a", "model_name": "b"}),
     ("post", "/agent-bridge/chats/1/messages", {"text": "hi"}),
-    ("get", "/agent-bridge/chats/1/events?since=0", None),
+    ("get", "/agent-bridge/requests/abc", None),
     ("get", "/agent-bridge/chats/1/messages", None),
 ]
 
@@ -184,19 +183,43 @@ def test_set_model_error_is_a_400_with_the_code(env):
                    json={"provider_type": "a", "model_name": "b"}).status_code == 404
 
 
-def test_message_returns_the_snapshot_and_the_frame_is_marked_agent(env):
+def send(env, conv, text):
+    r = env.post(f"/agent-bridge/chats/{conv}/messages", headers=H, json={"text": text, "client": "t"})
+    assert r.status_code == 200
+    return r.json()
+
+
+def state(env, request_id):
+    r = env.get(f"/agent-bridge/requests/{request_id}", headers=H)
+    assert r.status_code == 200
+    return r.json()
+
+
+def turn(env, conv, user=None, reply=None, system=None):
+    """What the desktop stores for one turn (the in-flight flag is the caller's business)."""
+    if system:
+        env.db.add_message(conv, "system", system)
+    if user is not None:
+        env.db.add_message(conv, "user", user)
+    if reply:
+        env.db.add_message(conv, "assistant", reply, provider="claude", model="m1")
+
+
+def test_new_chat_null_title_is_400_and_absent_title_is_the_default(env):
+    enable(env)
+    assert env.post("/agent-bridge/chats", headers=H, json={"title": None}).status_code == 400
+    assert env.post("/agent-bridge/chats", headers=H, json={}).json()["title"] == "Yeni Sohbet"
+
+
+def test_message_returns_a_request_id_and_the_frame_is_marked_agent(env):
     enable(env)
     conv = env.db.create_conversation(1, "c")
-    turn_events.append(conv, "turn_start", provider="claude", model="m", origin="user")
-    before = turn_events.since(conv, 0)
-    r = env.post(f"/agent-bridge/chats/{conv}/messages", headers=H,
-                 json={"text": "hello", "client": "Cl‮aude\x00 Code"})
-    assert r.status_code == 200
-    assert r.json() == {"status": "accepted", "since_seq": before["last_seq"], "epoch": before["epoch"],
-                        "busy_at_send": True}
+    body = send(env, conv, "hello")
+    assert body["status"] == "accepted" and len(body["request_id"]) == 16
+    assert set(body) == {"status", "request_id"}
     frame = env.channel.frames[-1]
     assert frame["type"] == rpc.FRAME_TYPE and frame["source"] == "agent"
-    assert frame["device_name"] == "Claude Code" and frame["device_id"] == "agent:Claude Code"
+    assert frame["device_name"] == "t" and frame["device_id"] == "agent:t"
     assert frame["conversation_id"] == conv and frame["text"] == "hello"
 
 
@@ -205,26 +228,153 @@ def test_message_without_a_window_is_desktop_not_ready_and_bad_input_is_400_404(
     conv = env.db.create_conversation(1, "c")
     monkeypatch.setattr(ui_dispatch, "desktop_renderer_ready", lambda: False)
     r = env.post(f"/agent-bridge/chats/{conv}/messages", headers=H, json={"text": "hi"})
-    assert r.json()["status"] == "desktop_not_ready" and r.json()["busy_at_send"] is False
+    assert r.json() == {"status": "desktop_not_ready"} and not agent_bridge._REQUESTS
     assert env.post(f"/agent-bridge/chats/{conv}/messages", headers=H, json={"text": " "}).status_code == 400
     assert env.post("/agent-bridge/chats/99999/messages", headers=H, json={"text": "hi"}).status_code == 404
 
 
-def test_events_and_messages_routes(env):
+def test_messages_route_and_no_events_route(env):
     enable(env)
     conv = env.db.create_conversation(1, "c")
     env.db.add_message(conv, "user", "q")
     env.db.add_message(conv, "assistant", "a", provider="claude", model="m")
-    turn_events.append(conv, "turn_start", provider="claude", model="m", origin="user")
-    got = env.get(f"/agent-bridge/chats/{conv}/events?since=0", headers=H).json()
-    assert got["last_seq"] == 1 and got["events"][0]["kind"] == "turn_start"
-    assert env.get(f"/agent-bridge/chats/{conv}/events?since=-1", headers=H).status_code == 422
     msgs = env.get(f"/agent-bridge/chats/{conv}/messages?limit=1", headers=H).json()["messages"]
     assert [m["role"] for m in msgs] == ["assistant"]
     assert env.get(f"/agent-bridge/chats/{conv}/messages?limit=51", headers=H).status_code == 422
-    for path in ("events?since=0", "messages"):
-        r = env.get(f"/agent-bridge/chats/99999/{path}", headers=H)
-        assert r.status_code == 404 and r.json() == {"detail": "unknown_chat"}
+    r = env.get("/agent-bridge/chats/99999/messages", headers=H)
+    assert r.status_code == 404 and r.json() == {"detail": "unknown_chat"}
+    assert env.get(f"/agent-bridge/chats/{conv}/events?since=0", headers=H).status_code == 404
+
+
+def test_unknown_request_is_404(env):
+    enable(env)
+    r = env.get("/agent-bridge/requests/" + "0" * 16, headers=H)
+    assert r.status_code == 404 and r.json() == {"error": "unknown_request"}
+
+
+def test_idle_chat_reply_is_the_stored_assistant_row(env):
+    enable(env)
+    conv = env.db.create_conversation(1, "c")
+    rid = send(env, conv, "q1")["request_id"]
+    assert state(env, rid)["status"] == "queued"
+    turn(env, conv, "q1", "MINE")
+    got = state(env, rid)
+    assert got["status"] == "done" and got["reply"] == "MINE" and got["model"] == "m1"
+    assert got["chat_id"] == conv and got["truncated"] is False and got["waiting_card"] is None
+
+
+def test_an_old_turn_running_at_send_is_never_the_reply(env):
+    enable(env)
+    conv = env.db.create_conversation(1, "c")
+    env.db.add_message(conv, "user", "old question")
+    with approval_policy.ambient_turn("", "auto", conversation_id=conv):
+        rid = send(env, conv, "q2")["request_id"]
+        assert state(env, rid)["status"] == "queued"
+        env.db.add_message(conv, "assistant", "OLD-REPLY", provider="claude", model="m1")
+        got = state(env, rid)
+        assert got["status"] == "queued" and got["reply"] is None
+    assert state(env, rid)["status"] != "done"
+    turn(env, conv, "q2", "MINE-2")
+    assert state(env, rid)["reply"] == "MINE-2"
+
+
+def test_a_wake_turn_before_ours_is_skipped(env):
+    enable(env)
+    conv = env.db.create_conversation(1, "c")
+    rid = send(env, conv, "q3")["request_id"]
+    turn(env, conv, None, "WAKE-REPLY", system="(wake) job finished")
+    got = state(env, rid)
+    assert got["reply"] is None and got["status"] == "queued"
+    turn(env, conv, "q3", "MINE-3")
+    assert state(env, rid)["reply"] == "MINE-3"
+
+
+def test_the_reply_stops_at_the_next_system_or_user_row(env):
+    enable(env)
+    conv = env.db.create_conversation(1, "c")
+    rid = send(env, conv, "q")["request_id"]
+    env.db.add_message(conv, "user", "q")
+    env.db.add_message(conv, "system", "(mail) note")
+    env.db.add_message(conv, "assistant", "NOT-OURS")
+    assert state(env, rid)["status"] == "ended_without_reply"
+
+
+def test_error_turn_without_a_reply_does_not_return_an_older_answer(env):
+    enable(env)
+    conv = env.db.create_conversation(1, "c")
+    turn(env, conv, "earlier", "OLDER-ANSWER")
+    rid = send(env, conv, "q4")["request_id"]
+    turn(env, conv, "q4", None)
+    got = state(env, rid)
+    assert got["status"] == "ended_without_reply" and got["reply"] is None
+
+
+def test_running_turn_reports_the_pending_card(env, monkeypatch):
+    enable(env)
+    conv = env.db.create_conversation(1, "c")
+    rid = send(env, conv, "q")["request_id"]
+    env.db.add_message(conv, "user", "q")
+    monkeypatch.setattr(agent_bridge.cards, "list_pending",
+                        lambda chat: [{"summary": "", "tool": "delete_file"}, {"summary": "other"}])
+    with approval_policy.ambient_turn("", "auto", conversation_id=conv):
+        got = state(env, rid)
+    assert got["status"] == "running" and got["waiting_card"] == "delete_file" and got["reply"] is None
+    monkeypatch.setattr(agent_bridge.cards, "list_pending", lambda chat: [])
+    with approval_policy.ambient_turn("", "auto", conversation_id=conv):
+        assert state(env, rid)["waiting_card"] is None
+
+
+def test_a_message_typed_right_after_ours_does_not_take_the_reply(env):
+    enable(env)
+    conv = env.db.create_conversation(1, "c")
+    rid = send(env, conv, "q5")["request_id"]
+    turn(env, conv, "q5", "MINE-5")
+    turn(env, conv, "something else", "THEIRS")
+    assert state(env, rid)["reply"] == "MINE-5"
+
+
+def test_long_reply_is_whole_until_the_cap(env, monkeypatch):
+    enable(env)
+    conv = env.db.create_conversation(1, "c")
+    rid = send(env, conv, "q6")["request_id"]
+    turn(env, conv, "q6", "x" * 60000 + "END")
+    got = state(env, rid)
+    assert got["reply"].endswith("END") and got["truncated"] is False
+    monkeypatch.setattr(agent_bridge, "REPLY_MAX", 10)
+    got = state(env, rid)
+    assert got["reply"] == "x" * 10 and got["truncated"] is True
+
+
+def test_not_delivered_after_the_grace_period_but_queued_while_a_turn_runs(env, monkeypatch):
+    enable(env)
+    conv = env.db.create_conversation(1, "c")
+    rid = send(env, conv, "q7")["request_id"]
+    assert state(env, rid)["status"] == "queued"
+    monkeypatch.setattr(agent_bridge, "DELIVERY_GRACE_S", 0.0)
+    assert state(env, rid)["status"] == "not_delivered"
+    with approval_policy.ambient_turn("", "auto", conversation_id=conv):
+        assert state(env, rid)["status"] == "queued"
+
+
+def test_a_request_only_sees_rows_after_its_send(env):
+    enable(env)
+    conv = env.db.create_conversation(1, "c")
+    turn(env, conv, "same", "FIRST")
+    rid = send(env, conv, "same")["request_id"]
+    assert state(env, rid)["status"] == "queued"
+    turn(env, conv, "same", "SECOND")
+    assert state(env, rid)["reply"] == "SECOND"
+
+
+def test_the_request_table_is_bounded_and_expires(env, monkeypatch):
+    enable(env)
+    conv = env.db.create_conversation(1, "c")
+    monkeypatch.setattr(agent_bridge, "REQUESTS_KEEP", 3)
+    ids = [send(env, conv, f"m{i}")["request_id"] for i in range(5)]
+    assert list(agent_bridge._REQUESTS) == ids[2:]
+    agent_bridge._REQUESTS[ids[4]]["created_at"] -= agent_bridge.REQUEST_TTL_S + 1
+    last = send(env, conv, "fresh")["request_id"]
+    assert ids[4] not in agent_bridge._REQUESTS and last in agent_bridge._REQUESTS
 
 
 def test_clean_client_strips_bidi_and_control_characters_and_caps_the_length():

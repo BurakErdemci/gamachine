@@ -6,13 +6,11 @@ the frame the open window sends, what is never reachable); this file only
 carries the calls and waits for the reply. No tool answers a card, changes the
 approval mode, halts computer use or stops a turn.
 
-The reply is found by sequence number: the send route returns the chat's last
-event `seq` and the process `epoch`, and the reply is the first turn that
-starts after it (docs/terminal-agents.md).
+The send route returns a request id; the reply is read from the stored messages
+through `GET /agent-bridge/requests/{id}` (docs/terminal-agents.md).
 """
 import asyncio
 import os
-import time
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 import httpx
@@ -24,11 +22,11 @@ NOT_RUNNING = "Gamachine is not running. Ask the user to open Gamachine."
 DISABLED = ("Terminal access is off. Ask the user to turn it on in Gamachine: "
             "Settings > Connectors > Terminal agents.")
 NOT_READY = "Gamachine's window is not open or not ready; nothing was sent."
-RESTARTED = "Gamachine restarted; the reply may be lost. Use gamachine_read_messages."
-STORED_NOTE = "note: the turn was long; the reply was read from the stored messages"
-
-# The epoch each chat's last send saw: a wait_reply call without `epoch` still notices a restart.
-_SENT_EPOCH: Dict[int, str] = {}
+UNKNOWN_REQUEST = ("Gamachine restarted or the request expired; "
+                   "use gamachine_read_messages(chat_id=...) to read the chat.")
+ENDED_NO_REPLY = "the turn ended without a reply (an error or a stop in Gamachine)"
+NOT_DELIVERED = "Gamachine did not send the message; is its window open?"
+TRUNCATED_NOTE = "note: the reply was cut; read the full text in Gamachine"
 
 POLL_S = 1.0
 WAIT_MIN, WAIT_MAX = 5, 170
@@ -65,76 +63,7 @@ def declared_client_name(ctx: Any) -> Optional[str]:
         return None
 
 
-# ── reply detection (pure: events in, verdict out) ───────────────────────────
-
-def _reply_start(events: List[dict], index: int) -> Optional[int]:
-    """Index of the first turn_start from `index` on that is not a wake turn (Gamachine's own)."""
-    return next((i for i in range(index, len(events))
-                 if events[i].get("kind") == "turn_start" and events[i].get("origin") != "wake"), None)
-
-
-def _orphan_end(events: List[dict], index: int) -> Optional[int]:
-    """Index of a turn_end from `index` on whose turn_start is not in `events` (the ring dropped it)."""
-    open_turn = False
-    for i in range(index, len(events)):
-        kind = events[i].get("kind")
-        if kind == "turn_start":
-            open_turn = True
-        elif kind == "turn_end":
-            if not open_turn:
-                return i
-            open_turn = False
-    return None
-
-
-def analyze_reply(events: List[dict], busy_at_send: bool = False) -> Dict[str, Any]:
-    """Find the reply turn in `events` (everything after the send's `since_seq`).
-
-    Idle chat: the first turn_start. Busy chat: the turn that was running ends
-    first, the reply is the next turn_start after that turn_end. A wake turn
-    (origin "wake", started by Gamachine itself) is never the reply. When the
-    ring dropped the reply's turn_start but its turn_end is there, the verdict
-    is ended with `stored`: the reply text must be read from the stored messages.
-    """
-    events = sorted(events, key=lambda e: e.get("seq", 0))
-    index = 0
-    if busy_at_send:
-        end = next((i for i, e in enumerate(events) if e.get("kind") == "turn_end"), None)
-        if end is None:
-            return {"started": False, "ended": False}
-        index = end + 1
-    start = _reply_start(events, index)
-    if start is None:
-        lost = _orphan_end(events, index)
-        if lost is None:
-            return {"started": False, "ended": False}
-        tail = events[lost]
-        return {"started": True, "ended": True, "stored": True, "start_seq": tail.get("seq", 0),
-                "provider": None, "model": None, "status": tail.get("status") or "done",
-                "stop_reason": tail.get("stop_reason"), "waiting_card": None,
-                "text": "".join(e.get("content") or "" for e in events[index:lost] if e.get("kind") == "text")}
-    head = events[start]
-    out: Dict[str, Any] = {"started": True, "ended": False, "start_seq": head.get("seq", 0),
-                           "provider": head.get("provider"), "model": head.get("model"),
-                           "status": "running", "stop_reason": None}
-    text: List[str] = []
-    opened: Dict[Any, str] = {}
-    for event in events[start + 1:]:
-        kind = event.get("kind")
-        if kind == "text":
-            text.append(event.get("content") or "")
-        elif kind == "card_opened":
-            opened[event.get("card_id")] = event.get("summary") or event.get("tool") or "a risky step"
-        elif kind == "card_closed":
-            opened.pop(event.get("card_id"), None)
-        elif kind == "turn_end":
-            out.update(ended=True, status=event.get("status") or "done",
-                       stop_reason=event.get("stop_reason"))
-            break
-    out["text"] = "".join(text)
-    out["waiting_card"] = None if out["ended"] or not opened else next(iter(opened.values()))
-    return out
-
+# ── reply polling ────────────────────────────────────────────────────────────
 
 def clamp_wait(seconds: Any) -> int:
     try:
@@ -144,70 +73,46 @@ def clamp_wait(seconds: Any) -> int:
     return max(WAIT_MIN, min(WAIT_MAX, value))
 
 
-def format_reply(chat_id: int, verdict: Dict[str, Any], resume_since: int, reply_text: str,
-                 epoch: Optional[str] = None) -> str:
-    """The text the model reads. `resume_since` is where gamachine_wait_reply must restart."""
-    status = verdict["status"] if verdict.get("started") else "running"
+def format_reply(request_id: str, state: Dict[str, Any]) -> str:
+    """The text the model reads for one state of GET /requests/{id}."""
+    status = state.get("status")
     lines = [f"status: {status}"]
-    model = "/".join(str(x) for x in (verdict.get("provider"), verdict.get("model")) if x)
-    if model:
-        lines.append(f"model: {model}")
-    if verdict.get("stop_reason"):
-        lines.append(f"stop_reason: {verdict['stop_reason']}")
-    if verdict.get("waiting_card"):
-        lines.append(f"waiting for the user's approval in Gamachine: {verdict['waiting_card']}")
-    if not verdict.get("ended"):
-        lines.append("the reply turn has started" if verdict.get("started")
-                     else "the reply turn has not started yet")
-        hint = f"chat_id={chat_id}, since={resume_since}" + (f', epoch="{epoch}"' if epoch else "")
-        lines.append(f"still running; call gamachine_wait_reply({hint})")
-    if verdict.get("stored"):
-        lines.append(STORED_NOTE)
-    if reply_text:
+    if state.get("model"):
+        lines.append(f"model: {state['model']}")
+    if state.get("waiting_card"):
+        lines.append(f"waiting for the user's approval in Gamachine: {state['waiting_card']}")
+    if status == "done":
         lines.append("reply:")
-        lines.append(reply_text)
+        lines.append(state.get("reply") or "")
+        if state.get("truncated"):
+            lines.append(TRUNCATED_NOTE)
+    elif status == "ended_without_reply":
+        lines.append(ENDED_NO_REPLY)
+    elif status == "not_delivered":
+        lines.append(NOT_DELIVERED)
+    else:
+        lines.append(f'still running; call gamachine_wait_reply(request_id="{request_id}")')
     return "\n".join(lines)
 
 
 async def wait_for_reply(
-    chat_id: int, since: int, wait_seconds: Any, *, busy_at_send: bool, epoch: Optional[str],
-    fetch_events: Callable[[int], Awaitable[dict]],
-    fetch_messages: Callable[[int], Awaitable[dict]],
+    request_id: str, wait_seconds: Any, *,
+    fetch_state: Callable[[str], Awaitable[dict]],
     sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
-    clock: Callable[[], float] = time.monotonic,
 ) -> str:
-    """Poll the chat's events until the reply turn ends or the time is up."""
-    deadline = clock() + clamp_wait(wait_seconds)
-    events: List[dict] = []
-    cursor, gap = since, False
+    """Poll the request until its reply is stored, its turn ended, or the time is up."""
+    waited, limit = 0.0, clamp_wait(wait_seconds)
     while True:
-        data = await fetch_events(cursor)
-        if epoch is None:
-            epoch = data.get("epoch")
-        elif data.get("epoch") != epoch:
-            return RESTARTED
-        gap = gap or bool(data.get("gap"))
-        events.extend(data.get("events") or [])
-        cursor = max([cursor, data.get("last_seq") or 0] + [e.get("seq", 0) for e in events])
-        verdict = analyze_reply(events, busy_at_send)
-        if verdict["ended"]:
-            text = verdict["text"]
-            if gap or verdict.get("stored"):
-                text = await _last_assistant_text(fetch_messages) or text
-            return format_reply(chat_id, verdict, cursor, text, epoch)
-        if clock() >= deadline:
-            # A started turn is collected again from its start, so no text is lost.
-            resume = verdict["start_seq"] - 1 if verdict["started"] else cursor
-            return format_reply(chat_id, verdict, resume, verdict.get("text", ""), epoch)
+        try:
+            state = await fetch_state(request_id)
+        except Failure as exc:
+            if str(exc).endswith("unknown_request"):
+                return UNKNOWN_REQUEST
+            raise
+        if state.get("status") in ("done", "ended_without_reply", "not_delivered") or waited >= limit:
+            return format_reply(request_id, state)
         await sleep(POLL_S)
-
-
-async def _last_assistant_text(fetch_messages: Callable[[int], Awaitable[dict]]) -> str:
-    data = await fetch_messages(10)
-    for message in reversed(data.get("messages") or []):
-        if message.get("role") == "assistant":
-            return message.get("text") or ""
-    return ""
+        waited += POLL_S
 
 
 # ── HTTP ─────────────────────────────────────────────────────────────────────
@@ -290,19 +195,13 @@ async def set_model(ctx: Any, chat_id: int, provider_type: str, model_name: str)
 
 async def send_message(ctx: Any, chat_id: int, text: str, wait_seconds: int = 120) -> str:
     sent = await _request("POST", f"/chats/{chat_id}/messages", json={"text": text, "client": _client(ctx)})
-    if sent.get("status") != "accepted":
+    if sent.get("status") != "accepted" or not sent.get("request_id"):
         return NOT_READY
-    if sent.get("epoch"):
-        _SENT_EPOCH[chat_id] = sent["epoch"]
-    return await wait_for_reply(
-        chat_id, sent.get("since_seq", 0), wait_seconds, busy_at_send=bool(sent.get("busy_at_send")),
-        epoch=sent.get("epoch"), fetch_events=_events_fetcher(chat_id), fetch_messages=_messages_fetcher(chat_id))
+    return await wait_for_reply(sent["request_id"], wait_seconds, fetch_state=_state_fetcher)
 
 
-async def wait_reply(chat_id: int, since: int, wait_seconds: int = 120, epoch: str = "") -> str:
-    return await wait_for_reply(
-        chat_id, since, wait_seconds, busy_at_send=False, epoch=epoch or _SENT_EPOCH.get(chat_id),
-        fetch_events=_events_fetcher(chat_id), fetch_messages=_messages_fetcher(chat_id))
+async def wait_reply(request_id: str, wait_seconds: int = 120) -> str:
+    return await wait_for_reply(str(request_id), wait_seconds, fetch_state=_state_fetcher)
 
 
 async def read_messages(chat_id: int, limit: int = 10) -> str:
@@ -315,12 +214,8 @@ async def read_messages(chat_id: int, limit: int = 10) -> str:
         or "No messages."
 
 
-def _events_fetcher(chat_id: int) -> Callable[[int], Awaitable[dict]]:
-    return lambda since: _request("GET", f"/chats/{chat_id}/events", params={"since": since})
-
-
-def _messages_fetcher(chat_id: int) -> Callable[[int], Awaitable[dict]]:
-    return lambda limit: _request("GET", f"/chats/{chat_id}/messages", params={"limit": limit})
+async def _state_fetcher(request_id: str) -> dict:
+    return await _request("GET", f"/requests/{request_id}")
 
 
 async def _guard(call: Awaitable[str]) -> str:
@@ -360,9 +255,9 @@ def create_server() -> MCPServer:
         return await _guard(send_message(ctx, chat_id, text, wait_seconds))
 
     @mcp.tool()
-    async def gamachine_wait_reply(chat_id: int, since: int, wait_seconds: int = 120, epoch: str = "") -> str:
-        """Keep waiting for a reply that was still running; `since` and `epoch` come from the earlier result."""
-        return await _guard(wait_reply(chat_id, since, wait_seconds, epoch))
+    async def gamachine_wait_reply(request_id: str, wait_seconds: int = 120) -> str:
+        """Keep waiting for a reply that was still running; `request_id` comes from the earlier result."""
+        return await _guard(wait_reply(request_id, wait_seconds))
 
     @mcp.tool()
     async def gamachine_read_messages(chat_id: int, limit: int = 10) -> str:

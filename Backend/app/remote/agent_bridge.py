@@ -10,15 +10,18 @@ from __future__ import annotations
 
 import logging
 import os
+import secrets
+import sqlite3
 import sys
 import time
+from contextlib import closing
 from types import SimpleNamespace
 from typing import Any, Dict, List
 
 from fastapi import APIRouter, Body, Header, HTTPException, Query
 from fastapi.responses import JSONResponse
 
-from agentic import turn_events
+from agentic import approval_policy, cards
 from auth_utils import _check_token
 from remote import chats
 from remote.desktop_channel import CHANNEL
@@ -31,6 +34,13 @@ DISABLED = "agent_bridge_disabled"
 CLIENT_MAX = 48
 TITLE_MAX = 200
 DEFAULT_CLIENT = "Terminal"
+DELIVERY_GRACE_S = 30.0
+REPLY_MAX = 200_000
+REQUESTS_KEEP = 500
+REQUEST_TTL_S = 24 * 3600
+
+# request_id -> {chat_id, after_id, text, created_at, client}; lost on restart (docs/terminal-agents.md).
+_REQUESTS: Dict[str, Dict[str, Any]] = {}
 
 # Control characters and the Unicode bidi controls that could reorder a name on screen.
 _BIDI = {*range(0x202A, 0x202F), *range(0x2066, 0x206A), 0x200E, 0x200F}
@@ -78,6 +88,17 @@ class AgentSession:
     @property
     def device_label(self) -> str:
         return "agent:" + self.device.name
+
+
+def _remember_request(entry: Dict[str, Any]) -> str:
+    now = time.monotonic()
+    for key in [k for k, v in _REQUESTS.items() if now - v["created_at"] > REQUEST_TTL_S]:
+        del _REQUESTS[key]
+    request_id = secrets.token_hex(8)
+    _REQUESTS[request_id] = entry
+    while len(_REQUESTS) > REQUESTS_KEEP:
+        del _REQUESTS[next(iter(_REQUESTS))]
+    return request_id
 
 
 def create_agent_bridge_router(db, bridge) -> APIRouter:
@@ -134,8 +155,8 @@ def create_agent_bridge_router(db, bridge) -> APIRouter:
     async def new_chat(body: Dict[str, Any] = Body(default={}),
                        x_session_token: str = Header(alias="X-Session-Token", default="")):
         gate(x_session_token)
-        title = body.get("title")
-        if title is not None and not isinstance(title, str):
+        title = body.get("title", "")
+        if not isinstance(title, str):
             raise HTTPException(status_code=400, detail="bad_title")
         title = _clean(title, TITLE_MAX, "Yeni Sohbet")
         provider_type, model_name = body.get("provider_type"), body.get("model_name")
@@ -173,28 +194,68 @@ def create_agent_bridge_router(db, bridge) -> APIRouter:
         except RpcError as exc:
             return rpc_error(exc)
 
+    def last_message_id(chat_id: int) -> int:
+        with closing(sqlite3.connect(db.db_path)) as conn:
+            row = conn.execute("SELECT MAX(id) FROM messages WHERE conversation_id = ?", (chat_id,)).fetchone()
+        return int(row[0] or 0)
+
+    def rows_after(chat_id: int, after_id: int) -> List[tuple]:
+        with closing(sqlite3.connect(db.db_path)) as conn:
+            return conn.execute(
+                "SELECT role, content, model FROM messages WHERE conversation_id = ? AND id > ? ORDER BY id",
+                (chat_id, after_id)).fetchall()
+
     @router.post("/chats/{chat_id}/messages")
     async def send_message(chat_id: int, body: Dict[str, Any] = Body(...),
                            x_session_token: str = Header(alias="X-Session-Token", default="")):
         gate(x_session_token)
-        # The reply is found by sequence number: no link from the frame to a turn exists.
-        info = turn_events.since(chat_id, 0)
-        busy = turn_events.turn_open(chat_id)
+        after_id = last_message_id(chat_id)
         try:
             result = await bridge.rpc.send_message(
                 AgentSession(body.get("client")), {"chat_id": chat_id, "text": body.get("text")}, None)
         except RpcError as exc:
             return rpc_error(exc)
-        return {"status": result["status"], "since_seq": info["last_seq"], "epoch": info["epoch"],
-                "busy_at_send": busy}
+        if result["status"] != "accepted":
+            return {"status": result["status"]}
+        request_id = _remember_request({
+            "chat_id": chat_id, "after_id": after_id, "text": body.get("text"),
+            "created_at": time.monotonic(), "client": clean_client(body.get("client"))})
+        return {"status": result["status"], "request_id": request_id}
 
-    @router.get("/chats/{chat_id}/events")
-    async def events(chat_id: int, since: int = Query(0, ge=0),
-                     x_session_token: str = Header(alias="X-Session-Token", default="")):
+    @router.get("/requests/{request_id}")
+    async def request_state(request_id: str,
+                            x_session_token: str = Header(alias="X-Session-Token", default="")):
         gate(x_session_token)
-        if chats.chat_row(db, chat_id) is None:
-            return unknown_chat()
-        return turn_events.since(chat_id, since)
+        req = _REQUESTS.get(request_id)
+        if req is None:
+            return JSONResponse(status_code=404, content={"error": "unknown_request"})
+        chat_id = req["chat_id"]
+        out: Dict[str, Any] = {"request_id": request_id, "chat_id": chat_id, "status": None, "reply": None,
+                               "model": None, "waiting_card": None, "truncated": False}
+        in_flight = approval_policy.conversation_turn_in_flight(chat_id)
+        rows = rows_after(chat_id, req["after_id"])
+        own = next((i for i, r in enumerate(rows) if r[0] == "user" and r[1] == req["text"]), None)
+        if own is None:
+            out["status"] = ("queued" if in_flight or time.monotonic() - req["created_at"] < DELIVERY_GRACE_S
+                             else "not_delivered")
+            return out
+        reply = None
+        for role, content, model in rows[own + 1:]:
+            if role in ("user", "system"):
+                break
+            if role == "assistant":
+                reply = (content, model)
+                break
+        if reply:
+            text = reply[0] or ""
+            out.update(status="done", reply=text[:REPLY_MAX], model=reply[1], truncated=len(text) > REPLY_MAX)
+        elif in_flight:
+            pending = cards.list_pending(chat_id)
+            out.update(status="running",
+                       waiting_card=(pending[0].get("summary") or pending[0].get("tool")) if pending else None)
+        else:
+            out["status"] = "ended_without_reply"
+        return out
 
     @router.get("/chats/{chat_id}/messages")
     async def messages(chat_id: int, limit: int = Query(10, ge=1, le=50),

@@ -15,8 +15,8 @@ One setting, `agent_bridge_enabled`, off by default ("external agents may access
 - `GET /agent-bridge/models` - the phone's `list_models`.
 - `POST /agent-bridge/chats` - new chat in the project open in Gamachine; optional title and model. Publishes `conversation_created` so the window reloads its list.
 - `PUT /agent-bridge/chats/{id}/model` - the phone's `set_model`.
-- `POST /agent-bridge/chats/{id}/messages` - sends; returns `{status, since_seq, epoch, busy_at_send}`.
-- `GET /agent-bridge/chats/{id}/events?since=N` - turn events after N.
+- `POST /agent-bridge/chats/{id}/messages` - sends; returns `{status, request_id}` (`status: desktop_not_ready` has no id).
+- `GET /agent-bridge/requests/{request_id}` - state of one send: `{request_id, chat_id, status, reply, model, waiting_card, truncated}`; `404 unknown_request` after a restart or 24 h.
 - `GET /agent-bridge/chats/{id}/messages?limit=N` - recent stored messages.
 
 ## Frame contract
@@ -29,6 +29,8 @@ Answering cards, changing the approval mode, halting computer use and stopping a
 
 ## Reply detection
 
-Nothing links a sent message to a turn. The send route returns the chat's last event `seq` and the process `epoch`; the reply is the first turn that starts after that `seq` (if the chat was busy at send, the first turn that starts after the running one ends). A wake turn (`origin: "wake"`, a turn Gamachine starts itself after background jobs or mail) is never the reply and is skipped. The MCP server polls the events every second until that turn ends or the wait runs out, then says `still running` and how to continue: `gamachine_wait_reply(chat_id=..., since=..., epoch="...")`. A different `epoch` means Gamachine restarted; the result says the reply may be lost instead of reading another process's turn. The ring keeps 500 events per chat, so a long tool-heavy turn can lose its `turn_start`: when a `turn_end` is left without its start, the reply text is read from the last stored assistant message and the result says so; a turn that is still open keeps waiting.
+The send route reads the chat's last stored message id, then returns a `request_id`. `GET /agent-bridge/requests/{id}` looks at the stored messages after that id: the request's own message is the first `user` row whose text is exactly the text sent; the reply is the first `assistant` row after it and before the next `user` or `system` row (so a wake turn or another message never counts). The reply is read from the row itself (up to 200,000 characters, `truncated` says when cut). Statuses: `queued` (own message not stored yet, a turn is running or under 30 s since the send), `running` (stored, turn in flight; `waiting_card` names a pending approval), `done`, `ended_without_reply` (the turn ended and stored nothing, e.g. an error or a stop), `not_delivered` (no message appeared within 30 s and no turn runs: the window did not take it).
 
-Known limit: a message the user types into the same chat at the same moment can be taken as the reply turn.
+The MCP server polls every second until `done`, `ended_without_reply` or `not_delivered`, or the wait runs out; then it says `still running; call gamachine_wait_reply(request_id="...")`. The turn-in-flight flag is the same one the approval policy uses, not the 500-event ring.
+
+Limits: two identical texts sent to the same chat before either is stored are matched in order, so the second request can read the first one's reply; a backend restart forgets every request (the tool then says Gamachine restarted and points to `gamachine_read_messages`); at most 500 requests are kept.

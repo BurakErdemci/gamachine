@@ -1,4 +1,4 @@
-"""The terminal agents' MCP server: reply detection on synthetic events, the
+"""The terminal agents' MCP server: request polling on synthetic request states, the
 plain-text failures and the client name. No backend, no CLI, no real token files."""
 import os
 import sys
@@ -11,176 +11,113 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 from unity_ai_mcp import agent_server as srv  # noqa: E402
 
 
-def ev(seq, kind, **data):
-    return {"seq": seq, "kind": kind, **data}
-
-
-START = dict(provider="claude", model="opus")
-
-
 class Clock:
-    """Fake time: every sleep advances it, so a timeout takes no real time."""
+    """Fake time: every sleep is recorded, so a timeout takes no real time."""
 
     def __init__(self):
-        self.now = 0.0
-
-    def __call__(self):
-        return self.now
+        self.slept = []
 
     async def sleep(self, seconds):
-        self.now += seconds
+        self.slept.append(seconds)
 
 
-def feeder(batches, epoch="e1", gap=False, messages=None):
-    """fetch_events that hands out one batch per poll (the last one repeats)."""
+def states(*batch):
+    """fetch_state that hands out one state per poll (the last one repeats)."""
     calls = []
 
-    async def fetch_events(since):
-        calls.append(since)
-        batch = batches[min(len(calls) - 1, len(batches) - 1)]
-        last = max([since] + [e["seq"] for e in batch])
-        return {"epoch": epoch, "events": [e for e in batch if e["seq"] > since], "gap": gap, "last_seq": last}
+    async def fetch_state(request_id):
+        calls.append(request_id)
+        return batch[min(len(calls) - 1, len(batch) - 1)]
 
-    async def fetch_messages(limit):
-        return {"messages": messages or []}
-
-    return fetch_events, fetch_messages, calls
+    return fetch_state, calls
 
 
-async def run(batches, *, busy=False, wait=30, epoch="e1", served="e1", since=0, **kw):
+async def run(*batch, wait=30):
     clock = Clock()
-    fetch_events, fetch_messages, calls = feeder(batches, epoch=served, **kw)
-    out = await srv.wait_for_reply(7, since, wait, busy_at_send=busy, epoch=epoch,
-                                   fetch_events=fetch_events, fetch_messages=fetch_messages,
-                                   sleep=clock.sleep, clock=clock)
-    return out, calls
-
-
-# ── analyze_reply ────────────────────────────────────────────────────────────
-
-def test_idle_chat_takes_the_first_turn():
-    v = srv.analyze_reply([ev(1, "turn_start", **START), ev(2, "text", content="Hel"),
-                           ev(3, "text", content="lo"), ev(4, "turn_end", status="done")])
-    assert (v["started"], v["ended"], v["status"], v["text"]) == (True, True, "done", "Hello")
-    assert v["model"] == "opus" and v["waiting_card"] is None
-
-
-def test_busy_chat_skips_the_running_turn_and_takes_the_next():
-    events = [ev(5, "text", content="old tail"), ev(6, "turn_end", status="done"),
-              ev(7, "turn_start", **START), ev(8, "text", content="mine"), ev(9, "turn_end", status="error")]
-    v = srv.analyze_reply(events, busy_at_send=True)
-    assert (v["text"], v["status"], v["ended"]) == ("mine", "error", True)
-
-
-def test_busy_chat_before_the_old_turn_ends_has_no_reply_yet():
-    assert srv.analyze_reply([ev(5, "text", content="old")], busy_at_send=True) == {"started": False, "ended": False}
-    old_end_only = [ev(5, "turn_end", status="done")]
-    assert srv.analyze_reply(old_end_only, busy_at_send=True)["started"] is False
-
-
-def test_open_card_is_reported_until_it_closes():
-    opened = [ev(1, "turn_start", **START), ev(2, "card_opened", card_id="c1", summary="git push")]
-    assert srv.analyze_reply(opened)["waiting_card"] == "git push"
-    closed = opened + [ev(3, "card_closed", card_id="c1", decision="approved")]
-    assert srv.analyze_reply(closed)["waiting_card"] is None
-
-
-def test_stopped_turn_reports_its_reason():
-    v = srv.analyze_reply([ev(1, "turn_start", **START), ev(2, "turn_end", status="stopped", stop_reason="user")])
-    assert (v["status"], v["stop_reason"]) == ("stopped", "user")
+    fetch_state, calls = states(*batch)
+    out = await srv.wait_for_reply("rid1", wait, fetch_state=fetch_state, sleep=clock.sleep)
+    return out, calls, clock
 
 
 def test_clamp_wait():
-    assert [srv.clamp_wait(x) for x in (0, 5, 120, 999, "x", None)] == [5, 5, 120, 170, 120, 120]
+    assert srv.clamp_wait(1) == srv.WAIT_MIN
+    assert srv.clamp_wait(10_000) == srv.WAIT_MAX
+    assert srv.clamp_wait("x") == 120 and srv.clamp_wait(None) == 120
+    assert srv.clamp_wait(60) == 60
 
 
-# ── wait_for_reply ───────────────────────────────────────────────────────────
-
-async def test_idle_chat_reply_is_returned_when_the_turn_ends():
-    out, calls = await run([[], [ev(1, "turn_start", **START), ev(2, "text", content="Hi")],
-                            [ev(3, "turn_end", status="done")]])
-    assert out == "status: done\nmodel: claude/opus\nreply:\nHi"
-    assert calls == [0, 0, 2]
+async def test_a_done_request_returns_status_model_and_reply():
+    out, calls, _ = await run({"status": "done", "reply": "MINE", "model": "claude-opus-5-5"})
+    assert out == "status: done\nmodel: claude-opus-5-5\nreply:\nMINE"
+    assert calls == ["rid1"]
 
 
-async def test_busy_at_send_waits_for_the_next_turn():
-    batches = [[ev(1, "text", content="old"), ev(2, "turn_end", status="done")],
-               [ev(3, "turn_start", **START), ev(4, "text", content="new"), ev(5, "turn_end", status="done")]]
-    out, _ = await run(batches, busy=True)
-    assert out.endswith("reply:\nnew") and "old" not in out
+async def test_polling_continues_through_queued_and_running_until_done():
+    out, calls, clock = await run({"status": "queued"}, {"status": "running"},
+                                  {"status": "done", "reply": "late"})
+    assert "status: done" in out and out.endswith("late")
+    assert len(calls) == 3 and clock.slept == [srv.POLL_S, srv.POLL_S]
 
 
-async def test_card_waiting_is_said_when_time_runs_out():
-    batch = [ev(1, "turn_start", **START), ev(2, "text", content="part"),
-             ev(3, "card_opened", card_id="c", summary="rm build/")]
-    out, _ = await run([batch], wait=5)
+async def test_a_card_waiting_is_said_and_the_wait_reply_hint_names_the_request():
+    out, _, clock = await run({"status": "running", "waiting_card": "delete_file"}, wait=5)
     assert "status: running" in out
-    assert "waiting for the user's approval in Gamachine: rm build/" in out
-    assert "the reply turn has started" in out
-    assert 'gamachine_wait_reply(chat_id=7, since=0, epoch="e1")' in out and "part" in out
+    assert "waiting for the user's approval in Gamachine: delete_file" in out
+    assert 'still running; call gamachine_wait_reply(request_id="rid1")' in out
+    assert "reply:" not in out and len(clock.slept) == 5
 
 
-async def test_timeout_before_the_turn_starts_resumes_from_the_last_seq_seen():
-    out, _ = await run([[ev(4, "text", content="x")]], busy=True, wait=5, since=3)
-    assert "status: running" in out and "has not started yet" in out
-    assert "since=4," in out
+async def test_timeout_while_queued_gives_the_same_hint():
+    out, _, _ = await run({"status": "queued"}, wait=5)
+    assert out.startswith("status: queued") and 'gamachine_wait_reply(request_id="rid1")' in out
 
 
-async def test_epoch_change_says_the_reply_may_be_lost():
-    out, _ = await run([[]], epoch="old", served="new", since=2)
-    assert out == srv.RESTARTED
+async def test_the_clamped_wait_bounds_the_polling():
+    _, calls, _ = await run({"status": "running"}, wait=1)
+    assert len(calls) == srv.WAIT_MIN + 1
 
 
-async def test_gap_takes_the_last_assistant_message_after_turn_end():
-    batch = [ev(9, "turn_start", **START), ev(10, "text", content="partial"), ev(11, "turn_end", status="done")]
-    messages = [{"role": "assistant", "text": "older"}, {"role": "user", "text": "q"},
-                {"role": "assistant", "text": "full answer"}, {"role": "user", "text": "later"}]
-    out, _ = await run([batch], gap=True, messages=messages)
-    assert out.endswith("reply:\nfull answer")
+async def test_ended_without_reply_and_not_delivered_have_their_sentences():
+    out, calls, _ = await run({"status": "ended_without_reply", "reply": None})
+    assert "status: ended_without_reply" in out
+    assert "the turn ended without a reply (an error or a stop in Gamachine)" in out and len(calls) == 1
+    out, calls, _ = await run({"status": "not_delivered"})
+    assert "Gamachine did not send the message; is its window open?" in out and len(calls) == 1
 
 
-async def test_wait_reply_without_an_epoch_adopts_the_first_one():
-    out, _ = await run([[ev(1, "turn_start", **START), ev(2, "turn_end", status="done")]], epoch=None)
-    assert out.startswith("status: done")
+async def test_a_truncated_reply_says_so():
+    out, _, _ = await run({"status": "done", "reply": "abc", "truncated": True})
+    assert "reply:\nabc" in out and srv.TRUNCATED_NOTE in out
 
 
-WAKE = dict(provider="claude", model="opus", origin="wake")
-USER = dict(provider="claude", model="opus", origin="user")
+async def test_unknown_request_says_gamachine_restarted(monkeypatch):
+    patch_files(monkeypatch)
+    fake_client(monkeypatch, FakeResponse(404, {"error": "unknown_request"}))
+    out = await srv._guard(srv.wait_reply("f" * 16, 5))
+    assert out == srv.UNKNOWN_REQUEST and "restarted" in out
 
 
-def test_wake_turn_is_never_the_reply_on_an_idle_chat():
-    events = [ev(1, "turn_start", **WAKE), ev(2, "text", content="WAKE"), ev(3, "turn_end", status="done"),
-              ev(4, "turn_start", **USER), ev(5, "text", content="MINE"), ev(6, "turn_end", status="done")]
-    assert srv.analyze_reply(events)["text"] == "MINE"
-    assert srv.analyze_reply(events[:3])["started"] is False
+async def test_send_message_posts_then_polls_the_request(monkeypatch):
+    seen = []
+
+    async def fake_request(method, path, **kw):
+        seen.append((method, path))
+        if method == "POST":
+            return {"status": "accepted", "request_id": "abc123"}
+        return {"status": "done", "reply": "hi back", "model": "m"}
+
+    monkeypatch.setattr(srv, "_request", fake_request)
+    out = await srv.send_message(None, 4, "hi", 10)
+    assert seen == [("POST", "/chats/4/messages"), ("GET", "/requests/abc123")]
+    assert "status: done" in out and "hi back" in out
 
 
-def test_wake_turn_between_the_old_turn_and_the_reply_is_skipped_when_busy():
-    events = [ev(1, "turn_end", status="done"),
-              ev(2, "turn_start", **WAKE), ev(3, "text", content="WAKE"), ev(4, "turn_end", status="done"),
-              ev(5, "turn_start", **USER), ev(6, "text", content="MINE"), ev(7, "turn_end", status="done")]
-    verdict = srv.analyze_reply(events, busy_at_send=True)
-    assert verdict["text"] == "MINE" and verdict["ended"]
+async def test_send_message_without_a_request_id_is_not_ready(monkeypatch):
+    async def fake_request(method, path, **kw):
+        return {"status": "desktop_not_ready"}
 
-
-async def test_gap_with_the_turn_start_evicted_returns_the_stored_reply():
-    batch = [ev(30, "tool_call", tool="t"), ev(31, "turn_end", status="done")]
-    out, _ = await run([batch], gap=True, messages=[{"role": "assistant", "text": "stored answer"}])
-    assert out.startswith("status: done")
-    assert srv.STORED_NOTE in out and out.endswith("reply:\nstored answer")
-
-
-async def test_gap_with_the_turn_still_open_keeps_waiting():
-    batch = [ev(30, "tool_call", tool="t"), ev(31, "tool_call", tool="t")]
-    out, _ = await run([batch], gap=True, wait=5, messages=[{"role": "assistant", "text": "old"}])
-    assert "status: running" in out and "old" not in out
-    assert 'gamachine_wait_reply(chat_id=7, since=31, epoch="e1")' in out
-
-
-async def test_wait_reply_with_another_epoch_reports_the_restart():
-    out, _ = await run([[ev(1, "turn_start", **START), ev(2, "turn_end", status="done")]],
-                       epoch="old", served="new")
-    assert out == srv.RESTARTED
+    monkeypatch.setattr(srv, "_request", fake_request)
+    assert await srv.send_message(None, 4, "hi", 10) == srv.NOT_READY
 
 
 async def test_read_messages_clamps_the_limit(monkeypatch):
