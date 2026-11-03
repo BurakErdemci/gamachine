@@ -90,6 +90,12 @@ describe('ImportSessionDialog', () => {
     expect(src).not.toContain('samePath')
   })
 
+  it('home offers the import link only while a Claude subscription model is selected', () => {
+    // A Codex or Gemini chat cannot resume a Claude Code session.
+    const src = readFileSync(resolve(__dirname, '../renderer/pages/home.tsx'), 'utf8')
+    expect(src).toContain('onImportSession={isClaudeSub ? () => setImportOpen(true) : undefined}')
+  })
+
   it.each([
     [400, { error: 'bad_session_id' }, 'Bu bir oturum numarası değil.'],
     [404, { error: 'session_not_found' }, 'Bu numarada bir Claude Code oturumu bulunamadı.'],
