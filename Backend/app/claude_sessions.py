@@ -121,14 +121,21 @@ def read_session(path: Path, limit: int = 300) -> Dict[str, Any]:
             "messages": kept, "total": total, "modified_at": path.stat().st_mtime}
 
 
+# Characters PowerShell, bash or zsh treat specially inside "...", plus PowerShell's
+# wildcard brackets and cmd's %: such a cwd gets no cd part. Letters (Turkish ones
+# included), digits, spaces and \ : . - _ ( ) stay allowed.
+_SHELL_SPECIAL = frozenset("\"$`'!;&|<>*?{}[]^%")
+
+
 def command_for(cwd: Optional[str], session_id: str) -> str:
     """`cd "<cwd>"; claude --resume <id>`, valid in PowerShell, bash and zsh.
 
-    A cwd holding a double quote or a control character cannot be quoted the
-    same way in all three shells, so the cd part is dropped rather than risk a
-    command that does something else; the caller shows the plain resume command.
+    A cwd holding a shell-special character (_SHELL_SPECIAL) or a control
+    character cannot be quoted the same way in all three shells, so the cd part
+    is dropped rather than risk a command that does something else; the caller
+    shows the plain resume command.
     """
     resume = f"claude --resume {session_id}"
-    if not cwd or '"' in cwd or any(ord(ch) < 32 or ord(ch) == 127 for ch in cwd):
+    if not cwd or any(ch in _SHELL_SPECIAL or ord(ch) < 32 or ord(ch) == 127 for ch in cwd):
         return resume
     return f'cd "{cwd}"; {resume}'

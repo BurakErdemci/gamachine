@@ -164,3 +164,11 @@ def test_command_for_drops_cd_on_quote_or_control_char():
     assert claude_sessions.command_for('C:\\a"b', SID) == f"claude --resume {SID}"
     assert claude_sessions.command_for("C:\\a\nb", SID) == f"claude --resume {SID}"
     assert claude_sessions.command_for("C:\\a b", SID) == f'cd "C:\\a b"; claude --resume {SID}'
+
+
+def test_command_for_drops_cd_on_shell_special_chars():
+    for bad in ("$", "`", "'", "!", ";", "&", "|", "[", "%"):
+        assert claude_sessions.command_for(f"C:\\a{bad}b", SID) == f"claude --resume {SID}", bad
+    # Turkish letters and parentheses are safe inside "..." in all three shells.
+    assert (claude_sessions.command_for("C:\\Oyunçuk 2 (yedek)", SID)
+            == f'cd "C:\\Oyunçuk 2 (yedek)"; claude --resume {SID}')
