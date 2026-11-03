@@ -114,6 +114,16 @@ def read_session(path: Path, limit: int = 300) -> Dict[str, Any]:
             if not isinstance(line, dict):
                 continue
             kind = line.get("type")
+            if kind == "system" and line.get("subtype") == "compact_boundary":
+                # What the terminal still has after a /compact: the messages it kept
+                # (compactMetadata.preservedMessages) and everything after the boundary.
+                # Measured on a Claude Code 2.1.3xx file: the kept ones sit just before it.
+                meta = line.get("compactMetadata") if isinstance(line.get("compactMetadata"), dict) else {}
+                pm = meta.get("preservedMessages") if isinstance(meta.get("preservedMessages"), dict) else {}
+                preserved = set(pm.get("allUuids") or pm.get("uuids") or [])
+                kept = [m for m in kept if m.get("uuid") in preserved]
+                total = len(kept)
+                continue
             if kind not in ("user", "assistant"):
                 continue
             # The first line's cwd wins: a later Bash `cd` changes it inside one file.
@@ -137,7 +147,7 @@ def read_session(path: Path, limit: int = 300) -> Dict[str, Any]:
                 title = text.splitlines()[0].strip()[:TITLE_MAX]
             total += 1
             kept.append({"role": kind, "content": text[:MESSAGE_CAP_CHARS],
-                         "timestamp": line.get("timestamp")})
+                         "timestamp": line.get("timestamp"), "uuid": line.get("uuid")})
             if limit > 0 and len(kept) > limit:
                 kept.pop(0)
     return {"session_id": path.stem, "cwd": cwd, "model": model, "title": title or "",

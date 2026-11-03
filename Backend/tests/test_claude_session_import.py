@@ -234,3 +234,25 @@ def test_linked_folder_outside_the_store_is_ignored(env):
 def test_command_for_drops_cd_on_trailing_separator():
     for cwd in ("C:\\Users\\x\\", "/home/x/"):
         assert claude_sessions.command_for(cwd, SID) == f"claude --resume {SID}"
+
+
+def test_only_what_survived_the_last_compaction_is_imported(env):
+    # Shape measured on a real Claude Code 2.1.3xx file: a system/compact_boundary line
+    # lists the kept messages (compactMetadata.preservedMessages), then a summary line.
+    user = lambda c, u: {"type": "user", "uuid": u, "message": {"role": "user", "content": c}}
+    asst = lambda t, u: {"type": "assistant", "uuid": u,
+                         "message": {"role": "assistant", "model": "claude-opus-5-5", "content": [{"type": "text", "text": t}]}}
+    boundary = lambda kept: {"type": "system", "subtype": "compact_boundary", "uuid": "b" + kept[0],
+                             "compactMetadata": {"preservedMessages": {"uuids": kept, "allUuids": kept}}}
+    summary = {"type": "user", "uuid": "s", "isCompactSummary": True,
+               "message": {"role": "user", "content": "This session is being continued..."}}
+    _session_with(env, str(env["work"]), [
+        user("eski 1", "u1"), asst("eski cevap 1", "a1"),
+        boundary(["a1"]), summary,
+        user("orta", "u2"), asst("orta cevap", "a2"), user("kalan soru", "u3"), asst("kalan cevap", "a3"),
+        boundary(["u3", "a3"]), summary,
+        user("son soru", "u4"), asst("son cevap", "a4"),
+    ])
+    info = claude_sessions.read_session(env["path"])
+    assert [m["content"] for m in info["messages"]] == ["kalan soru", "kalan cevap", "son soru", "son cevap"]
+    assert info["total"] == 4
