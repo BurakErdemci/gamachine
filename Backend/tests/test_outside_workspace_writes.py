@@ -59,6 +59,7 @@ def mode(monkeypatch):
     (".unity_architect_ai", "unity_master_v3.db"),
     (".unity_architect_ai", "unity_master_v3.db-wal"),
     (".unity_architect_ai", "unity_master_v3.db-shm"),
+    (".unity_architect_ai", "unity_master_v3.db-journal"),
 ])
 def test_every_secret_file_is_recognised(home, parts):
     assert action_risk.gamachine_secret_target(str(home.joinpath(*parts)))
@@ -76,6 +77,7 @@ def test_secret_spellings_and_db_path(home, tmp_path_factory, monkeypatch):
     db_dir = tmp_path_factory.mktemp("db").resolve()
     monkeypatch.setenv("DB_PATH", str(db_dir / "x.db"))
     assert action_risk.gamachine_secret_target(str(db_dir / "x.db-wal"))
+    assert action_risk.gamachine_secret_target(str(db_dir / "x.db-journal"))
     assert action_risk.gamachine_secret_target(str(db_dir / "api_key_fernet.key"))
 
 
@@ -456,3 +458,78 @@ def test_api_write_file_accepts_an_absolute_path_inside_the_workspace(ws, home):
         assert f.read() == "x"
     assert execute_tool("write_file", {"file_path": "b.txt", "content": "y"}, ws)["success"] is True
     assert os.path.exists(os.path.join(ws, "b.txt"))
+
+
+# ── Secrets recognised by file identity ──────────────────────────────────────
+
+
+@pytest.fixture
+def real_secret(home):
+    secret = home / ".unity_architect_ai" / "api_key_fernet.key"
+    secret.write_text("fake")
+    return secret
+
+
+def test_hard_link_to_a_secret_is_a_secret(home, real_secret, tmp_path_factory):
+    link = tmp_path_factory.mktemp("links").resolve() / "innocent.txt"
+    os.link(real_secret, link)
+    assert action_risk.gamachine_secret_target(str(link))
+    # A relative spelling resolved against a base is the same file.
+    assert action_risk.gamachine_secret_target("innocent.txt", str(link.parent))
+
+
+def test_a_different_file_is_not_a_secret(home, real_secret, tmp_path_factory):
+    other = tmp_path_factory.mktemp("other").resolve() / "other.txt"
+    other.write_text("fake")
+    assert action_risk.gamachine_secret_target(str(other)) is None
+    assert action_risk.gamachine_secret_target(str(other.parent / "missing.txt")) is None
+
+
+@pytest.mark.skipif(os.name != "nt", reason="UNC spellings exist on Windows only")
+@pytest.mark.parametrize("style", ["localhost", "dev_unc", "qmark_unc", "ipv6"])
+def test_unc_spellings_of_an_existing_secret_are_secret(home, real_secret, style):
+    bs = chr(92)
+    secret = str(real_secret)
+    drive, rest = secret[0], secret[2:]
+    spelling = {
+        "localhost": bs + bs + "localhost" + bs + drive + "$" + rest,
+        "dev_unc": bs + bs + "." + bs + "UNC" + bs + "localhost" + bs + drive + "$" + rest,
+        "qmark_unc": "//?/UNC/localhost/" + drive + "$" + rest.replace(bs, "/"),
+        "ipv6": bs + bs + "0-0-0-0-0-0-0-1.ipv6-literal.net" + bs + drive + "$" + rest,
+    }[style]
+    if not os.path.exists(spelling):
+        pytest.skip("admin share unreachable on this machine")
+    assert action_risk.gamachine_secret_target(spelling)
+
+
+@pytest.fixture
+def home_in_ws(ws, monkeypatch):
+    root = os.path.join(ws, "h")
+    os.makedirs(os.path.join(root, ".unity_architect_ai"))
+    monkeypatch.setenv("HOME", root)
+    monkeypatch.setenv("USERPROFILE", root)
+    monkeypatch.delenv("DB_PATH", raising=False)
+    secret = os.path.join(root, ".unity_architect_ai", "api_key_fernet.key")
+    with open(secret, "w") as fh:
+        fh.write("fake")
+    return secret
+
+
+async def test_mcp_delete_refuses_a_secret(ws, home_in_ws, mcp):
+    tools, asked, _ = mcp
+    link = os.path.join(ws, "innocent.txt")
+    os.link(home_in_ws, link)
+    for target in (home_in_ws, link):
+        out = await tools["delete_file"](target)
+        assert out.startswith("❌") and os.path.exists(target)
+    assert asked == []
+
+
+def test_unityai_delete_refuses_a_secret(ws, home_in_ws, monkeypatch, capsys):
+    import unityai_cli
+    monkeypatch.setenv("WORKSPACE", ws)
+    link = os.path.join(ws, "innocent.txt")
+    os.link(home_in_ws, link)
+    for target in (home_in_ws, link):
+        assert unityai_cli.cmd_delete_file(NS(path=target)) == 1
+        assert "❌" in capsys.readouterr().out and os.path.exists(target)

@@ -224,7 +224,8 @@ def protected_reason(parts: list) -> Optional[str]:
 # Owner decision (Burak, 4 Nov 2026): agents may write outside the workspace
 # under the approval mode, but never to the files holding Gamachine's own keys
 # and tokens. Every agent write path refuses these in every mode.
-_SECRET_DB_NAMES = ("unity_master_v3.db", "unity_master_v3.db-wal", "unity_master_v3.db-shm")
+_SECRET_DB_NAMES = ("unity_master_v3.db", "unity_master_v3.db-wal", "unity_master_v3.db-shm",
+                    "unity_master_v3.db-journal")
 
 
 _LOCAL_UNC_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
@@ -278,25 +279,41 @@ def _secret_files() -> list:
     db_path = os.environ.get("DB_PATH")
     if db_path:
         # database.py keeps the Fernet key next to whichever database is in use.
-        files += [db_path, db_path + "-wal", db_path + "-shm",
+        files += [db_path, db_path + "-wal", db_path + "-shm", db_path + "-journal",
                   os.path.join(os.path.dirname(db_path), "api_key_fernet.key")]
     return files
+
+
+def _file_id(path: str) -> Optional[tuple]:
+    try:
+        st = os.stat(path)
+    except (OSError, ValueError):
+        return None
+    return (st.st_dev, st.st_ino) if st.st_ino else None
 
 
 def gamachine_secret_target(path: Any, base: str = "") -> Optional[str]:
     """The resolved target when `path` names one of Gamachine's secret files, else None.
 
-    Compared by directory realpath plus the Windows-folded file name, so a
-    symlink, an 8.3 name, a trailing dot or `name::$DATA` cannot slip past.
+    Compared by directory realpath plus the Windows-folded file name (covers a
+    secret that does not exist yet), and by file identity (volume + file id) of
+    the existing secrets, so no spelling, hard link or 8.3 name can slip past.
     """
     target = _resolve(_local_admin_share(path.strip()) if isinstance(path, str) else path, base)
     if target is None:
         return None
     head, name = os.path.split(target)
-    for secret in _secret_files():
+    secrets = _secret_files()
+    for secret in secrets:
         s_head, s_name = os.path.split(_real(os.path.abspath(secret)))
         if head == s_head and _part(name) == _part(s_name):
             return target
+    raw = os.path.expanduser(path.strip())
+    if not os.path.isabs(raw) and base:
+        raw = os.path.join(base, raw)
+    target_id = _file_id(raw)
+    if target_id is not None and any(_file_id(s) == target_id for s in secrets):
+        return target
     return None
 
 

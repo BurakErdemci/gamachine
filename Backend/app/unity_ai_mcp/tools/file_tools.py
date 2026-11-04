@@ -108,6 +108,8 @@ def register_file_tools(mcp: MCPServer, get_workspace: callable):
     async def delete_file(path: str) -> str:
         """Dosyayı siler. ONAY GEREKTİRİR."""
         workspace = get_workspace()
+        if action_risk.gamachine_secret_target(path, workspace) is not None:
+            return f"❌ {action_risk.secret_refusal(path)}"
         abs_path = _resolve(path, workspace)
         refusal = unity_file_guard.check_delete(abs_path, workspace)
         if refusal is not None:

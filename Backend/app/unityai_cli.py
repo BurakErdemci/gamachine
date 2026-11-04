@@ -119,6 +119,9 @@ def cmd_save_file(args) -> int:
 
 def cmd_delete_file(args) -> int:
     workspace = _workspace()
+    if action_risk.gamachine_secret_target(args.path, workspace) is not None:
+        print(f"❌ {action_risk.secret_refusal(args.path)}")
+        return 1
     abs_path = _resolve(args.path, workspace)
     refusal = unity_file_guard.check_delete(abs_path, workspace)
     if refusal is not None:
