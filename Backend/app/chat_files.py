@@ -286,8 +286,11 @@ def _clone(conn: sqlite3.Connection, db_path: str, source_id: int, new_id: int,
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         shutil.copyfile(src, dst)
     except OSError as e:
+        # Keeping the source's id would leave the branch pointing at a file its
+        # source owns, gone with that chat's next delete or compaction. Fail the
+        # branch instead; create_branch rolls back and removes the copies made.
         logger.warning("[chat_files] branch copy of %s failed: %s", old, e)
-        return None
+        raise
     made.append(dst)
     conn.execute("INSERT INTO chat_files (" + ", ".join(_COLUMNS) + ") VALUES (?, ?, ?, ?, ?, ?, ?)",
                  tuple(record[c] for c in _COLUMNS))

@@ -407,6 +407,22 @@ def test_a_branch_gets_its_own_copy_of_the_pictures_and_survives_the_source(env)
     assert [r[0] for r in _rows(env, "SELECT conversation_id FROM chat_files")] == [branch]
 
 
+def test_a_branch_whose_picture_cannot_be_copied_is_not_created(env, monkeypatch):
+    # Keeping the source's id would leave the branch on a file its source owns (Codex, 4 Nov 2026).
+    chat = env.db.create_conversation(1, "A")
+    _post(env, chat, caption="ilk")
+    before = _rows(env, "SELECT id FROM conversations")
+
+    def full_disk(*a, **k):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(chat_files.shutil, "copyfile", full_disk)
+    with pytest.raises(OSError):
+        env.db.create_branch(chat)
+    assert _rows(env, "SELECT id FROM conversations") == before
+    assert len(_rows(env, "SELECT id FROM chat_files")) == 1
+
+
 def test_a_truncated_or_signature_only_image_is_refused(env):
     chat = env.db.create_conversation(1, "A")
     whole = _noise_png(64)
