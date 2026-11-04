@@ -44,6 +44,9 @@ UPLOAD_TTL_S = 600.0
 IPC_TIMEOUT_S = 30.0
 HTTP_TIMEOUT_S = 30.0
 START_TIMEOUT_S = 60.0
+# After a reply is read in full the app task may still run the route's background
+# tasks; a part still running after this long is cancelled.
+BACKGROUND_GRACE_S = 120.0
 MAX_STREAMS = 4
 IPC_ARGS_MAX = 8
 # Room left in a reply frame for its envelope (id, ok, status...).
@@ -332,10 +335,34 @@ class _AsgiCall:
                 if not msg.get("more_body"):
                     return
 
-    def close(self) -> None:
+    def close(self, finished: bool = False) -> None:
+        """Release the call. `finished`: the whole reply was read, so the app
+        task is left to run the route's background tasks (Starlette runs them
+        after the final body), bounded by BACKGROUND_GRACE_S."""
+        if finished and not self.task.done():
+            _BACKGROUND.add(self.task)
+            self.task.add_done_callback(_background_done)
+            asyncio.get_running_loop().call_later(BACKGROUND_GRACE_S, _background_expire, self.task)
+            return
         self._gone.set()
         if not self.task.done():
             self.task.cancel()
+
+
+# Strong references: the loop keeps only weak ones to tasks.
+_BACKGROUND: set = set()
+
+
+def _background_done(task: "asyncio.Task") -> None:
+    _BACKGROUND.discard(task)
+    if not task.cancelled() and task.exception() is not None:
+        logger.error("[remote] ui background task failed", exc_info=task.exception())
+
+
+def _background_expire(task: "asyncio.Task") -> None:
+    if not task.done():
+        logger.warning("[remote] ui request still running %.0f s after its reply; cancelled", BACKGROUND_GRACE_S)
+        task.cancel()
 
 
 class _SseFilter:
@@ -509,12 +536,14 @@ class UiDispatcher:
         if card is not None:
             return self._answer_card(session, card.group(1), body)
         call = _start_call(session, app, scope, body)
+        read_all = False
         try:
             status, ctype, data = await asyncio.wait_for(self._read_reply(call), HTTP_TIMEOUT_S)
+            read_all = True
         except asyncio.TimeoutError:
             raise rpc.RpcError("timeout")
         finally:
-            call.close()
+            call.close(finished=read_all)
         out: Dict[str, Any] = {"status": status, "content_type": ctype}
         text = None
         if _TEXT_TYPES.match(ctype.lower()):
@@ -587,6 +616,7 @@ class UiDispatcher:
         call = _start_call(session, app, scope, body)
         sse = _SseFilter() if scope["path"] == "/wake-stream-all" else None
         error = None
+        read_all = False
         try:
             try:
                 status, ctype = await asyncio.wait_for(call.start(), START_TIMEOUT_S)
@@ -606,6 +636,7 @@ class UiDispatcher:
                                                    "data_b64": base64.b64encode(piece).decode("ascii")}):
                             return rpc._REPLIED
                         seq += 1
+                read_all = True
             except rpc.RpcError as exc:
                 error = exc.error
             except Exception:
@@ -617,7 +648,7 @@ class UiDispatcher:
             await session.send(end)
             return rpc._REPLIED
         finally:
-            call.close()
+            call.close(finished=read_all and not error)
             if state.streams.get(stream_id) is me:
                 del state.streams[stream_id]
 
