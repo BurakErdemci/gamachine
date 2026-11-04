@@ -64,8 +64,11 @@ function subscribeBgTasks(fn: () => void): () => void {
 
 /** The chat's running background tasks (empty when none). */
 export function useBgTasks(convId: number | null | undefined): BgTask[] {
+  // The third argument is the server snapshot: without it the static export's prerender of /home
+  // fails (React error #407), which jsdom tests do not see.
   return useSyncExternalStore(subscribeBgTasks,
-    () => (convId == null ? NO_BG_TASKS : bgTasksByConv.get(convId) ?? NO_BG_TASKS));
+    () => (convId == null ? NO_BG_TASKS : bgTasksByConv.get(convId) ?? NO_BG_TASKS),
+    () => NO_BG_TASKS);
 }
 const LEGACY_MODE_KEY = 'unityai-generation-mode';
 
