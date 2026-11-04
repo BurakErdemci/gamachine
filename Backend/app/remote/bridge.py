@@ -254,7 +254,7 @@ class RemoteBridge:
         token = C.random_b64u(32)
         token_hash = C.token_hash(token)
         name = pending.device_name
-        self.store.add_device(device_id, name, pending.phone_pub, token_hash)
+        self.store.add_device(device_id, name, pending.phone_pub, token_hash, pending.kind)
         try:
             # README: register the hash before the pair_ok that carries the token.
             await self.client.token_op({"type": "register_tokens", "hashes": [token_hash]})

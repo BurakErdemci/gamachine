@@ -54,9 +54,12 @@ class Device:
     created: float
     last_seen: Optional[float]
     push_subscription: Optional[dict]
+    # "phone" | "web" | None. A display label the pairing client claimed; it is
+    # not authenticated and no decision may depend on it.
+    kind: Optional[str] = None
 
     def public(self) -> dict:
-        return {"device_id": self.device_id, "name": self.name,
+        return {"device_id": self.device_id, "name": self.name, "kind": self.kind,
                 "created": int(self.created * 1000),
                 "last_seen": int(self.last_seen * 1000) if self.last_seen else None,
                 "push": self.push_subscription is not None}
@@ -111,6 +114,9 @@ class RemoteStore:
                 created REAL NOT NULL,
                 last_seen REAL,
                 push_subscription TEXT)''')
+            # Tables created before the device kind existed lack the column.
+            if not any(r[1] == "kind" for r in conn.execute("PRAGMA table_info(remote_devices)")):
+                conn.execute("ALTER TABLE remote_devices ADD COLUMN kind TEXT")
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.db.db_path)
@@ -185,16 +191,17 @@ class RemoteStore:
             except ValueError:
                 sub = None
         return Device(device_id=r[0], name=r[1], phone_pub=C.from_b64u(r[2]), token_hash=r[3],
-                      created=r[4], last_seen=r[5], push_subscription=sub)
+                      created=r[4], last_seen=r[5], push_subscription=sub, kind=r[7])
 
-    _COLS = "device_id, name, phone_pub, token_hash, created, last_seen, push_subscription"
+    _COLS = "device_id, name, phone_pub, token_hash, created, last_seen, push_subscription, kind"
 
-    def add_device(self, device_id: str, name: str, phone_pub: bytes, token_hash: str) -> Device:
+    def add_device(self, device_id: str, name: str, phone_pub: bytes, token_hash: str,
+                   kind: Optional[str] = None) -> Device:
         now = time.time()
         with closing(self._connect()) as conn, conn:
-            conn.execute(f"INSERT INTO remote_devices ({self._COLS}) VALUES (?, ?, ?, ?, ?, ?, NULL)",
-                         (device_id, name, C.b64u(phone_pub), token_hash, now, now))
-        return Device(device_id, name, phone_pub, token_hash, now, now, None)
+            conn.execute(f"INSERT INTO remote_devices ({self._COLS}) VALUES (?, ?, ?, ?, ?, ?, NULL, ?)",
+                         (device_id, name, C.b64u(phone_pub), token_hash, now, now, kind))
+        return Device(device_id, name, phone_pub, token_hash, now, now, None, kind)
 
     def get_device(self, device_id: str) -> Optional[Device]:
         with closing(self._connect()) as conn:

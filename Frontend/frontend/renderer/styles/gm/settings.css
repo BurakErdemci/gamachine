@@ -408,6 +408,14 @@
 /* pairing QR */
 .set-qr { width: 92px; height: 92px; padding: 7px; border-radius: var(--radius-md); background: var(--qr-bg); color: var(--qr-ink); }
 .set-qr svg { display: block; width: 100%; height: 100%; }
+/* pairing offer: one card per way in, stacked on narrow windows */
+.set-pair-opts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; padding: 16px 20px; }
+.set-opt { display: grid; align-content: start; gap: 8px; padding: 14px 16px; border: var(--line-w) solid var(--paper-line); border-radius: var(--radius-md); }
+.set-opt .set-hint { margin-top: 0; }
+.set-steps { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; counter-reset: step; }
+.set-steps li { display: grid; justify-items: start; gap: 6px; counter-increment: step; }
+.set-steps li::before { content: counter(step) "."; font-weight: 600; color: var(--ink-dim); }
+.set-pair-foot { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .set-avatar-lg { width: 40px; height: 40px; font-size: 16px; background: var(--paper-sunk); color: var(--ink); }
 
 /* narrow windows: one column of rows, the rail stays */
@@ -416,6 +424,7 @@
   .theme-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .set-row { grid-template-columns: minmax(0, 1fr); row-gap: 10px; }
   .set-prov, .set-row-hero, .set-pair { grid-template-columns: 28px minmax(0, 1fr); }
+  .set-pair-opts { grid-template-columns: minmax(0, 1fr); }
   .set-prov > :last-child:not(.set-rt), .set-row-hero > :last-child:not(.set-rt) { grid-column: 2; justify-self: start; }
 }
 

@@ -41,11 +41,11 @@ export function wsOrigin(loc) {
 
 // Resolves {deviceId, token, vapidPub, privateKey, publicRaw}; rejects with
 // Error(code) where code is no_room | pc_offline | rejected | refused | timeout | bad_reply | <PC reason>.
-export async function pair({ origin, parsed, deviceName, onSas, WS = globalThis.WebSocket }) {
+export async function pair({ origin, parsed, deviceName, client, onSas, WS = globalThis.WebSocket }) {
   const phone = await C.generateKeyPair();
   const kStatic = await C.staticSecret(phone.privateKey, parsed.pcPub);
   onSas(await C.computeSas(kStatic, parsed.pairSecret));
-  const request = await C.buildPairRequest({ phonePubRaw: phone.publicRaw, deviceName, pairSecret: parsed.pairSecret });
+  const request = await C.buildPairRequest({ phonePubRaw: phone.publicRaw, deviceName, pairSecret: parsed.pairSecret, client });
   const kPair = await C.derivePairKey(kStatic, parsed.pairSecret);
 
   return new Promise((resolve, reject) => {

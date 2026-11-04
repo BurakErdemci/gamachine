@@ -107,9 +107,13 @@ export function pairMacInput(phonePubRaw, deviceName) {
   return concat(phonePubRaw, te.encode(deviceName));
 }
 
-export async function buildPairRequest({ phonePubRaw, deviceName, pairSecret }) {
+// `client` ('phone' | 'web') is a display label for the desktop's device list.
+// It is outside the MAC and the PC trusts it for nothing.
+export async function buildPairRequest({ phonePubRaw, deviceName, pairSecret, client }) {
   const mac = await hmac(pairSecret, pairMacInput(phonePubRaw, deviceName));
-  return { type: 'pair_request', phone_pub: b64u(phonePubRaw), device_name: deviceName, mac: b64u(mac) };
+  const request = { type: 'pair_request', phone_pub: b64u(phonePubRaw), device_name: deviceName, mac: b64u(mac) };
+  if (client) request.client = client;
+  return request;
 }
 
 export const staticSecret = ecdh;

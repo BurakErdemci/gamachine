@@ -152,6 +152,7 @@ export class RemoteSession {
         origin: net.wsOrigin(window.location),
         parsed,
         deviceName: 'Tarayıcı',
+        client: 'web',
         onSas: (sas: string) => this.set({ sas }),
       })
       this.link?.stop()

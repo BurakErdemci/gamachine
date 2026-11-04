@@ -223,3 +223,15 @@ test('the phone page reports no_room separately from refusals', async () => {
   await assert.rejects(pairWith((ws) => { ws.onopen(); ws.onclose({ code: 4008 }); }), { message: 'no_room' });
   await assert.rejects(pairWith((ws) => ws.onclose({ code: 1006 })), { message: 'refused' });
 });
+
+test('the pair request carries the client kind the page passes in', async () => {
+  const pc = C.b64u(new Uint8Array(await crypto.subtle.exportKey('raw', (await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits'])).publicKey)));
+  const parsed = C.parsePairFragment(`#${pairIdFor(keyN(7))}.${pc}.${enc(Buffer.alloc(16, 1))}`);
+  const sent = [];
+  const WS = class extends FakeWS {
+    constructor() { super((ws) => { ws.onopen(); ws.onclose({ code: 1006 }); }); }
+    send(data) { sent.push(JSON.parse(data)); }
+  };
+  await assert.rejects(pair({ origin: 'wss://relay.test', parsed, deviceName: 'iPhone', client: 'phone', onSas: () => {}, WS }));
+  assert.equal(sent[0]?.client, 'phone');
+});

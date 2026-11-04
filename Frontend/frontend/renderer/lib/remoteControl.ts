@@ -34,10 +34,12 @@ export interface RemoteDevice {
   created: number;
   last_seen: number | null;
   online?: boolean;
+  /** What the pairing client said it is; a display label only. */
+  kind?: 'phone' | 'web' | null;
 }
 
 export interface PairOffer { qr_url: string; expires_at: number }
-export interface PendingPair { device_name: string; sas: string; source: string; expires_at: number }
+export interface PendingPair { device_name: string; sas: string; source: string; expires_at: number; kind?: 'phone' | 'web' | null }
 
 export type RemoteResult<T = any> =
   | { ok: true; data: T }

@@ -1,6 +1,6 @@
 /**
- * Settings > Remote control: the pairing row can copy the pairing link so a
- * browser on another computer can pair at <relay>/app/.
+ * Settings > Remote control: the other-computer card shows <relay>/app/ and
+ * can copy it and the pairing link, so a browser there can pair.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import React from 'react'
@@ -70,8 +70,20 @@ describe('remote pairing · copy link', () => {
     await waitFor(() => expect(btn.textContent).toBe('Copy failed'))
   })
 
-  it('tells where to paste the link: the relay url plus /app/', async () => {
+  it('shows the address to open on the other computer: the relay url plus /app/', async () => {
     await showOffer()
-    expect(screen.getByTestId('remote-pair-browser-hint').textContent).toContain(`${RELAY}/app/`)
+    expect(screen.getByTestId('remote-pair-browser-hint').textContent).toBe(`${RELAY}/app/`)
+  })
+
+  it('the address has its own copy button that copies exactly that address', async () => {
+    const writeText = vi.fn(async () => {})
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    await showOffer()
+    const btn = screen.getByTestId('remote-copy-address')
+    expect(btn.textContent).toBe('Copy address')
+    fireEvent.click(btn)
+    await waitFor(() => expect(btn.textContent).toBe('Copied'))
+    expect(writeText).toHaveBeenCalledWith(`${RELAY}/app/`)
+    expect(screen.getByTestId('remote-pair-copy').textContent).toBe('Copy link')
   })
 })

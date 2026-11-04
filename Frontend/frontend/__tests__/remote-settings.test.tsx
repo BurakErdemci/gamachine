@@ -126,9 +126,10 @@ describe('remote settings · pairing', () => {
     expect(qrPath(QR_URL).size).toBeGreaterThanOrEqual(21)
     expect(screen.getByTestId('remote-pair-countdown').textContent).toMatch(/Kalan süre: [45]:\d\d/)
 
-    backend.pending = { device_name: 'iPhone', sas: '7314', source: 'qr', expires_at: Date.now() + 60_000 }
+    backend.pending = { device_name: 'iPhone', sas: '7314', source: 'qr', kind: 'phone', expires_at: Date.now() + 60_000 }
     await waitFor(() => expect(screen.getByTestId('remote-sas').textContent).toBe('7314'))
-    expect(screen.getByTestId('remote-pair-request').textContent).toContain('iPhone eşleşmek istiyor')
+    expect(screen.getByTestId('remote-pair-request').textContent).toContain('Telefon (iPhone) eşleşmek istiyor')
+    expect(screen.getByTestId('remote-pair-request').textContent).toContain('Aynı kodu o cihazda görüyorsan onayla.')
     expect(screen.queryByTestId('remote-qr')).toBeNull()
 
     fireEvent.click(screen.getByTestId('remote-approve'))
@@ -197,7 +198,7 @@ describe('remote settings · devices, relay, keep awake, forget', () => {
     fireEvent.click(screen.getAllByText('Kaldır')[0])
     await waitFor(() => expect(screen.getAllByTestId('remote-device').length).toBe(1))
     expect(calls).toContainEqual(['remove-device', 'd1'])
-    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('"iPhone" kaldırılsın mı?'))
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('"iPhone" kaldırılsın mı? Bu cihaz artık bağlanamaz.'))
 
     fireEvent.click(screen.getByTestId('remote-remove-all'))
     await waitFor(() => expect(screen.queryAllByTestId('remote-device').length).toBe(0))

@@ -120,6 +120,7 @@ async function startPairing(parsed) {
       origin: wsOrigin(location),
       parsed,
       deviceName: deviceName(),
+      client: 'phone',
       onSas: (code) => {
         setText($('pair-code'), () => code);
         $('pair-code-box').hidden = false;

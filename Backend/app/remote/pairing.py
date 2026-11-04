@@ -28,6 +28,7 @@ APPROVAL_TTL_S = 300.0
 PER_ID_PER_MINUTE = 5
 PER_IP_PER_HOUR = 20
 DEVICE_NAME_MAX = 64
+DEVICE_KINDS = ("phone", "web")
 
 
 @dataclass
@@ -53,6 +54,9 @@ class PendingPair:
     source: str
     created: float
     expires: float
+    # "phone" | "web" | None: what the client says it is. A display label
+    # only; it is outside the MAC and no decision may depend on it.
+    kind: Optional[str] = None
     timer: Any = field(default=None, repr=False)
     # The PC's relay socket dropped; the next welcome says whether the
     # pairing socket is still there.
@@ -62,7 +66,7 @@ class PendingPair:
         # The SAS is always part of what the desktop shows: it is the defence
         # against a leaked QR today and the main one for a typed code later.
         return {"device_name": self.device_name, "sas": self.sas, "source": self.source,
-                "expires_at": int(self.expires * 1000)}
+                "kind": self.kind, "expires_at": int(self.expires * 1000)}
 
 
 def qr_url(relay_url: str, pair_id: str, pc_pub: bytes, offer: Offer) -> str:
@@ -166,9 +170,11 @@ class PairingManager:
         k_static = self._static_key().ecdh(phone_pub)
         _, code = C.sas(k_static, offer.secret)
         now = self._clock()
+        kind = msg.get("client")
         pending = PendingPair(conn=conn, device_name=name, phone_pub=phone_pub, sas=code,
                               k_pair=C.pair_key(k_static, offer.secret), source=offer.source,
-                              created=now, expires=now + APPROVAL_TTL_S)
+                              created=now, expires=now + APPROVAL_TTL_S,
+                              kind=kind if kind in DEVICE_KINDS else None)
         pending.timer = asyncio.get_running_loop().call_later(
             APPROVAL_TTL_S, lambda: asyncio.ensure_future(self._expire(pending)))
         self.pending = pending

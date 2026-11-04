@@ -71,7 +71,7 @@ export const RemoteControlSection = ({ onStatus, statusPollMs = STATUS_POLL_MS, 
   const [now, setNow] = useState(() => Date.now());
   const [relayInput, setRelayInput] = useState("");
   const [needsRepair, setNeedsRepair] = useState(false);
-  const [copyState, setCopyState] = useState<"ok" | "fail" | null>(null);
+  const [copyState, setCopyState] = useState<{ what: "link" | "addr"; ok: boolean } | null>(null);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onStatusRef = useRef(onStatus);
   onStatusRef.current = onStatus;
@@ -87,15 +87,15 @@ export const RemoteControlSection = ({ onStatus, statusPollMs = STATUS_POLL_MS, 
     setCopyState(null);
   }, [offer?.qr_url]);
 
-  const copyPairLink = async (link: string) => {
-    let next: "ok" | "fail" = "ok";
+  const copyText = async (what: "link" | "addr", text: string) => {
+    let ok = true;
     try {
-      await navigator.clipboard.writeText(link);
+      await navigator.clipboard.writeText(text);
     } catch {
-      next = "fail";
+      ok = false;
     }
     clearCopyTimer();
-    setCopyState(next);
+    setCopyState({ what, ok });
     copyTimer.current = setTimeout(() => setCopyState(null), 2000);
   };
 
@@ -181,7 +181,7 @@ export const RemoteControlSection = ({ onStatus, statusPollMs = STATUS_POLL_MS, 
   const approve = async () => {
     const res = await run("pair-approve");
     if (res.ok) {
-      setNote(t("remote.paired", { cihaz: stripBidi(res.data?.device?.name || "") || t("chat.phoneUnnamed") }));
+      setNote(t("remote.paired", { cihaz: stripBidi(res.data?.device?.name || "") || t("remote.kind.unknown") }));
       setOffer(null);
       setPending(null);
       void refresh();
@@ -227,7 +227,7 @@ export const RemoteControlSection = ({ onStatus, statusPollMs = STATUS_POLL_MS, 
   };
 
   const removeDevice = async (device: RemoteDevice) => {
-    const name = stripBidi(device.name) || t("chat.phoneUnnamed");
+    const name = stripBidi(device.name) || t("remote.kind.unknown");
     if (!(await confirmDialog(t("remote.removeConfirm", { cihaz: name }), t("remote.remove"), t("confirm.cancel")))) return;
     const res = await run("remove-device", device.device_id);
     if (res.ok === true || (res.ok === false && res.code === "unknown_device")) void refresh();
@@ -263,6 +263,14 @@ export const RemoteControlSection = ({ onStatus, statusPollMs = STATUS_POLL_MS, 
     : status.connected ? "ok"
       : status.gave_up || status.last_error ? "danger" : "busy";
 
+  const kindLabel = (kind?: string | null) =>
+    t(kind === "phone" ? "remote.kind.phone" : kind === "web" ? "remote.kind.web" : "remote.kind.unknown");
+  const copyLabel = (what: "link" | "addr") => {
+    const label = what === "link" ? t("remote.pairCopyLink") : t("remote.copyAddress");
+    return copyState?.what !== what ? label : copyState.ok ? t("remote.pairCopied") : t("remote.pairCopyFailed");
+  };
+  const appUrl = status?.relay_url ? `${status.relay_url}/app/` : null;
+
   const phoneIc = (
     <svg className="ic set-dev-ic" viewBox="0 0 20 20" aria-hidden="true"><rect x="6" y="2.5" width="8" height="15" rx="1.6" /><path d="M9 15h2" /></svg>
   );
@@ -288,18 +296,12 @@ export const RemoteControlSection = ({ onStatus, statusPollMs = STATUS_POLL_MS, 
             <SetSwitch checked={enabled} label={t("remote.title")} testId="remote-toggle" onToggle={toggle}
               disabled={!status || busy === "enable" || busy === "disable"} />
           </div>
-          <SetRow
-            name={t("remote.keepAwake")}
-            hint={t("remote.keepAwakeHint")}
-            control={<SetSwitch checked={!!status?.keep_awake} label={t("remote.keepAwake")} testId="remote-keep-awake"
-              disabled={!status || busy === "set-keep-awake"} onToggle={() => setKeepAwake(!status?.keep_awake)} />}
-          />
         </SetCard>
         {error && <p data-testid="remote-error" className="set-msg set-msg-err" role="alert">{error}</p>}
         {note && <p data-testid="remote-note" className="set-msg set-msg-ok" role="status">{note}</p>}
       </SetGroup>
 
-      {/* Paired phones + pairing a new one */}
+      {/* Paired devices + pairing a new one */}
       <SetGroup
         title={t("set.uzak.phones")}
         action={devices.length > 0 ? (
@@ -314,8 +316,9 @@ export const RemoteControlSection = ({ onStatus, statusPollMs = STATUS_POLL_MS, 
             <div key={device.device_id} data-testid="remote-device" className="set-row set-prov">
               {phoneIc}
               <div className="set-rt">
-                <p className="set-name">{stripBidi(device.name) || t("chat.phoneUnnamed")}</p>
+                <p className="set-name">{stripBidi(device.name) || t("remote.kind.unknown")}</p>
                 <div className="set-hint">
+                  <b data-testid="remote-device-kind">{kindLabel(device.kind)}</b>{" · "}
                   <Lamp tone={device.online ? "ok" : undefined} />
                   {device.online && <>{t("remote.deviceOnline")} · </>}
                   {device.last_seen
@@ -346,38 +349,45 @@ export const RemoteControlSection = ({ onStatus, statusPollMs = STATUS_POLL_MS, 
             />
           )}
           {offer && !pending && (
-            <div className="set-row set-pair" data-guide="settings-remote-pair">
-              <div className="set-qr"><QrCode text={offer.qr_url} /></div>
-              <div className="set-rt">
-                <p className="set-name">{t("set.uzak.pairNew")}</p>
-                <div className="set-hint">
-                  {t("remote.pairScan")}{" "}
-                  <span data-testid="remote-pair-countdown" className="num">
-                    {t("remote.pairExpiresIn", { sure: mmss(offer.expires_at - now) })}
-                  </span>
-                </div>
-                {status?.relay_url && (
-                  <div className="set-hint" data-testid="remote-pair-browser-hint">
-                    {t("remote.pairBrowserHint", { url: status.relay_url })}
-                  </div>
-                )}
+            <div className="set-pair-opts" data-guide="settings-remote-pair" data-testid="remote-pair-offer">
+              <div className="set-opt" data-testid="remote-opt-phone">
+                <p className="set-name">{t("remote.optPhone")}</p>
+                <p className="set-hint">{t("remote.optPhoneHint")}</p>
+                <div className="set-qr"><QrCode text={offer.qr_url} /></div>
+                <p className="set-hint">{t("remote.optPhoneScan")}</p>
               </div>
-              <button
-                type="button"
-                data-testid="remote-pair-copy"
-                onClick={() => { void copyPairLink(offer.qr_url); }}
-                className="btn btn-ghost btn-sm"
-              >
-                {copyState === "ok" ? t("remote.pairCopied") : copyState === "fail" ? t("remote.pairCopyFailed") : t("remote.pairCopyLink")}
-              </button>
-              <button type="button" onClick={cancelPairing} className="btn btn-ghost btn-sm">{t("remote.pairCancel")}</button>
+              <div className="set-opt" data-testid="remote-opt-pc">
+                <p className="set-name">{t("remote.optPc")}</p>
+                <p className="set-hint">{t("remote.optPcHint")}</p>
+                <ol className="set-steps">
+                  {appUrl && (
+                    <li>
+                      <span className="set-hint">{t("remote.optPcStep1")}</span>
+                      <code className="set-key" data-testid="remote-pair-browser-hint">{appUrl}</code>
+                      <button type="button" data-testid="remote-copy-address" onClick={() => { void copyText("addr", appUrl); }}
+                        className="btn btn-ghost btn-sm">{copyLabel("addr")}</button>
+                    </li>
+                  )}
+                  <li>
+                    <span className="set-hint">{t("remote.optPcStep2")}</span>
+                    <button type="button" data-testid="remote-pair-copy" onClick={() => { void copyText("link", offer.qr_url); }}
+                      className="btn btn-ghost btn-sm">{copyLabel("link")}</button>
+                  </li>
+                </ol>
+              </div>
+              <div className="set-pair-foot">
+                <span data-testid="remote-pair-countdown" className="set-hint num">
+                  {t("remote.pairExpiresIn", { sure: mmss(offer.expires_at - now) })}
+                </span>
+                <button type="button" onClick={cancelPairing} className="btn btn-ghost btn-sm">{t("remote.pairCancel")}</button>
+              </div>
             </div>
           )}
           {pending && (
             <div data-testid="remote-pair-request" className="set-row set-pair-req">
               <div className="set-rt">
                 <p className="set-name">
-                  {t("remote.pairRequest", { cihaz: stripBidi(pending.device_name) || t("chat.phoneUnnamed") })}
+                  {t("remote.pairRequest", { tur: kindLabel(pending.kind), cihaz: stripBidi(pending.device_name) || t("remote.kind.unknown") })}
                 </p>
                 <div className="set-hint">
                   {t("remote.pairCode")}: <b data-testid="remote-sas" className="set-sas">{pending.sas}</b>
@@ -403,6 +413,12 @@ export const RemoteControlSection = ({ onStatus, statusPollMs = STATUS_POLL_MS, 
       <details className="set-group set-adv">
         <summary className="set-gk set-adv-sum">{t("set.advanced")} <Chev /></summary>
         <SetCard>
+          <SetRow
+            name={t("remote.keepAwake")}
+            hint={t("remote.keepAwakeHint")}
+            control={<SetSwitch checked={!!status?.keep_awake} label={t("remote.keepAwake")} testId="remote-keep-awake"
+              disabled={!status || busy === "set-keep-awake"} onToggle={() => setKeepAwake(!status?.keep_awake)} />}
+          />
           <SetRow
             name={t("remote.relay")}
             hint={status ? (
