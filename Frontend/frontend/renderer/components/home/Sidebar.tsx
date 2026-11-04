@@ -6,7 +6,7 @@ import { Conversation, UserData } from './types';
 import { platformKeys } from '../../lib/platformKeys';
 import type { ConvStatus } from '../../hooks/home/useChat';
 import type { UnityMCPStatus } from '../../hooks/home/useAIConfig';
-import { STATUS_DOT, familyRootId, mostUrgent, rootsOf } from '../../lib/convFamily';
+import { STATUS_DOT, familyRootId, familyStatusOf, rootsOf } from '../../lib/convFamily';
 import { AwaitingChip, ChatStatusLamp } from '../phone/ChatRow';
 import { BrandLogo } from './BrandLogo';
 import { useUnityLinkPulse } from './UnityMcpToggle';
@@ -98,9 +98,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
   // Branches live in the chat column's tabs; a row stands for its whole family.
   const roots = rootsOf(conversations);
   const activeRootId = familyRootId(conversations, activeConvId);
-  const familyIds = (rootId: number) =>
-    [rootId, ...conversations.filter(c => c.parent_id === rootId).map(c => c.id)];
-  const statusOf = (id: number) => mostUrgent(convStatus, familyIds(id));
+  const statusOf = (id: number) => familyStatusOf(conversations, convStatus, id);
   // Mockup: work that is running or waiting on the user is an "active task" with a second line;
   // everything else (unread included) stays in the plain chat list, in the same order as before.
   const isTask = (s: ConvStatus | undefined) => s === 'running' || s === 'awaiting';

@@ -1,8 +1,9 @@
-import React, { useSyncExternalStore } from 'react';
+import React, { useRef, useState, useSyncExternalStore } from 'react';
 import { useLang } from '../../lib/i18n';
 import { remoteSession, type RemoteSession, type RemoteView } from '../../lib/remote/bootstrap';
 import { useMarkPhoneShell, type usePhoneRoute } from '../../lib/mobile';
 import type { Conversation } from '../home/types';
+import { ComposerDraftContext, type ComposerDraft } from '../ui/animated-ai-chat';
 import { PhoneChatList, type PhoneChatListProps } from './PhoneChatList';
 import { PhoneChatScreen, type PhoneChatScreenProps } from './PhoneChatScreen';
 
@@ -47,7 +48,10 @@ export interface PhoneShellProps {
   onSwitchProject: () => void;
   onOpenSettings: () => void;
   selectConversation: (conv: Conversation) => unknown;
+  /** Resolves to the new chat's id, or null when it could not be created. */
   createNewConversation: () => unknown;
+  /** A full-screen page (settings, profile, guide) is drawn over the shell. */
+  covered?: boolean;
   chat: Pick<PhoneChatScreenProps, 'thread' | 'tray' | 'composer' | 'contextUsage' | 'menu'>;
   /** Tests pass a fake; the page reads the running remote session. */
   session?: SessionLike | null;
@@ -61,15 +65,28 @@ export interface PhoneShellProps {
 export function PhoneShell(props: PhoneShellProps) {
   const { route, conversations, activeConvId, convStatus } = props;
   const { t } = useLang();
-  useMarkPhoneShell();
+  useMarkPhoneShell(!props.covered);
+  // Half-written messages per chat, kept while the phone shows the list (the page session, not a reload).
+  const drafts = useRef(new Map<string, ComposerDraft>()).current;
+  const [creating, setCreating] = useState(false);
   const conn = useConnection(props.session === undefined ? remoteSession() : props.session);
   const line = <ConnectionLine {...conn} />;
   const open = (conv: Conversation) => { void props.selectConversation(conv); route.openChat(); };
-  const startNew = () => { void props.createNewConversation(); route.openChat(); };
+  // The new chat opens once it exists; until then the list stays, not the chat the user came from.
+  const startNew = async () => {
+    if (creating) return;
+    setCreating(true);
+    try {
+      if (await props.createNewConversation() !== null) route.openChat();
+    } catch { /* stays on the list */ } finally {
+      setCreating(false);
+    }
+  };
 
   if (route.screen === 'chat') {
     const active = conversations.find(c => c.id === activeConvId) ?? null;
     return (
+      <ComposerDraftContext.Provider value={drafts}>
       <div className="phone-shell" data-screen="chat" data-stale={conn.connection !== 'ready' || undefined}>
         <PhoneChatScreen
           {...props.chat}
@@ -83,6 +100,7 @@ export function PhoneShell(props: PhoneShellProps) {
           onBack={route.back}
         />
       </div>
+      </ComposerDraftContext.Provider>
     );
   }
   return (
@@ -97,7 +115,9 @@ export function PhoneShell(props: PhoneShellProps) {
         onSwitchProject={props.onSwitchProject}
         onOpenSettings={props.onOpenSettings}
         onOpenChat={open}
+        onOpenRequests={() => route.openChat()}
         onNewChat={startNew}
+        creating={creating}
       />
     </div>
   );

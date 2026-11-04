@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useCallback, useTransition, useMemo, useImperativeHandle } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useCallback, useTransition, useMemo, useImperativeHandle } from "react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 import {
@@ -84,6 +84,17 @@ interface CommandSuggestion {
 }
 
 
+type ComposerAttachment = { name: string, data: string, type: 'image' | 'file' | 'video', path?: string, url?: string };
+
+/** A half-written message: the text and the attachments waiting to go with it. */
+export interface ComposerDraft { text: string; attachments: ComposerAttachment[] }
+
+/**
+ * Where drafts are kept per chat. Without a provider (the desktop) the box keeps nothing; the phone
+ * shell provides one so a draft survives leaving the chat screen for the list and coming back.
+ */
+export const ComposerDraftContext = createContext<Map<string, ComposerDraft> | null>(null);
+
 export interface ComposerPickers {
     pickImage: () => void;
     pickVideo: () => void;
@@ -143,8 +154,10 @@ export function AnimatedChatInput({
     pickersRef?: React.Ref<ComposerPickers>;
 }) {
     // Typing state is INTERNAL — does not propagate to parent on every keystroke.
-    const [internalValue, setInternalValue] = useState(value);
-    const [attachments, setAttachments] = useState<{ name: string, data: string, type: 'image' | 'file' | 'video', path?: string, url?: string }[]>([]);
+    const drafts = useContext(ComposerDraftContext);
+    const draftKey = String(currentChatId ?? 'new');
+    const [internalValue, setInternalValue] = useState(() => drafts?.get(draftKey)?.text ?? value);
+    const [attachments, setAttachments] = useState<ComposerAttachment[]>(() => drafts?.get(draftKey)?.attachments ?? []);
     const { t, lang } = useLang();
     const chips = useBrowserChips(currentChatId);
     const [activeSuggestion, setActiveSuggestion] = useState<number>(-1);
@@ -487,11 +500,31 @@ export function AnimatedChatInput({
     };
 
     // Sync internal value when parent resets to '' (after submit)
+    const seenValue = useRef(value);
     useEffect(() => {
+        // With drafts the first run (and a StrictMode re-run) must not wipe the draft just restored.
+        if (drafts && seenValue.current === value) return;
+        seenValue.current = value;
         if (value === '' || value !== internalValue) {
             setInternalValue(value);
         }
     }, [value]);
+    // The box's draft follows its chat: saved when the chat changes or the box goes away, loaded for the new chat.
+    const latestDraft = useRef<ComposerDraft>({ text: internalValue, attachments });
+    latestDraft.current = { text: internalValue, attachments };
+    const loadedKey = useRef(draftKey);
+    useEffect(() => {
+        if (!drafts) return;
+        if (loadedKey.current !== draftKey) {
+            loadedKey.current = draftKey;
+            setInternalValue(drafts.get(draftKey)?.text ?? '');
+            setAttachments(drafts.get(draftKey)?.attachments ?? []);
+        }
+        return () => {
+            const d = latestDraft.current;
+            if (d.text || d.attachments.length > 0) drafts.set(draftKey, d); else drafts.delete(draftKey);
+        };
+    }, [drafts, draftKey]);
     // Text set from outside (a welcome card, a reset) never passes through onChange, so the box
     // is sized here once React has written it; without this a card's prompt stayed one line high.
     useLayoutEffect(() => { adjustHeight(); }, [internalValue, adjustHeight]);

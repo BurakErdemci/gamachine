@@ -234,9 +234,10 @@ const STOP_ICON = <svg className="cul-stop-ic" viewBox="0 0 12 12" aria-hidden="
 
 /**
  * The right panel's "Bilgisayar" tab: the driven window, live, and a Stop button. `zoomable` (the
- * phone's Screen tab) adds pinch and double-tap zoom; `onFrame` hears each new picture shown.
+ * phone's Screen tab) adds pinch and double-tap zoom; `onFrame` hears each new picture shown; a new
+ * `resend` value reports the visibility again (the link to the PC came back).
  */
-export function ComputerLivePanel({ visible, zoomable = false, onFrame }: { visible: boolean; zoomable?: boolean; onFrame?: () => void }) {
+export function ComputerLivePanel({ visible, zoomable = false, onFrame, resend = 0 }: { visible: boolean; zoomable?: boolean; onFrame?: () => void; resend?: number }) {
   const { t } = useLang();
   const { state, frame } = useComputerLive({ frames: true });
   const now = useNow(state.active);
@@ -250,7 +251,7 @@ export function ComputerLivePanel({ visible, zoomable = false, onFrame }: { visi
   useEffect(() => {
     const ipc = ipcOf();
     Promise.resolve(ipc?.invoke?.(LIVE_CHANNEL, { op: 'panel-visible', visible })).catch(() => {});
-  }, [visible]);
+  }, [visible, resend]);
   useEffect(() => () => {
     Promise.resolve(ipcOf()?.invoke?.(LIVE_CHANNEL, { op: 'panel-visible', visible: false })).catch(() => {});
   }, []);

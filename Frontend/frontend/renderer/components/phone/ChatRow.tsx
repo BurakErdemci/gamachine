@@ -4,7 +4,7 @@ import type { ConvStatus } from '../../hooks/home/useChat';
 import { STATUS_DOT } from '../../lib/convFamily';
 
 // Lamp per chat status: the mockup's `.status-*` classes, coloured by tokens.
-export const LAMP: Record<ConvStatus, string> = {
+const LAMP: Record<ConvStatus, string> = {
   running: 'status-running',
   awaiting: 'status-pending',
   unread: 'status-ok',

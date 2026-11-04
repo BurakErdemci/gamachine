@@ -89,3 +89,9 @@ export const mostUrgent = (convStatus: Record<number, ConvStatus> | undefined, i
   const present = new Set(ids.map(id => convStatus[id]).filter(Boolean));
   return PRIORITY.find(s => present.has(s));
 };
+
+/** The status a root's row shows: the most urgent one in its family (the root and its branches). */
+export const familyStatusOf = (
+  conversations: Conversation[], convStatus: Record<number, ConvStatus> | undefined, rootId: number,
+): ConvStatus | undefined =>
+  mostUrgent(convStatus, [rootId, ...conversations.filter(c => c.parent_id === rootId).map(c => c.id)]);

@@ -47,9 +47,20 @@ describe('phone.css', () => {
       expect(m, s).toBeTruthy()
       expect(Number(m![1]), s).toBeGreaterThanOrEqual(44)
     }
+    // The composer's small remove controls (page chip, attachment) keep their look but get a 44 px hit area.
+    for (const s of ['.app[data-phone] .composer-chip-x', '.app[data-phone] .composer-att-x']) {
+      const body = ruleFor(s)?.body ?? ''
+      expect(Number(/(?:^|[;\s])width:\s*(\d+)px/.exec(body)?.[1]), s).toBeGreaterThanOrEqual(44)
+      expect(Number(/(?:^|[;\s])height:\s*(\d+)px/.exec(body)?.[1]), s).toBeGreaterThanOrEqual(44)
+    }
+    expect(ruleFor('.app[data-phone] .composer-att-x')?.body).toMatch(/opacity:\s*1/)
     for (const side of ['top', 'bottom', 'left', 'right']) expect(css).toContain(`env(safe-area-inset-${side}`)
     // The composer rides the keyboard inset that PhoneChatScreen sets.
     expect(ruleFor('.app[data-phone] .phone-composer.composer-wrap')?.body).toContain('var(--phone-kb')
+  })
+
+  it('hides the session-import button: the remote may not import, so the phone shows no dead button', () => {
+    expect(ruleFor('.app[data-phone] [data-testid="import-session-open"]')?.body).toMatch(/display:\s*none/)
   })
 
   it('uses theme tokens, no colour of its own', () => {
@@ -73,7 +84,7 @@ describe('the other stylesheets', () => {
   it('have no uncommitted edit in the working tree (git, when it is there)', () => {
     let changed: string
     try {
-      changed = execFileSync('git', ['diff', '--name-only', 'HEAD', '--', '.'], { cwd: resolve(__dirname, '../renderer/styles'), encoding: 'utf8' })
+      changed = execFileSync('git', ['diff', '--name-only', 'HEAD', '--', '.', ':(exclude)gm/phone.css'], { cwd: resolve(__dirname, '../renderer/styles'), encoding: 'utf8' })
     } catch {
       return // no git here: the scope checks above still hold
     }

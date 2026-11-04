@@ -2,7 +2,7 @@ import React from 'react';
 import { useLang } from '../../lib/i18n';
 import type { Conversation } from '../home/types';
 import { type ConvStatus, useBgTasks } from '../../hooks/home/useChat';
-import { STATUS_DOT, familyRootId, mostUrgent, rootsOf } from '../../lib/convFamily';
+import { STATUS_DOT, familyRootId, familyStatusOf, rootsOf } from '../../lib/convFamily';
 import { shortDate } from '../home/ThreadHeader';
 import { AwaitingChip, ChatStatusLamp } from './ChatRow';
 
@@ -18,7 +18,11 @@ export interface PhoneChatListProps {
   onSwitchProject: () => void;
   onOpenSettings: () => void;
   onOpenChat: (conv: Conversation) => void;
+  /** Opens the chat screen as it is, for requests that belong to no chat when there is no chat to open. */
+  onOpenRequests: () => void;
   onNewChat: () => void;
+  /** A new chat is being created: "+ Yeni" waits instead of showing another chat. */
+  creating?: boolean;
 }
 
 const today = () => {
@@ -67,15 +71,15 @@ export function PhoneChatList(props: PhoneChatListProps) {
   const { t } = useLang();
   // Branches live inside their chat (as on the desktop): a row stands for its whole family.
   const roots = rootsOf(conversations);
-  const familyIds = (rootId: number) => [rootId, ...conversations.filter(c => c.parent_id === rootId).map(c => c.id)];
-  const statusOf = (id: number) => mostUrgent(convStatus, familyIds(id));
+  const statusOf = (id: number) => familyStatusOf(conversations, convStatus, id);
   const activeRootId = familyRootId(conversations, activeConvId);
   const awaitingRoots = roots.filter(c => statusOf(c.id) === 'awaiting');
   const awaiting = awaitingRoots.length + unknownGates;
-  // The bar opens the first waiting chat; requests of no chat show inside whichever chat is open.
+  // The bar opens the first waiting chat; requests of no chat (McpUnknownTray) show above whichever chat is
+  // open, so with no chat at all it opens the empty one.
   const openAwaiting = () => {
     const first = awaitingRoots[0] ?? conversations.find(c => c.id === activeConvId) ?? roots[0];
-    if (first) onOpenChat(first);
+    if (first) onOpenChat(first); else props.onOpenRequests();
   };
   return (
     <section className="phone-list" aria-label={t('sidebar.chats')}>
@@ -111,8 +115,9 @@ export function PhoneChatList(props: PhoneChatListProps) {
             </ul>
           )}
       </div>
-      <button type="button" className="phone-fab" data-testid="phone-new-chat" onClick={props.onNewChat} aria-label={t('phone.newChatAria')}>
-        {t('phone.newChat')}
+      <button type="button" className="phone-fab" data-testid="phone-new-chat" onClick={props.onNewChat} aria-label={t('phone.newChatAria')}
+        disabled={props.creating} aria-busy={props.creating || undefined}>
+        {props.creating ? t('phone.creating') : t('phone.newChat')}
       </button>
     </section>
   );

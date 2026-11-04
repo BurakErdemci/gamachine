@@ -55,21 +55,20 @@ export function PhoneChatScreen(props: PhoneChatScreenProps) {
         {tabBtn('chat', t('phone.tabChat'))}
         {tabBtn('screen', t('phone.tabScreen'))}
       </div>
-      {tab === 'chat' ? (
-        <>
-          <div className="phone-thread" id="phone-panel-chat" role="tabpanel" aria-labelledby="phone-tab-chat">
-            {props.tray}
-            {props.thread}
-          </div>
-          <div className="phone-composer composer-wrap" data-testid="phone-composer"
-            style={{ '--phone-kb': `${keyboard}px` } as React.CSSProperties}>
-            {props.composer}
-            <p className="phone-memory" data-testid="phone-memory">{memory}</p>
-          </div>
-        </>
-      ) : (
+      {/* The chat stays mounted under the Ekran tab, only hidden: the draft, the scroll position and the
+          thread are where the user left them. */}
+      <div className="phone-thread" id="phone-panel-chat" role="tabpanel" aria-labelledby="phone-tab-chat" hidden={tab !== 'chat'}>
+        {props.tray}
+        {props.thread}
+      </div>
+      <div className="phone-composer composer-wrap" data-testid="phone-composer" hidden={tab !== 'chat'}
+        style={{ '--phone-kb': `${keyboard}px` } as React.CSSProperties}>
+        {props.composer}
+        <p className="phone-memory" data-testid="phone-memory">{memory}</p>
+      </div>
+      {tab === 'screen' && (
         <div className="phone-thread" id="phone-panel-screen" role="tabpanel" aria-labelledby="phone-tab-screen">
-          <PhoneScreenTab visible />
+          <PhoneScreenTab visible connected={props.connected} />
         </div>
       )}
       <PhoneMenuSheet {...props.menu} convId={convId} open={menuOpen} onClose={() => setMenuOpen(false)} />

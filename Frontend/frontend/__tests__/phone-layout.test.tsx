@@ -14,6 +14,7 @@ vi.mock('../renderer/lib/remote/transport', async (importOriginal) => {
 import { usePhoneLayout, usePhoneRoute } from '../renderer/lib/mobile'
 import { PhoneShell, type PhoneShellProps } from '../renderer/components/phone/PhoneShell'
 import { RemoteGate } from '../renderer/components/remote/RemotePairing'
+import { AnimatedChatInput } from '../renderer/components/ui/animated-ai-chat'
 import { aktifDilAyarla, translations } from '../renderer/lib/i18n'
 import type { Conversation } from '../renderer/components/home/types'
 
@@ -50,7 +51,7 @@ function Harness(over: Partial<PhoneShellProps> & { onSelect?: (c: Conversation)
     <div className="app" data-phone="">
       <PhoneShell
         route={route}
-        conversations={CHATS}
+        conversations={over.conversations ?? CHATS}
         activeConvId={active}
         convStatus={{}}
         unknownGates={0}
@@ -60,21 +61,22 @@ function Harness(over: Partial<PhoneShellProps> & { onSelect?: (c: Conversation)
         selectConversation={(c) => { over.onSelect?.(c); setActive(c.id) }}
         createNewConversation={vi.fn()}
         session={null}
-        chat={{
-          thread: <div data-testid="thread">thread</div>,
-          composer: <textarea aria-label="composer" />,
-          contextUsage: { percent: 42, message_count: 3 } as any,
-          menu: {
-            models: { local: [], cloud: [], subscription: [] }, currentModel: { provider_type: 'subscription', model_name: 'x' },
-            effortLevels: null, thinkingLevel: 'auto', onEffortChanged: vi.fn(), mode: 'step',
-            loading: false, isCompacting: false, onCompact: vi.fn(), onStop: vi.fn(),
-          },
-        }}
+        chat={Harness.defaultChat}
         {...over}
       />
     </div>
   )
 }
+Harness.defaultChat = {
+  thread: <div data-testid="thread">thread</div>,
+  composer: <textarea aria-label="composer" />,
+  contextUsage: { percent: 42, message_count: 3 } as any,
+  menu: {
+    models: { local: [], cloud: [], subscription: [] }, currentModel: { provider_type: 'subscription', model_name: 'x' },
+    effortLevels: null, thinkingLevel: 'auto', onEffortChanged: vi.fn(), mode: 'step',
+    loading: false, isCompacting: false, onCompact: vi.fn(), onStop: vi.fn(),
+  },
+} as PhoneShellProps['chat']
 
 describe('phone mode is only the remote page at phone width', () => {
   it('remote + narrow: on; remote + wide: off; the desktop (not a remote page): off at any width', () => {
@@ -128,10 +130,13 @@ describe('list -> chat -> Back -> list', () => {
     render(<Harness />)
     fireEvent.click(screen.getByTestId('phone-row-1'))
     fireEvent.click(screen.getByRole('tab', { name: tr['phone.tabScreen'] }))
-    expect(screen.queryByTestId('thread')).toBeNull()
+    // The chat stays mounted under the Ekran tab (its draft and scroll position live there), only hidden.
+    expect(screen.getByTestId('thread').closest('[hidden]')).not.toBeNull()
+    expect(screen.getByTestId('phone-composer').hasAttribute('hidden')).toBe(true)
     expect(await screen.findByText(tr['cu.live.off'])).toBeTruthy()
     fireEvent.click(screen.getByRole('tab', { name: tr['phone.tabChat'] }))
-    expect(screen.getByTestId('thread')).toBeTruthy()
+    expect(screen.getByTestId('thread').closest('[hidden]')).toBeNull()
+    expect(screen.getByTestId('phone-composer').hasAttribute('hidden')).toBe(false)
     expect(screen.getByTestId('phone-memory').textContent).toBe(`${tr['strip.memory']} %42`)
   })
 })
@@ -205,5 +210,97 @@ describe('connection: the line replaces the fixed banner only while the phone sh
   it('connected reads "● Bağlı"', () => {
     render(<Harness session={session('ready', null)} />)
     expect(screen.getByTestId('phone-conn').textContent).toBe(tr['phone.connected'])
+  })
+})
+
+// The real composer (AnimatedChatInput keeps what is typed in its own state) inside the shell.
+function DraftHarness({ ids = [1, 2] }: { ids?: number[] }) {
+  const route = usePhoneRoute()
+  const [active, setActive] = React.useState<number | null>(null)
+  const [v, setV] = React.useState('')
+  const chats = ids.map(id => conv(id, `Sohbet ${id}`))
+  return (
+    <PhoneShell route={route} conversations={chats} activeConvId={active} convStatus={{}} unknownGates={0} projectName="P"
+      onSwitchProject={vi.fn()} onOpenSettings={vi.fn()} selectConversation={(c) => setActive(c.id)} createNewConversation={vi.fn()} session={null}
+      chat={{
+        ...Harness.defaultChat,
+        composer: <AnimatedChatInput value={v} setValue={setV} onSendMessage={vi.fn()} isLoading={false} currentChatId={active} />,
+      }} />
+  )
+}
+const box = () => document.querySelector('textarea') as HTMLTextAreaElement
+
+describe('the composer draft', () => {
+  it('survives Sohbet -> Ekran -> Sohbet', () => {
+    vi.stubGlobal('ipc', { invoke: vi.fn(async () => ({ error: 'x' })), on: vi.fn(() => () => {}) })
+    render(<DraftHarness />)
+    fireEvent.click(screen.getByTestId('phone-row-1'))
+    fireEvent.change(box(), { target: { value: 'yarim kalan mesaj' } })
+    fireEvent.click(screen.getByRole('tab', { name: tr['phone.tabScreen'] }))
+    fireEvent.click(screen.getByRole('tab', { name: tr['phone.tabChat'] }))
+    expect(box().value).toBe('yarim kalan mesaj')
+  })
+
+  it('survives Back to the list and reopening, and stays with its own chat', async () => {
+    render(<DraftHarness />)
+    fireEvent.click(screen.getByTestId('phone-row-1'))
+    fireEvent.change(box(), { target: { value: 'birinci taslak' } })
+    fireEvent.click(screen.getByRole('button', { name: tr['phone.back'] }))
+    await waitFor(() => expect(screen.getByTestId('phone-row-1')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('phone-row-2'))
+    expect(box().value).toBe('')
+    fireEvent.change(box(), { target: { value: 'ikinci taslak' } })
+    fireEvent.click(screen.getByRole('button', { name: tr['phone.back'] }))
+    await waitFor(() => expect(screen.getByTestId('phone-row-1')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('phone-row-1'))
+    expect(box().value).toBe('birinci taslak')
+    fireEvent.click(screen.getByRole('button', { name: tr['phone.back'] }))
+    await waitFor(() => expect(screen.getByTestId('phone-row-2')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('phone-row-2'))
+    expect(box().value).toBe('ikinci taslak')
+  })
+})
+
+describe('the waiting bar with a request of no chat', () => {
+  it('with no chat at all, opens the chat screen where the tray shows', () => {
+    render(<Harness conversations={[]} unknownGates={1} chat={{ ...Harness.defaultChat, tray: <div data-testid="tray">istek</div> }} />)
+    fireEvent.click(screen.getByTestId('phone-awaiting'))
+    expect(screen.getByTestId('tray')).toBeTruthy()
+    expect(screen.getByTestId('thread')).toBeTruthy()
+  })
+})
+
+describe('+ Yeni', () => {
+  it('waits for the new chat: the list stays (busy) until it exists, then the chat opens', async () => {
+    let done!: (id: number | null) => void
+    const create = vi.fn(() => new Promise<number | null>(r => { done = r }))
+    render(<Harness createNewConversation={create} />)
+    fireEvent.click(screen.getByTestId('phone-new-chat'))
+    expect(create).toHaveBeenCalledTimes(1)
+    expect(screen.queryByTestId('phone-menu')).toBeNull()
+    expect(screen.getByTestId('phone-new-chat').hasAttribute('disabled')).toBe(true)
+    expect(screen.getByTestId('phone-new-chat').textContent).toBe(tr['phone.creating'])
+    await act(async () => { done(9) })
+    expect(screen.getByTestId('phone-menu')).toBeTruthy()
+  })
+
+  it('a chat that could not be created leaves the user on the list', async () => {
+    render(<Harness createNewConversation={() => Promise.resolve(null)} />)
+    fireEvent.click(screen.getByTestId('phone-new-chat'))
+    await waitFor(() => expect(screen.getByTestId('phone-new-chat').hasAttribute('disabled')).toBe(false))
+    expect(screen.queryByTestId('phone-menu')).toBeNull()
+  })
+})
+
+describe('the connection while a full-screen page covers the shell', () => {
+  it('the banner is drawn for Settings and steps aside again with the shell', () => {
+    const s = {
+      view: { screen: 'app', paired: true, pairStep: 'idle', sas: null, message: null, connection: 'offline', lastSeen: null, rejectReason: null },
+      subscribe: () => () => {}, onUnavailable: () => () => {}, start: async () => {},
+    } as any
+    const { container, rerender } = render(<RemoteGate session={s}><Harness session={s} covered /></RemoteGate>)
+    expect(container.querySelector('.gm-remote-banner')?.textContent).toBe(tr['remoteWeb.offline'])
+    rerender(<RemoteGate session={s}><Harness session={s} /></RemoteGate>)
+    expect(container.querySelector('.gm-remote-banner')).toBeNull()
   })
 })

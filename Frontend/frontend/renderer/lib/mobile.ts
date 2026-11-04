@@ -111,13 +111,29 @@ let shells = 0;
 const shellListeners = new Set<() => void>();
 const subscribeShells = (cb: () => void) => { shellListeners.add(cb); return () => { shellListeners.delete(cb); }; };
 
-/** Marks a mounted phone shell (components/phone/PhoneShell.tsx). */
-export function useMarkPhoneShell(): void {
+/**
+ * Marks a phone shell that is drawn (components/phone/PhoneShell.tsx). `shown` is false while a
+ * full-screen page (settings, profile, guide) covers it: the banner then says the PC is away.
+ */
+export function useMarkPhoneShell(shown = true): void {
   useEffect(() => {
+    if (!shown) return;
     shells += 1;
     shellListeners.forEach(l => l());
     return () => { shells -= 1; shellListeners.forEach(l => l()); };
+  }, [shown]);
+}
+
+/** False while the page is hidden (phone locked, another app in front); true where there is no document state. */
+export function usePageVisible(): boolean {
+  const [visible, setVisible] = useState(() => typeof document === 'undefined' || document.visibilityState !== 'hidden');
+  useEffect(() => {
+    const update = () => setVisible(document.visibilityState !== 'hidden');
+    update();
+    document.addEventListener('visibilitychange', update);
+    return () => document.removeEventListener('visibilitychange', update);
   }, []);
+  return visible;
 }
 
 /** True while a phone shell is on screen. */

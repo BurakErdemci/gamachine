@@ -1097,15 +1097,35 @@ export default function Home() {
     return (
       <LangContext.Provider value={langCtxValue}>
       <div className="app" data-phone="" data-model={modelFamily(ai.aiConfig?.model_name, ai.effectiveProvider)}
-        // Settings stay reachable (the list's gear) and take the whole screen, as on the desktop.
-        data-screen={ai.showSettings ? 'ayarlar' : undefined}>
+        // Settings, the profile and the guide stay reachable (the list's gear, Settings) and take the
+        // whole screen, as on the desktop.
+        data-screen={ai.showSettings ? 'ayarlar' : profileOpen ? 'profil' : guide.guideOpen ? 'rehber' : undefined}>
         <Head>
           <title>{displayName(me.name) ? `Gamachine | ${displayName(me.name)}` : 'Gamachine'}</title>
           <style>{globalStyles}</style>
         </Head>
         {settingsScreen}
+        <ProfileView
+          open={profileOpen} onClose={closeProfile}
+          data={profileStats.data} range={profileStats.range} onRangeChange={profileStats.setRange}
+          loading={profileStats.loading} failed={profileStats.failed} onRetry={() => { void profileStats.refresh(); }}
+          userName={me.name}
+        />
+        <GuideScreen
+          open={guide.guideOpen && !ai.showSettings && !profileOpen}
+          topics={guide.topics} query={guide.query} onQuery={guide.setQuery}
+          isSeen={guide.isSeen} isNew={guide.isNew} coreSteps={guide.coreSteps}
+          onPlay={id => guide.playTopic(id)} onTour={() => guide.openTour(1)} onClose={closeGuide}
+          focusTopic={guide.focusTopic} onFocused={guide.clearFocusTopic}
+        />
+        <ExportModal
+          exportModal={fs.exportModal} exportFileName={fs.exportFileName} workspacePath={fs.workspacePath}
+          onFileNameChange={fs.setExportFileName} onClose={() => fs.setExportModal(null)}
+          onChangeExportDir={fs.changeExportDir} onExportSingleFile={fs.exportSingleFile} onExportMultipleFiles={fs.exportMultipleFiles}
+        />
         <PhoneShell
           route={phoneRoute}
+          covered={ai.showSettings || profileOpen || guide.guideOpen}
           conversations={chat.conversations} activeConvId={chat.activeConvId} convStatus={chat.convStatus}
           unknownGates={mcp.unknownGates.length}
           projectName={projectName}
@@ -1130,6 +1150,16 @@ export default function Home() {
             },
           }}
         />
+        <ImportSessionDialog
+          open={importOpen} onClose={() => setImportOpen(false)} onImported={onSessionImported}
+          API={API || ''} token={auth.user?.sessionToken ?? ''} currentPath={fs.workspacePath}
+        />
+        {guide.tour && (
+          <GuideTour
+            tour={guide.tour} approvalMode={chat.generationMode}
+            onNext={guide.next} onBack={guide.back} onSkip={guide.skip} onNameDraft={guide.setNameDraft}
+          />
+        )}
         <ToastContainer toasts={toasts} onDismiss={dismissToast} />
       </div>
       </LangContext.Provider>

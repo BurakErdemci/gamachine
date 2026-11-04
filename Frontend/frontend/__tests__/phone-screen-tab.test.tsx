@@ -86,4 +86,32 @@ describe('PhoneScreenTab', () => {
     expect(screen.getByText(tr['cu.live.offHint'])).toBeTruthy()
     expect(invoke.mock.calls.some(([c, r]) => c === 'computer-use-live' && r?.op === 'panel-visible')).toBe(false)
   })
+
+  it('a hidden page (phone locked, app switched) stops the capture, and the page coming back starts it again', async () => {
+    const seen = () => invoke.mock.calls.filter(([c, r]) => c === 'computer-use-live' && r?.op === 'panel-visible').map(([, r]) => r.visible)
+    let state: DocumentVisibilityState = 'visible'
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => state })
+    try {
+      render(<PhoneScreenTab visible />)
+      await waitFor(() => expect(seen()).toEqual([true]))
+      state = 'hidden'
+      await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
+      await waitFor(() => expect(seen()).toEqual([true, false]))
+      state = 'visible'
+      await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
+      await waitFor(() => expect(seen()).toEqual([true, false, true]))
+    } finally {
+      delete (document as any).visibilityState
+    }
+  })
+
+  it('the link to the PC coming back says "visible" again (the PC may have restarted and forgotten)', async () => {
+    const seen = () => invoke.mock.calls.filter(([c, r]) => c === 'computer-use-live' && r?.op === 'panel-visible').map(([, r]) => r.visible)
+    const { rerender } = render(<PhoneScreenTab visible connected />)
+    await waitFor(() => expect(seen()).toEqual([true]))
+    rerender(<PhoneScreenTab visible connected={false} />)
+    expect(seen()).toEqual([true])
+    rerender(<PhoneScreenTab visible connected />)
+    await waitFor(() => expect(seen()).toEqual([true, true]))
+  })
 })

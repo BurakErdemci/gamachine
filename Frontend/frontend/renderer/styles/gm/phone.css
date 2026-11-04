@@ -16,7 +16,17 @@
   flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column;
   padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-area-inset-right, 0px);
 }
-.app[data-phone][data-screen="ayarlar"] > .phone-shell { display: none; }
+.app[data-phone]:is([data-screen="ayarlar"], [data-screen="profil"], [data-screen="rehber"]) > .phone-shell { display: none; }
+
+/* Profile and guide (Settings > Account / Guide): the same full-screen pages, one column under the safe area. */
+.app[data-phone] > :is(.profile, .guide) {
+  flex: 1; min-height: 0; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.app[data-phone] .pf-wrap { padding: 12px 16px 32px; }
+.app[data-phone] .gd-wrap { padding: 16px 16px 32px; }
+.app[data-phone] .pf-back { min-height: 44px; }
+/* Hidden panels (the chat under the Ekran tab) stay out of the layout whatever their own display is. */
+.app[data-phone] .phone-chat [hidden] { display: none; }
 
 /* Settings (the list's gear): the same screen, one column, the page rail as a scrolling strip on top. */
 .app[data-phone] > .settings {
@@ -134,6 +144,16 @@
 .app[data-phone] .composer textarea { font-size: 16px; }
 .app[data-phone] .composer :is(.send, .icon-btn) { min-width: 44px; min-height: 44px; }
 .app[data-phone] .composer-pop { max-height: 45vh; overflow-y: auto; }
+/* Importing a Claude Code session reads the PC's own files; the remote may not ask for that, so the phone offers no button. */
+.app[data-phone] [data-testid="import-session-open"] { display: none; }
+/* The remove controls keep their small round look (the content box) inside a 44 px hit area; the attachment's
+   is always shown, a phone has no hover to reveal it. */
+.app[data-phone] .composer-chip-x {
+  box-sizing: border-box; width: 44px; height: 44px; margin: -13px; padding: 13px; background-clip: content-box;
+}
+.app[data-phone] .composer-att-x {
+  box-sizing: border-box; top: -18px; right: -18px; width: 44px; height: 44px; padding: 12px; background-clip: content-box; opacity: 1;
+}
 .app[data-phone] .phone-memory { margin: 4px 4px 2px; font-size: var(--fs-meta); color: var(--ink-faint); }
 
 /* Approve and reject: full-height buttons with clear air between them, so a thumb cannot hit the wrong one. */
