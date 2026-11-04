@@ -10,7 +10,7 @@ import asyncio
 import os
 import sys
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -378,3 +378,31 @@ def test_an_unticketed_wake_claim_starts_no_turn_and_stores_no_row(runner):
     assert runner.messages == []
     assert "wake_stale" in str(out)
     assert wake_queue.drain(1) == ["tasks_done|audit"]
+
+
+def test_a_stale_wake_keeps_an_owed_reply_and_a_detached_turn(runner):
+    """A stale wake starts no turn, so it must not settle what an earlier turn
+    still owes: the mail reply stays held and the detached turn keeps running
+    (blind audit C1, 4 Nov 2026)."""
+    from agentic import turn_replies
+    from routes.conversation_routes import create_conversation_router
+    turn_replies.clear()
+    router = create_conversation_router(_db(), MagicMock())
+    route = next(r for r in router.routes if getattr(r, "path", "") == "/chat-stream")
+    cells = dict(zip(route.endpoint.__code__.co_freevars,
+                     (c.cell_contents for c in route.endpoint.__closure__)))
+    owed, detached = cells["_reply_owed"], cells["_turn_reply_detached"]
+    turn_replies.begin(1, 55)
+    detached[1] = 55
+    owed[1] = {"senders": [7], "start_id": 0, "user_id": 1, "agent": "claude", "stopped": False}
+
+    async def go():
+        resp = await route.endpoint(
+            request=ChatRequest(conversation_id=1, message="x", user_id=1, origin="wake"),
+            x_session_token="t")
+        return [chunk async for chunk in resp.body_iterator]
+
+    assert "wake_stale" in str(asyncio.run(go()))
+    assert 1 in owed
+    assert (turn_replies.get(1, 55) or {}).get("state") != "ended"
+    turn_replies.clear()

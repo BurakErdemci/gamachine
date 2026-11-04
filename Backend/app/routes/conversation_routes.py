@@ -2184,11 +2184,6 @@ Max 300 kelime. Türkçe yaz.
 
         from agentic import wake_queue
 
-        # A reply still owed by an earlier turn of this chat (its stream went
-        # away and it never stored) is not this turn's to settle.
-        _reply_owed.pop(request.conversation_id, None)
-        _abandon_detached_turn_reply(request.conversation_id)
-
         ticketed_wake = request.origin == "wake" and wake_queue.consume_ticket(
             request.conversation_id)
         wake_notices = (wake_queue.take_ticket_notices(request.conversation_id)
@@ -2205,6 +2200,11 @@ Max 300 kelime. Türkçe yaz.
             return StreamingResponse(
                 localize_sse(_tag_sse_stream(_stale(), request.conversation_id), _stream_language(request, x_ui_lang)),
                 media_type="text/event-stream")
+        # A reply still owed by an earlier turn of this chat (its stream went
+        # away and it never stored) is not this turn's to settle. Only a turn
+        # that really starts settles it: a stale wake above starts none.
+        _reply_owed.pop(request.conversation_id, None)
+        _abandon_detached_turn_reply(request.conversation_id)
         # The text this turn runs on. A mail wake replaces it with the notes
         # from the DB: the client's text is never what gets delivered.
         turn_message = request.message
