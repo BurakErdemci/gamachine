@@ -14,7 +14,8 @@ import { ComputerLivePanel, useNow } from '../home/ComputerLivePanel';
 export function PhoneScreenTab({ visible: tabShown, connected = true }: { visible: boolean; connected?: boolean }) {
   const { t } = useLang();
   const features = useLiveFeatures();
-  const visible = tabShown && usePageVisible();
+  const pageVisible = usePageVisible();
+  const visible = tabShown && pageVisible;
   const [lastFrameAt, setLastFrameAt] = useState<number | null>(null);
   const onFrame = useCallback(() => setLastFrameAt(Date.now()), []);
   const now = useNow(visible && features.computer);

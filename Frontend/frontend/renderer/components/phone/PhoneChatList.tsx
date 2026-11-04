@@ -74,11 +74,14 @@ export function PhoneChatList(props: PhoneChatListProps) {
   const statusOf = (id: number) => familyStatusOf(conversations, convStatus, id);
   const activeRootId = familyRootId(conversations, activeConvId);
   const awaitingRoots = roots.filter(c => statusOf(c.id) === 'awaiting');
+  // The phone has no branch tabs: a family with a waiting branch opens that branch, where its card is.
+  const openTarget = (root: Conversation) =>
+    conversations.find(c => convStatus[c.id] === 'awaiting' && (c.id === root.id || c.parent_id === root.id)) ?? root;
   const awaiting = awaitingRoots.length + unknownGates;
   // The bar opens the first waiting chat; requests of no chat (McpUnknownTray) show above whichever chat is
   // open, so with no chat at all it opens the empty one.
   const openAwaiting = () => {
-    const first = awaitingRoots[0] ?? conversations.find(c => c.id === activeConvId) ?? roots[0];
+    const first = (awaitingRoots[0] && openTarget(awaitingRoots[0])) ?? conversations.find(c => c.id === activeConvId) ?? roots[0];
     if (first) onOpenChat(first); else props.onOpenRequests();
   };
   return (
@@ -110,7 +113,7 @@ export function PhoneChatList(props: PhoneChatListProps) {
           : (
             <ul className="phone-rows">
               {roots.map(c => (
-                <Row key={c.id} conv={c} status={statusOf(c.id)} active={c.id === activeRootId} onOpen={() => onOpenChat(c)} />
+                <Row key={c.id} conv={c} status={statusOf(c.id)} active={c.id === activeRootId} onOpen={() => onOpenChat(openTarget(c))} />
               ))}
             </ul>
           )}

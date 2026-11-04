@@ -11,6 +11,7 @@ vi.mock('axios', () => {
 })
 
 import { PhoneScreenTab } from '../renderer/components/phone/PhoneScreenTab'
+import { PhoneShell } from '../renderer/components/phone/PhoneShell'
 import { runRemoteIpc } from '../renderer/lib/remote/desktopRunner'
 import { aktifDilAyarla, translations } from '../renderer/lib/i18n'
 
@@ -113,5 +114,33 @@ describe('PhoneScreenTab', () => {
     expect(seen()).toEqual([true])
     rerender(<PhoneScreenTab visible connected />)
     await waitFor(() => expect(seen()).toEqual([true, true]))
+  })
+})
+
+describe('PhoneScreenTab covered or re-rendered', () => {
+  const seen = () => invoke.mock.calls.filter(([c, r]) => c === 'computer-use-live' && r?.op === 'panel-visible').map(([, r]) => r.visible)
+
+  it('visible can flip without breaking the hooks, and a hidden tab is not watched', async () => {
+    const { rerender } = render(<PhoneScreenTab visible={false} />)
+    rerender(<PhoneScreenTab visible />)
+    await waitFor(() => expect(seen().at(-1)).toBe(true))
+    rerender(<PhoneScreenTab visible={false} />)
+    await waitFor(() => expect(seen().at(-1)).toBe(false))
+  })
+
+  it('a full-screen page over the shell (Settings, Profile, Guide) stops the capture, and uncovering starts it again', async () => {
+    const route = { screen: 'chat', chatTab: 'screen', back: vi.fn(), setChatTab: vi.fn(), openChat: vi.fn() } as any
+    const props = {
+      route, conversations: [{ id: 1, title: 'A', created_at: '', updated_at: '', parent_id: null }], activeConvId: 1, convStatus: {},
+      unknownGates: 0, projectName: 'P', onSwitchProject: vi.fn(), onOpenSettings: vi.fn(), selectConversation: vi.fn(),
+      createNewConversation: vi.fn(), session: null,
+      chat: { thread: <div />, composer: <textarea />, menu: { models: { local: [], cloud: [], subscription: [] }, currentModel: { provider_type: 'x', model_name: 'y' }, effortLevels: null, thinkingLevel: 'auto', onEffortChanged: vi.fn(), mode: 'step', loading: false, isCompacting: false, onCompact: vi.fn(), onStop: vi.fn() } },
+    } as any
+    const { rerender } = render(<PhoneShell {...props} />)
+    await waitFor(() => expect(seen()).toEqual([true]))
+    rerender(<PhoneShell {...props} covered />)
+    await waitFor(() => expect(seen()).toEqual([true, false]))
+    rerender(<PhoneShell {...props} />)
+    await waitFor(() => expect(seen()).toEqual([true, false, true]))
   })
 })

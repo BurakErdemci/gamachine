@@ -151,9 +151,15 @@
 .app[data-phone] .composer-chip-x {
   box-sizing: border-box; width: 44px; height: 44px; margin: -13px; padding: 13px; background-clip: content-box;
 }
+/* The attachment's badge is painted by ::before (the desktop's 20 px circle); the button itself is only the 44 px hit
+   area, and the row keeps room above and right of the thumbnail so overflow-x:auto does not clip it. */
 .app[data-phone] .composer-att-x {
-  box-sizing: border-box; top: -18px; right: -18px; width: 44px; height: 44px; padding: 12px; background-clip: content-box; opacity: 1;
+  box-sizing: border-box; top: -18px; right: -18px; width: 44px; height: 44px; padding: 12px; background: transparent; opacity: 1; isolation: isolate;
 }
+.app[data-phone] .composer-att-x::before {
+  content: ''; position: absolute; inset: 12px; z-index: -1; border-radius: 50%; background: var(--btn-bg);
+}
+.app[data-phone] .composer-atts { padding: 18px 18px 2px 2px; }
 .app[data-phone] .phone-memory { margin: 4px 4px 2px; font-size: var(--fs-meta); color: var(--ink-faint); }
 
 /* Approve and reject: full-height buttons with clear air between them, so a thumb cannot hit the wrong one. */

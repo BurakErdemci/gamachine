@@ -54,6 +54,13 @@ describe('phone.css', () => {
       expect(Number(/(?:^|[;\s])height:\s*(\d+)px/.exec(body)?.[1]), s).toBeGreaterThanOrEqual(44)
     }
     expect(ruleFor('.app[data-phone] .composer-att-x')?.body).toMatch(/opacity:\s*1/)
+    // The attachment's badge keeps the desktop's round look: the 44 px button paints nothing, a ::before circle does,
+    // and the row leaves room above and right of the thumbnail so the hit area is not clipped.
+    expect(ruleFor('.app[data-phone] .composer-att-x')?.body).toMatch(/background:\s*transparent/)
+    expect(ruleFor('.app[data-phone] .composer-att-x::before')?.body).toMatch(/border-radius:\s*50%/)
+    const atts = /padding:\s*(\d+)px\s+(\d+)px\s+\d+px\s+\d+px/.exec(ruleFor('.app[data-phone] .composer-atts')?.body ?? '')
+    expect(Number(atts?.[1])).toBeGreaterThanOrEqual(18)
+    expect(Number(atts?.[2])).toBeGreaterThanOrEqual(18)
     for (const side of ['top', 'bottom', 'left', 'right']) expect(css).toContain(`env(safe-area-inset-${side}`)
     // The composer rides the keyboard inset that PhoneChatScreen sets.
     expect(ruleFor('.app[data-phone] .phone-composer.composer-wrap')?.body).toContain('var(--phone-kb')

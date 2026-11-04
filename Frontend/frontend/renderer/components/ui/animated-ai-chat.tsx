@@ -156,7 +156,9 @@ export function AnimatedChatInput({
     // Typing state is INTERNAL — does not propagate to parent on every keystroke.
     const drafts = useContext(ComposerDraftContext);
     const draftKey = String(currentChatId ?? 'new');
-    const [internalValue, setInternalValue] = useState(() => drafts?.get(draftKey)?.text ?? value);
+    // With a draft store the box starts from its chat's own draft: the shared `value` may hold text
+    // set from another chat (a mention, a skill, dictation).
+    const [internalValue, setInternalValue] = useState(() => drafts ? drafts.get(draftKey)?.text ?? '' : value);
     const [attachments, setAttachments] = useState<ComposerAttachment[]>(() => drafts?.get(draftKey)?.attachments ?? []);
     const { t, lang } = useLang();
     const chips = useBrowserChips(currentChatId);
@@ -509,21 +511,18 @@ export function AnimatedChatInput({
             setInternalValue(value);
         }
     }, [value]);
-    // The box's draft follows its chat: saved when the chat changes or the box goes away, loaded for the new chat.
-    const latestDraft = useRef<ComposerDraft>({ text: internalValue, attachments });
-    latestDraft.current = { text: internalValue, attachments };
+    // The box's draft follows its chat: every change of the text or the attachments is stored under the
+    // chat it was made in, whatever its source (typing, a mention, a skill, dictation); a chat change loads the new chat's.
     const loadedKey = useRef(draftKey);
     useEffect(() => {
-        if (!drafts) return;
-        if (loadedKey.current !== draftKey) {
-            loadedKey.current = draftKey;
-            setInternalValue(drafts.get(draftKey)?.text ?? '');
-            setAttachments(drafts.get(draftKey)?.attachments ?? []);
-        }
-        return () => {
-            const d = latestDraft.current;
-            if (d.text || d.attachments.length > 0) drafts.set(draftKey, d); else drafts.delete(draftKey);
-        };
+        if (!drafts || loadedKey.current !== draftKey) return;
+        if (internalValue || attachments.length > 0) drafts.set(draftKey, { text: internalValue, attachments }); else drafts.delete(draftKey);
+    }, [drafts, draftKey, internalValue, attachments]);
+    useEffect(() => {
+        if (!drafts || loadedKey.current === draftKey) return;
+        loadedKey.current = draftKey;
+        setInternalValue(drafts.get(draftKey)?.text ?? '');
+        setAttachments(drafts.get(draftKey)?.attachments ?? []);
     }, [drafts, draftKey]);
     // Text set from outside (a welcome card, a reset) never passes through onChange, so the box
     // is sized here once React has written it; without this a card's prompt stayed one line high.

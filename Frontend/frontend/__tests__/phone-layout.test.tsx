@@ -214,7 +214,7 @@ describe('connection: the line replaces the fixed banner only while the phone sh
 })
 
 // The real composer (AnimatedChatInput keeps what is typed in its own state) inside the shell.
-function DraftHarness({ ids = [1, 2] }: { ids?: number[] }) {
+function DraftHarness({ ids = [1, 2], mentions = false }: { ids?: number[]; mentions?: boolean }) {
   const route = usePhoneRoute()
   const [active, setActive] = React.useState<number | null>(null)
   const [v, setV] = React.useState('')
@@ -224,7 +224,7 @@ function DraftHarness({ ids = [1, 2] }: { ids?: number[] }) {
       onSwitchProject={vi.fn()} onOpenSettings={vi.fn()} selectConversation={(c) => setActive(c.id)} createNewConversation={vi.fn()} session={null}
       chat={{
         ...Harness.defaultChat,
-        composer: <AnimatedChatInput value={v} setValue={setV} onSendMessage={vi.fn()} isLoading={false} currentChatId={active} />,
+        composer: <AnimatedChatInput value={v} setValue={setV} onSendMessage={vi.fn()} isLoading={false} currentChatId={active} chats={mentions ? chats : undefined} />,
       }} />
   )
 }
@@ -302,5 +302,60 @@ describe('the connection while a full-screen page covers the shell', () => {
     expect(container.querySelector('.gm-remote-banner')?.textContent).toBe(tr['remoteWeb.offline'])
     rerender(<RemoteGate session={s}><Harness session={s} /></RemoteGate>)
     expect(container.querySelector('.gm-remote-banner')).toBeNull()
+  })
+})
+
+describe('the waiting bar with a waiting branch', () => {
+  const FAMILY = [conv(1, 'Kök'), conv(5, 'Dal', { parent_id: 1 })]
+
+  it('opens the branch that is waiting, not its root, and a row of that family opens it too', async () => {
+    const onSelect = vi.fn()
+    render(<Harness onSelect={onSelect} conversations={FAMILY} convStatus={{ 5: 'awaiting' }} />)
+    expect(screen.getByTestId('phone-awaiting').textContent).toBe('⚠ 1 onay bekliyor')
+    fireEvent.click(screen.getByTestId('phone-awaiting'))
+    expect(onSelect).toHaveBeenLastCalledWith(FAMILY[1])
+    fireEvent.click(screen.getByRole('button', { name: tr['phone.back'] }))
+    await waitFor(() => expect(screen.getByTestId('phone-row-1')).toBeTruthy())
+    onSelect.mockClear()
+    fireEvent.click(screen.getByTestId('phone-row-1'))
+    expect(onSelect).toHaveBeenLastCalledWith(FAMILY[1])
+  })
+
+  it("the chat screen's title is the branch's own", () => {
+    render(<Harness conversations={FAMILY} convStatus={{ 5: 'awaiting' }} />)
+    fireEvent.click(screen.getByTestId('phone-awaiting'))
+    expect(screen.getByRole('region', { name: 'Dal' })).toBeTruthy()
+  })
+})
+
+describe('the Sohbet tab shown again after the Ekran tab', () => {
+  it('tells the page once, and only when coming back from Ekran', () => {
+    vi.stubGlobal('ipc', { invoke: vi.fn(async () => ({ error: 'x' })), on: vi.fn(() => () => {}) })
+    const onThreadShown = vi.fn()
+    render(<Harness chat={{ ...Harness.defaultChat, onThreadShown }} />)
+    fireEvent.click(screen.getByTestId('phone-row-1'))
+    expect(onThreadShown).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('tab', { name: tr['phone.tabScreen'] }))
+    expect(onThreadShown).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('tab', { name: tr['phone.tabChat'] }))
+    expect(onThreadShown).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('the composer draft set from outside the typing path', () => {
+  it('a picked @mention stays with its chat: the next chat is empty, the first one has it back', async () => {
+    render(<DraftHarness mentions />)
+    fireEvent.click(screen.getByTestId('phone-row-1'))
+    fireEvent.change(box(), { target: { value: '@' } })
+    fireEvent.click(await screen.findByTestId('mention-option-2'))
+    expect(box().value).toBe('@2 ')
+    fireEvent.click(screen.getByRole('button', { name: tr['phone.back'] }))
+    await waitFor(() => expect(screen.getByTestId('phone-row-2')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('phone-row-2'))
+    expect(box().value).toBe('')
+    fireEvent.click(screen.getByRole('button', { name: tr['phone.back'] }))
+    await waitFor(() => expect(screen.getByTestId('phone-row-1')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('phone-row-1'))
+    expect(box().value).toBe('@2 ')
   })
 })

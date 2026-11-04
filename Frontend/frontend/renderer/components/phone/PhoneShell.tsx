@@ -52,7 +52,7 @@ export interface PhoneShellProps {
   createNewConversation: () => unknown;
   /** A full-screen page (settings, profile, guide) is drawn over the shell. */
   covered?: boolean;
-  chat: Pick<PhoneChatScreenProps, 'thread' | 'tray' | 'composer' | 'contextUsage' | 'menu'>;
+  chat: Pick<PhoneChatScreenProps, 'thread' | 'tray' | 'composer' | 'contextUsage' | 'menu' | 'onThreadShown'>;
   /** Tests pass a fake; the page reads the running remote session. */
   session?: SessionLike | null;
 }
@@ -92,6 +92,7 @@ export function PhoneShell(props: PhoneShellProps) {
           {...props.chat}
           connection={line}
           connected={conn.connection === 'ready'}
+          covered={props.covered}
           title={active?.title || t('phone.newChatAria')}
           status={activeConvId == null ? undefined : convStatus[activeConvId]}
           convId={activeConvId}

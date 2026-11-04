@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useLang } from '../../lib/i18n';
 import { useVisualViewportInset, type PhoneChatTab } from '../../lib/mobile';
 import { stripBidi } from '../../lib/modelText';
@@ -24,6 +24,10 @@ export interface PhoneChatScreenProps {
   /** The desktop's composer (AnimatedChatInput). */
   composer: React.ReactNode;
   contextUsage?: ContextUsage | null;
+  /** A full-screen page (settings, profile, guide) is drawn over the shell: the Ekran tab is not watched then. */
+  covered?: boolean;
+  /** The Sohbet tab is shown again after the Ekran tab (the hidden thread may have grown meanwhile). */
+  onThreadShown?: () => void;
   menu: Omit<PhoneMenuSheetProps, 'open' | 'onClose' | 'convId'>;
 }
 
@@ -37,6 +41,11 @@ export function PhoneChatScreen(props: PhoneChatScreenProps) {
   const memory = contextUsage
     ? `${t('strip.memory')} ${t('strip.pct', { yuzde: contextUsage.percent })}`
     : `${t('strip.memory')}: ${t('usage.noData')}`;
+  const prevTab = useRef(tab);
+  useEffect(() => {
+    if (tab === 'chat' && prevTab.current !== 'chat') props.onThreadShown?.();
+    prevTab.current = tab;
+  }, [tab]);
   const tabBtn = (id: PhoneChatTab, label: string) => (
     <button type="button" role="tab" id={`phone-tab-${id}`} aria-selected={tab === id} aria-controls={`phone-panel-${id}`}
       className="phone-tab" onClick={() => onTab(id)}>{label}</button>
@@ -68,7 +77,7 @@ export function PhoneChatScreen(props: PhoneChatScreenProps) {
       </div>
       {tab === 'screen' && (
         <div className="phone-thread" id="phone-panel-screen" role="tabpanel" aria-labelledby="phone-tab-screen">
-          <PhoneScreenTab visible connected={props.connected} />
+          <PhoneScreenTab visible={!props.covered} connected={props.connected} />
         </div>
       )}
       <PhoneMenuSheet {...props.menu} convId={convId} open={menuOpen} onClose={() => setMenuOpen(false)} />

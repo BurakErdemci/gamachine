@@ -1136,6 +1136,8 @@ export default function Home() {
           chat={{
             thread: threadWrap(<ChatPanel {...chatPanelProps} mcpWorkspaceCheckPending={mcp.gateWorkspaceCheckPending} />), tray: <McpUnknownTray {...unknownTrayProps} />,
             composer, contextUsage: chat.contextUsage,
+            // Back from the Ekran tab: follow the stream if the user was at the bottom, else offer the jump.
+            onThreadShown: () => { if (chatScroll.isPinned) chatScroll.scrollToBottom('auto'); else setHasUnreadBelow(true); },
             menu: {
               models: ai.availableModels,
               currentModel: { provider_type: ai.aiConfig.provider_type, model_name: ai.aiConfig.model_name },
