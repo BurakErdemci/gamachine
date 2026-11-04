@@ -272,6 +272,8 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"[Startup] Yan sohbet temizliği atlandı: {e}")
     side_sweeper = asyncio.create_task(_side_sweep_loop())
+    from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
+    mcp_supervisor = asyncio.create_task(unity_mcp_manager.supervise_loop())
 
     # Remote control reconnects on its own if it was on; off means no traffic.
     try:
@@ -302,6 +304,12 @@ async def lifespan(app: FastAPI):
     side_sweeper.cancel()
     try:
         await side_sweeper
+    except BaseException:
+        pass
+
+    mcp_supervisor.cancel()
+    try:
+        await mcp_supervisor
     except BaseException:
         pass
 

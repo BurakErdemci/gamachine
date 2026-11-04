@@ -31,6 +31,18 @@ _PACKAGE_NAME = "com.coplaydev.unity-mcp"
 # Written by every Gamachine before 2 Nov 2026 as the first line of Assets/Editor/UnityArchitectAIMCPSetup.cs.
 _LEGACY_SCRIPT_HEADER = "// Gamachine — MCP bağlantı yapılandırması"
 _EXCLUDE_MARKER = "# Gamachine (local, not committed)"
+# Self-healing: a dead server is restarted at most _RESTART_CAP times per _RESTART_WINDOW_S.
+_SUPERVISE_INTERVAL_S = 10
+_HEALTH_FAILS_TO_RESTART = 3
+_RESTART_CAP = 3
+_RESTART_WINDOW_S = 600
+_STARTUP_GRACE_S = 120  # uvx may be installing; health failures do not count yet
+_GAVE_UP_MESSAGE = "Unity bağlantı sunucusu tekrar tekrar kapandı; Unity MCP'yi kapatıp açın."
+
+
+def _server_log_path() -> str:
+    # Writable user dir: project_root may be a write-protected Program Files in the packaged app.
+    return os.path.join(os.path.expanduser("~"), ".unity_architect_ai", "unity_mcp_server.log")
 
 
 class _ManifestChanged(Exception):
@@ -266,6 +278,11 @@ class UnityMCPManager:
         # gösterilecek metin buradan geliyor; sadece "başlatılamadı" demek
         # kullanıcıyı çözümsüz bırakıyordu.
         self.last_error: Optional[str] = None
+        # Supervision state (see supervise_once). `enabled` is the "user wants it on" flag.
+        self._health_fails = 0
+        self._restart_times: list[float] = []
+        self._gave_up = False
+        self._started_at = float("-inf")
         # Why install_package last returned False (shown to the user by the toggle route).
         self.last_install_error: Optional[str] = None
         # Windows dialog probe (unity-mcp/Server/src/transport/unity_dialog_probe.py), loaded once.
@@ -628,9 +645,8 @@ class UnityMCPManager:
         # Log yazılabilir kullanıcı dizinine — project_root paketlenmiş app'te
         # Program Files'ı gösterebilir (yazma korumalı → PermissionError → start_server
         # patlıyordu). DB/app_data ile aynı kök.
-        log_dir = os.path.join(os.path.expanduser("~"), ".unity_architect_ai")
-        os.makedirs(log_dir, exist_ok=True)
-        log_path = os.path.join(log_dir, "unity_mcp_server.log")
+        log_path = _server_log_path()
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
         try:
             log_file = open(log_path, "a", encoding="utf-8")
             # /api/command Unity Editor'de keyfi C# çalıştırabiliyor (execute_code) ve
@@ -686,6 +702,8 @@ class UnityMCPManager:
             )
             logger.info(f"[UnityMCP] Sunucu başlatıldı (PID: {self.process.pid}, port: {self.mcp_port})")
             self._starting = False
+            self._started_at = time.monotonic()
+            self._health_fails = 0
             # Cache'de bu porta ait eski bir kimlik ölçümü kalmış olabilir
             # (ör. az önceki "yabancı" kararı). 2 sn boyunca ona güvenmek
             # başlattığımız sunucuyu "yabancı" göstermek demek.
@@ -761,6 +779,78 @@ class UnityMCPManager:
                 self.reset_autoconnect_off(workspace_path)
         except Exception as e:
             logger.debug("[UnityMCP] Autoconnect cleanup skipped: %s", e)
+
+    # ─── Supervision ─────────────────────────────────────────────────────────
+
+    def reset_supervision(self) -> None:
+        """A user toggle starts the restart budget over."""
+        self._restart_times.clear()
+        self._health_fails = 0
+        self._gave_up = False
+
+    @staticmethod
+    def _log_tail(lines: int = 20) -> str:
+        try:
+            with open(_server_log_path(), "r", encoding="utf-8", errors="replace") as f:
+                return "".join(f.readlines()[-lines:]).rstrip()
+        except OSError as e:
+            return f"(log unreadable: {e})"
+
+    async def supervise_loop(self) -> None:
+        while True:
+            await asyncio.sleep(_SUPERVISE_INTERVAL_S)
+            try:
+                await self.supervise_once()
+            except Exception:
+                logger.warning("[UnityMCP] Supervision pass failed.", exc_info=True)
+
+    async def supervise_once(self) -> None:
+        """One supervision pass: restart our server if the user wants it on and it died.
+
+        Dead = our uvx process exited, or /health failed _HEALTH_FAILS_TO_RESTART passes in a row.
+        A user stop clears `enabled`, so it never restarts; a foreign process on the port is left alone.
+        """
+        if not self.enabled or self._starting or self._gave_up or self.process is None:
+            return
+        exit_code = self.process.poll()
+        if exit_code is None:
+            if await self.check_health():
+                self._health_fails = 0
+                return
+            if time.monotonic() - self._started_at < _STARTUP_GRACE_S:
+                return
+            self._health_fails += 1
+            if self._health_fails < _HEALTH_FAILS_TO_RESTART:
+                return
+            reason = f"/health failed {self._health_fails} checks in a row (process still alive)"
+        else:
+            reason = f"process exited with code {exit_code}"
+            occupant = await asyncio.to_thread(self.port_occupant)
+            if occupant.identity == ServerIdentity.FOREIGN:
+                return
+            if occupant.identity == ServerIdentity.OURS and await self.check_health():
+                return  # the uvx wrapper is gone but the server it started still answers
+
+        async with self.mcp_lock:
+            # A toggle may have run while we waited for the lock.
+            if not self.enabled or self._starting or self._gave_up or self.process is None:
+                return
+            now = time.monotonic()
+            self._restart_times = [t for t in self._restart_times if now - t < _RESTART_WINDOW_S]
+            if len(self._restart_times) >= _RESTART_CAP:
+                self._gave_up = True
+                self.last_error = _GAVE_UP_MESSAGE
+                logger.error(f"[UnityMCP] Server died again ({reason}); {_RESTART_CAP} restarts within "
+                             f"{_RESTART_WINDOW_S // 60} min used up, not restarting.")
+                return
+            self._restart_times.append(now)
+            logger.warning(f"[UnityMCP] Server is dead: {reason}. Restart {len(self._restart_times)}/{_RESTART_CAP}. "
+                           f"Last log lines:\n{self._log_tail()}")
+            await asyncio.to_thread(self.stop_server)
+            if await asyncio.to_thread(self.start_server):
+                logger.info("[UnityMCP] Server restarted.")
+            else:
+                logger.error(f"[UnityMCP] Restart failed: {self.last_error}")
 
     # ─── Health & Status ─────────────────────────────────────────────────────
 
@@ -926,6 +1016,10 @@ class UnityMCPManager:
         """
         if not self.is_running():
             occupant = self.port_occupant()
+            if self.enabled and self._gave_up:
+                # The renderer shows `reason` for "blocked": the only state that carries a user-facing message.
+                return {"status": UnityMCPStatus.BLOCKED, "pid": None, "port": self.mcp_port,
+                        "instances": [], "reason": self.last_error}
             if occupant.identity == ServerIdentity.FOREIGN:
                 return {
                     "status": UnityMCPStatus.BLOCKED,

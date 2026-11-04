@@ -164,6 +164,12 @@ The tools in this fork are continuously improved based on feedback from real ove
 
 With one Editor open, every call goes to it automatically. If more than one project is open, name the target on each call with `unity_instance="Name@hash"` (from the `mcpforunity://instances` resource), or fix it for a whole connection with `?instance=Name@hash` on the MCP URL or an `X-Unity-Instance` header. Without one of these the call is refused. `set_active_instance` no longer pins a selection: it only checks an identifier and says how to route to it.
 
+### Recovering from a dead server
+
+While Unity MCP is on, the backend checks every 10 s that its server is alive (`UnityMCPManager.supervise_once`). The server counts as dead when the uvx process has exited, or `/health` fails 3 checks in a row after a 2 min start-up grace. It then logs the exit code and the last 20 lines of `~/.unity_architect_ai/unity_mcp_server.log` and restarts the server under `mcp_lock`. At most 3 automatic restarts happen within 10 minutes; after that it stops, the status shows "blocked" with the message "Unity bağlantı sunucusu tekrar tekrar kapandı; Unity MCP'yi kapatıp açın.", and a user toggle resets the counter. A user stop, app shutdown or a foreign process on the port never triggers a restart.
+
+The Unity bridge has no retry deadline: after the fast schedule, both `WebSocketTransportClient` and `HttpBridgeReloadHandler` retry every 30 s until the session is stopped or the editor closes. The "server unreachable, retrying every 30 s" error is logged once and an info line is logged on reconnect, so a restarted server is picked up without opening Unity's MCP window.
+
 ---
 
 ## Fork provenance (measured 31 Aug 2026)

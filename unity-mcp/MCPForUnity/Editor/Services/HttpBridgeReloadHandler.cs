@@ -29,11 +29,6 @@ namespace MCPForUnity.Editor.Services
         // from the same condition and drifting apart would make the behaviour unpredictable.
         private static readonly TimeSpan ResumeTailInterval = TimeSpan.FromSeconds(30);
 
-        // The tail loop gives up after this; turning Unity MCP off and on in the app
-        // rewrites its autoconnect script, whose reload resumes the bridge again.
-        // Mirrors WebSocketTransportClient.ReconnectTailBudget.
-        internal static readonly TimeSpan ResumeTailBudget = TimeSpan.FromMinutes(5);
-
         private static int _tailLoopRunning;
 
         static HttpBridgeReloadHandler()
@@ -187,7 +182,7 @@ namespace MCPForUnity.Editor.Services
 
         /// <summary>
         /// Keeps trying to resume after <see cref="ResumeRetrySchedule"/> is exhausted,
-        /// for at most <see cref="ResumeTailBudget"/>.
+        /// until MCP is turned off in the app (AutoStartOnLoad cleared) or the editor closes.
         /// </summary>
         /// <remarks>
         /// Without this the finite schedule (~49 s total) is a hard deadline: a server that
@@ -205,12 +200,9 @@ namespace MCPForUnity.Editor.Services
         /// only covers a connection that was established and then dropped — not one that
         /// never came up after a domain reload. This closes that gap.
         ///
-        /// Bounded since 2026-09-26 (owner's decision: retrying forever is not needed, the
-        /// app's toggle turns it back on). The toggle recovers it because turning Unity MCP
-        /// on rewrites the project's autoconnect script, and its reload sets
-        /// ResumeHttpAfterReload again. `--no-cache` now runs only on the first start after
-        /// the server's source changed; its measured worst case was 2 min 26 s, so the
-        /// 5 min budget still covers it.
+        /// Unbounded since 4 Nov 2026: the server died with nobody present and a 5 min
+        /// budget left the editor disconnected for good, so Gamachine's own supervisor
+        /// restarts the server and this loop finds it again without any click.
         /// </remarks>
         private static async Task ResumeTailLoopAsync()
         {
@@ -223,18 +215,9 @@ namespace MCPForUnity.Editor.Services
 
             try
             {
-                DateTime deadline = DateTime.UtcNow + ResumeTailBudget;
                 while (true)
                 {
                     if (!EditorPrefs.GetBool(EditorPrefKeys.AutoStartOnLoad, false)) return;
-
-                    if (DateTime.UtcNow >= deadline)
-                    {
-                        McpLog.Debug(
-                            $"Stopped retrying the HTTP MCP bridge after {ResumeTailBudget.TotalMinutes:0} min. "
-                            + "Turn Unity MCP off and on in Gamachine to reconnect.");
-                        return;
-                    }
 
                     try { await Task.Delay(ResumeTailInterval); }
                     catch { return; }

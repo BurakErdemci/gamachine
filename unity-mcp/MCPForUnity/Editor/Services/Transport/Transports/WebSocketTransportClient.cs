@@ -35,9 +35,8 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
             TimeSpan.FromSeconds(30)
         };
         private static readonly TimeSpan ReconnectTailInterval = TimeSpan.FromSeconds(30);
-        // After this the tail loop stops (owner's decision, 2026-09-26: retrying forever is
-        // not needed); turning Unity MCP off and on in the app reconnects via a reload.
-        private static readonly TimeSpan ReconnectTailBudget = HttpBridgeReloadHandler.ResumeTailBudget;
+        // The tail loop has no deadline: it runs until the session is stopped or the editor
+        // closes, so a server that Gamachine restarts later is found again without any click.
 
         private static readonly TimeSpan DefaultKeepAliveInterval = TimeSpan.FromSeconds(15);
         private static readonly TimeSpan DefaultCommandTimeout = TimeSpan.FromSeconds(30);
@@ -859,21 +858,13 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
                     }
                 }
 
-                // Schedule exhausted — keep retrying every 30 s for ReconnectTailBudget, so a
-                // server outage longer than ~49 s (a slow first start) still recovers.
-                // Kalıcı kopuşun konsol bildirimi bu error ve bütçe bitince düşen error'dur.
-                McpLog.Error($"[WebSocket] MCP sunucusuna yeniden bağlanılamadı — sunucu kapalı görünüyor. Arka planda {ReconnectTailBudget.TotalMinutes:0} dk boyunca {ReconnectTailInterval.TotalSeconds} sn'de bir denenecek.");
+                // Schedule exhausted — keep retrying every 30 s until the session is stopped
+                // (token cancelled), so a server outage of any length still recovers.
+                // Kalıcı kopuşun konsol bildirimi bu tek error'dur; yeniden bağlanınca Info düşer.
+                McpLog.Error($"[WebSocket] MCP sunucusuna yeniden bağlanılamadı — sunucu kapalı görünüyor. Arka planda {ReconnectTailInterval.TotalSeconds} sn'de bir denenecek.");
                 _state = _state.WithError($"Server unreachable – retrying every {ReconnectTailInterval.TotalSeconds} s");
-                DateTime deadline = DateTime.UtcNow + ReconnectTailBudget;
                 while (!token.IsCancellationRequested)
                 {
-                    if (DateTime.UtcNow >= deadline)
-                    {
-                        McpLog.Error($"[WebSocket] MCP sunucusuna {ReconnectTailBudget.TotalMinutes:0} dk boyunca bağlanılamadı, deneme durdu. Yeniden bağlanmak için Gamachine'de Unity MCP'yi kapatıp açın.");
-                        _state = _state.WithError("Server unreachable – stopped retrying; turn Unity MCP off and on in Gamachine");
-                        return;
-                    }
-
                     try { await Task.Delay(ReconnectTailInterval, token).ConfigureAwait(false); }
                     catch (OperationCanceledException) { return; }
 

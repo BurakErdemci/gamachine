@@ -27,6 +27,7 @@ async def toggle_unity_mcp(req: MCPToggleRequest, background_tasks: BackgroundTa
     if req.workspace_path:
         require_saved_workspace_when_remote(req.workspace_path, x_session_token)
     async with unity_mcp_manager.mcp_lock:
+        unity_mcp_manager.reset_supervision()
         if req.enabled:
             return await start_mcp_for(req.workspace_path, background_tasks, req.language)
         return stop_mcp(req.workspace_path)
