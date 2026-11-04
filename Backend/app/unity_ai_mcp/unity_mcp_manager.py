@@ -37,7 +37,10 @@ _HEALTH_FAILS_TO_RESTART = 3
 _RESTART_CAP = 3
 _RESTART_WINDOW_S = 600
 _STARTUP_GRACE_S = 120  # uvx may be installing; health failures do not count yet
-_GAVE_UP_MESSAGE = "Unity bağlantı sunucusu tekrar tekrar kapandı; Unity MCP'yi kapatıp açın."
+_GAVE_UP_MESSAGES = {
+    "tr": "Unity bağlantı sunucusu tekrar tekrar kapandı; Unity MCP'yi kapatıp açın.",
+    "en": "The Unity connection server kept shutting down; turn Unity MCP off and on again.",
+}
 
 
 def _server_log_path() -> str:
@@ -283,6 +286,9 @@ class UnityMCPManager:
         self._restart_times: list[float] = []
         self._gave_up = False
         self._started_at = float("-inf")
+        # Set while the supervisor stops a dead server to restart it: stop_server then leaves
+        # autoconnect.json alone, or Unity reads autoStart=false and never resumes (4 Nov 2026).
+        self._restarting = False
         # Why install_package last returned False (shown to the user by the toggle route).
         self.last_install_error: Optional[str] = None
         # Windows dialog probe (unity-mcp/Server/src/transport/unity_dialog_probe.py), loaded once.
@@ -773,6 +779,8 @@ class UnityMCPManager:
         self.invalidate_identity_cache()
         logger.info("[UnityMCP] Sunucu durduruldu.")
 
+        if self._restarting:
+            return
         try:
             # reset_autoconnect_off drops only known-off workspaces, so the next stop retries failures.
             for workspace_path in tuple(self._autoconnect_workspaces):
@@ -807,13 +815,15 @@ class UnityMCPManager:
     async def supervise_once(self) -> None:
         """One supervision pass: restart our server if the user wants it on and it died.
 
-        Dead = our uvx process exited, or /health failed _HEALTH_FAILS_TO_RESTART passes in a row.
-        A user stop clears `enabled`, so it never restarts; a foreign process on the port is left alone.
+        Dead = our uvx process exited or never started (a failed restart), or /health failed
+        _HEALTH_FAILS_TO_RESTART passes in a row. A user stop clears `enabled`, so it never
+        restarts; a foreign process on the port is left alone.
         """
-        if not self.enabled or self._starting or self._gave_up or self.process is None:
+        if not self.enabled or self._starting or self._gave_up:
             return
-        exit_code = self.process.poll()
-        if exit_code is None:
+        process = self.process
+        exit_code = process.poll() if process is not None else None
+        if process is not None and exit_code is None:
             if await self.check_health():
                 self._health_fails = 0
                 return
@@ -824,7 +834,8 @@ class UnityMCPManager:
                 return
             reason = f"/health failed {self._health_fails} checks in a row (process still alive)"
         else:
-            reason = f"process exited with code {exit_code}"
+            reason = (f"process exited with code {exit_code}" if process is not None
+                      else "no server process (the last start failed)")
             occupant = await asyncio.to_thread(self.port_occupant)
             if occupant.identity == ServerIdentity.FOREIGN:
                 return
@@ -832,25 +843,47 @@ class UnityMCPManager:
                 return  # the uvx wrapper is gone but the server it started still answers
 
         async with self.mcp_lock:
-            # A toggle may have run while we waited for the lock.
-            if not self.enabled or self._starting or self._gave_up or self.process is None:
+            # A toggle may have run while we waited for the lock: it replaces the process.
+            if not self.enabled or self._starting or self._gave_up or self.process is not process:
+                return
+            if process is not None and process.poll() is None and await self.check_health():
+                self._health_fails = 0  # recovered while we waited
                 return
             now = time.monotonic()
             self._restart_times = [t for t in self._restart_times if now - t < _RESTART_WINDOW_S]
             if len(self._restart_times) >= _RESTART_CAP:
                 self._gave_up = True
-                self.last_error = _GAVE_UP_MESSAGE
+                self.last_error = _GAVE_UP_MESSAGES["en" if self.language == "en" else "tr"]
                 logger.error(f"[UnityMCP] Server died again ({reason}); {_RESTART_CAP} restarts within "
                              f"{_RESTART_WINDOW_S // 60} min used up, not restarting.")
                 return
             self._restart_times.append(now)
             logger.warning(f"[UnityMCP] Server is dead: {reason}. Restart {len(self._restart_times)}/{_RESTART_CAP}. "
                            f"Last log lines:\n{self._log_tail()}")
-            await asyncio.to_thread(self.stop_server)
-            if await asyncio.to_thread(self.start_server):
-                logger.info("[UnityMCP] Server restarted.")
-            else:
+            self._restarting = True
+            try:
+                await self._run_to_completion(self.stop_server)
+            finally:
+                self._restarting = False
+            if not await self._run_to_completion(self.start_server):
                 logger.error(f"[UnityMCP] Restart failed: {self.last_error}")
+                return
+            logger.info("[UnityMCP] Server restarted.")
+            workspace, generation = self.active_workspace, self.generation
+        # Outside the lock: the readiness wait may take a minute and must not hold a toggle back.
+        if workspace:
+            await self.write_autoconnect_when_ready(workspace, generation=generation)
+
+    @staticmethod
+    async def _run_to_completion(function):
+        """to_thread whose cancellation waits for the thread: shutdown cancels the supervisor and then
+        calls stop_server, which must not run before an in-flight start_server has spawned uvx."""
+        future = asyncio.ensure_future(asyncio.to_thread(function))
+        try:
+            return await asyncio.shield(future)
+        except asyncio.CancelledError:
+            await asyncio.wait([future])
+            raise
 
     # ─── Health & Status ─────────────────────────────────────────────────────
 
@@ -1006,7 +1039,8 @@ class UnityMCPManager:
           "port": 8080,
           "instances": [...],
           "reason": str | None,  # blocked only
-          "reason_code": str,  # present only for running bridge errors; translated by the renderer
+          "reason_code": str,  # present only for running bridge errors and the supervisor's
+                               # gave-up "blocked" state ("supervisor_gave_up"); translated by the renderer
           "reason_lines": list[str]  # present only for running bridge errors; raw compiler diagnostics
         }
 
@@ -1014,12 +1048,14 @@ class UnityMCPManager:
         POST'unun 500 gövdesinde vardı, yani kullanıcı toggle'a basmadan önce
         durumu asla öğrenemiyordu.
         """
+        if self.enabled and self._gave_up:
+            # Before the liveness check: a stuck process that is still alive would read "starting",
+            # which disables the toggle. The renderer shows `reason` for "blocked".
+            return {"status": UnityMCPStatus.BLOCKED, "pid": self.process.pid if self.process else None,
+                    "port": self.mcp_port, "instances": [], "reason": self.last_error,
+                    "reason_code": "supervisor_gave_up"}
         if not self.is_running():
             occupant = self.port_occupant()
-            if self.enabled and self._gave_up:
-                # The renderer shows `reason` for "blocked": the only state that carries a user-facing message.
-                return {"status": UnityMCPStatus.BLOCKED, "pid": None, "port": self.mcp_port,
-                        "instances": [], "reason": self.last_error}
             if occupant.identity == ServerIdentity.FOREIGN:
                 return {
                     "status": UnityMCPStatus.BLOCKED,

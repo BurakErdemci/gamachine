@@ -60,6 +60,7 @@ def create_workspace_router(db):
                         os.path.normcase(os.path.realpath(active_workspace))
                         != os.path.normcase(os.path.realpath(req.path))
                     ):
+                        unity_mcp_manager.reset_supervision()  # as the toggle: a switch starts the budget over
                         stop_mcp()
                         try:
                             await start_mcp_for(req.path, background_tasks, language=unity_mcp_manager.language)

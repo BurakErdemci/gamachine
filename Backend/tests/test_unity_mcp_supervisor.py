@@ -18,6 +18,12 @@ class _Proc:
     def poll(self):
         return self.code
 
+    def terminate(self):
+        pass
+
+    def wait(self, timeout=None):
+        return self.code
+
 
 @pytest.fixture
 def sup(monkeypatch, tmp_path):
@@ -161,4 +167,216 @@ def test_toggle_route_resets_counter(sup, monkeypatch):
     manager._restart_times = [um.time.monotonic()] * 3
     req = mcp_routes.MCPToggleRequest(enabled=False)
     run(mcp_routes.toggle_unity_mcp(req, None, ""))
+    assert manager._gave_up is False and manager._restart_times == []
+
+
+def _unity_project(path):
+    (path / "Assets").mkdir(parents=True)
+    (path / "ProjectSettings").mkdir()
+    return str(path)
+
+
+def _real_stop_without_ports(manager, monkeypatch):
+    """The real stop_server; its port-guard calls are faked, so no process or port is touched."""
+    from unity_ai_mcp import mcp_port_guard as guard
+    monkeypatch.setattr(guard, "collect_owned_listeners", lambda *a, **k: set())
+    monkeypatch.setattr(guard, "terminate_port_listeners", lambda *a, **k: guard.PortCleanupResult(port=8080))
+    monkeypatch.setattr(manager, "_get_uvx", lambda: "")
+    monkeypatch.setattr(manager, "stop_server", um.UnityMCPManager.stop_server.__get__(manager))
+
+
+def test_restart_keeps_autoconnect_on_and_rewrites_it(sup, monkeypatch, tmp_path):
+    manager, calls, _ = sup
+    _real_stop_without_ports(manager, monkeypatch)
+    workspace = _unity_project(tmp_path / "proj")
+    manager._write_autoconnect_settings(workspace, auto_start=True)
+    manager.active_workspace = workspace
+    manager.generation = 7
+    writes = []
+
+    async def write(path, generation=None):
+        writes.append((path, generation, manager._read_autoconnect(path)["autoStart"]))
+        return True
+
+    monkeypatch.setattr(manager, "write_autoconnect_when_ready", write)
+    run(manager.supervise_once())
+    assert calls["start"] == 1
+    assert writes == [(workspace, 7, True)]  # the stop left the file on; the write turns Unity on again
+    assert manager._restarting is False
+
+
+def test_restart_without_active_workspace_writes_nothing(sup, monkeypatch):
+    manager, calls, _ = sup
+    writes = []
+
+    async def write(path, generation=None):
+        writes.append(path)
+
+    monkeypatch.setattr(manager, "write_autoconnect_when_ready", write)
+    run(manager.supervise_once())
+    assert calls["start"] == 1 and writes == []
+
+
+def test_user_stop_still_turns_autoconnect_off(sup, monkeypatch, tmp_path):
+    manager, _, _ = sup
+    _real_stop_without_ports(manager, monkeypatch)
+    workspace = _unity_project(tmp_path / "proj")
+    manager._write_autoconnect_settings(workspace, auto_start=True)
+    manager.stop_server()
+    assert manager._read_autoconnect(workspace)["autoStart"] is False
+
+
+def test_failed_restart_is_retried_within_the_cap(sup, monkeypatch):
+    manager, calls, _ = sup
+    monkeypatch.setattr(manager, "stop_server", lambda: setattr(manager, "process", None))
+
+    def start_fail():
+        calls["start"] += 1
+        manager.last_error = "boom"
+        return False
+
+    monkeypatch.setattr(manager, "start_server", start_fail)
+    for _ in range(3):
+        run(manager.supervise_once())
+    assert calls["start"] == 3 and manager.process is None and not manager._gave_up
+    run(manager.supervise_once())
+    assert calls["start"] == 3 and manager._gave_up
+    status = run(manager._status())
+    assert status["status"] == "blocked" and status["reason"] == manager.last_error
+
+
+def test_failed_restart_leaves_a_foreign_port_alone(sup):
+    manager, calls, state = sup
+    manager.process = None
+    state["occupant"] = um.ServerIdentity.FOREIGN
+    run(manager.supervise_once())
+    assert calls["start"] == 0
+
+
+@pytest.mark.parametrize("language, expected", [
+    (None, "Unity bağlantı sunucusu tekrar tekrar kapandı; Unity MCP'yi kapatıp açın."),
+    ("tr", "Unity bağlantı sunucusu tekrar tekrar kapandı; Unity MCP'yi kapatıp açın."),
+    ("en", "The Unity connection server kept shutting down; turn Unity MCP off and on again."),
+])
+def test_gave_up_with_live_process_reports_blocked(sup, language, expected):
+    manager, calls, state = sup
+    manager.language = language
+    manager._restart_times = [um.time.monotonic()] * 3
+    manager.process = _Proc(None)
+    state["healthy"] = False
+    for _ in range(3):
+        run(manager.supervise_once())
+    assert manager._gave_up and calls["start"] == 0
+    status = run(manager._status())
+    assert status["status"] == "blocked" and status["reason"] == expected
+    assert status["reason_code"] == "supervisor_gave_up" and status["pid"] == 4242
+
+
+def test_server_started_by_a_toggle_meanwhile_is_not_stopped(sup):
+    manager, calls, _ = sup
+
+    async def scenario():
+        await manager.mcp_lock.acquire()
+        task = asyncio.create_task(manager.supervise_once())
+        await asyncio.sleep(0.05)
+        manager.process = _Proc(None)  # the toggle started a fresh server
+        manager.mcp_lock.release()
+        await task
+
+    run(scenario())
+    assert calls == {"start": 0, "stop": 0}
+
+
+def test_server_that_recovered_meanwhile_is_not_stopped(sup):
+    manager, calls, state = sup
+    manager.process = _Proc(None)
+    state["healthy"] = False
+    run(manager.supervise_once())
+    run(manager.supervise_once())
+
+    async def scenario():
+        await manager.mcp_lock.acquire()
+        task = asyncio.create_task(manager.supervise_once())  # third failure: decides "dead"
+        await asyncio.sleep(0.05)
+        state["healthy"] = True
+        manager.mcp_lock.release()
+        await task
+
+    run(scenario())
+    assert calls == {"start": 0, "stop": 0} and manager._health_fails == 0
+
+
+def test_cancel_during_restart_waits_for_the_start(sup, monkeypatch):
+    manager, _, _ = sup
+
+    def slow_start():
+        um.time.sleep(0.4)
+        manager.process = _Proc(None)
+        return True
+
+    monkeypatch.setattr(manager, "start_server", slow_start)
+
+    async def scenario():
+        task = asyncio.create_task(manager.supervise_once())
+        await asyncio.sleep(0.1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        return manager.process  # shutdown's stop_server runs now: the start must be done
+
+    assert isinstance(run(scenario()), _Proc)
+
+
+def test_cancel_during_stop_never_starts(sup, monkeypatch):
+    manager, calls, _ = sup
+    monkeypatch.setattr(manager, "stop_server", lambda: um.time.sleep(0.3))
+
+    async def scenario():
+        task = asyncio.create_task(manager.supervise_once())
+        await asyncio.sleep(0.1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    run(scenario())
+    assert calls["start"] == 0 and manager._restarting is False
+
+
+def test_workspace_switch_resets_supervision(sup, monkeypatch, tmp_path):
+    from unittest.mock import Mock
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from routes import mcp_routes, workspace_routes
+    from tools import unity_mcp_tools
+    from unity_ai_mcp import unity_project_presence
+    manager, _, _ = sup
+    old = _unity_project(tmp_path / "old")
+    new = _unity_project(tmp_path / "new")
+    manager.active_workspace = old
+    manager._gave_up = True
+    manager._restart_times = [um.time.monotonic()] * 3
+    seen = []
+    monkeypatch.setattr(um, "unity_mcp_manager", manager)
+    monkeypatch.setattr(mcp_routes, "unity_mcp_manager", manager)
+    monkeypatch.setattr(workspace_routes, "require_user", lambda *args: (1, {}))
+    monkeypatch.setattr(manager, "stop_server", lambda: seen.append(manager._gave_up))
+    monkeypatch.setattr(manager, "is_unity_running", lambda: True)
+    monkeypatch.setattr(manager, "is_running", lambda: False)
+    monkeypatch.setattr(manager, "install_package", lambda *a, **k: True)
+
+    async def write(*args, **kwargs):
+        return True
+
+    monkeypatch.setattr(manager, "write_autoconnect_when_ready", write)
+    monkeypatch.setattr(unity_project_presence, "mcp_mismatch_detail", lambda path: None)
+    monkeypatch.setattr(unity_mcp_tools, "unload_unity_tools", lambda: None)
+    db = Mock()
+    db.get_last_workspace.return_value = old
+    app = FastAPI()
+    app.include_router(workspace_routes.create_workspace_router(db))
+    with TestClient(app) as client:
+        response = client.post("/save-workspace", json={"user_id": 1, "path": new},
+                               headers={"X-Session-Token": "test-token"})
+    assert response.json() == {"status": "success", "mcp": {"state": "switched"}}
+    assert seen == [False]  # reset before the stop, like the toggle
     assert manager._gave_up is False and manager._restart_times == []

@@ -127,6 +127,8 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
   const compileFailed = status === 'running' && reasonCode === 'bridge_compile_failed';
   const sebep = status === 'blocked' ? reason : compileFailed ? reasonLines.join('\n') : null;
   const showReason = status === 'blocked' || compileFailed;
+  // The supervisor gave up restarting our own server: the port is free, so the foreign-server title is wrong.
+  const title: Anahtar = status === 'blocked' && reasonCode === 'supervisor_gave_up' ? 'home.unityGaveUp' : state.title;
 
   // The reason opens by itself when the block arrives (the old strip showed it without a click,
   // and the user must act on it); "Why?" then closes and reopens it, as in the mockup.
@@ -162,7 +164,7 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
         // (useAIConfig treats off and blocked alike), so it reads as off to assistive tech.
         aria-checked={status !== 'off' && status !== 'blocked'}
         aria-describedby={showReason ? `${stateId} ${whyId}` : stateId}
-        title={t(state.title)}
+        title={t(title)}
         onClick={onToggle}
         // `blocked` stays PRESSABLE: after the user closes the conflicting server, this button
         // is their only way to retry.
@@ -205,7 +207,7 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
             <span className="unity-why" id={whyId} role="alert">
               <b>{t(compileFailed ? 'unity.compileWhyTitle' : 'unity.whyTitle')}</b>{' '}
               {/* No nowrap: the reason carries a process name and PID, so it is long. */}
-              {status === 'blocked' ? sebep || t('home.unityBlocked') : <span className="unity-compile-lines">{sebep}</span>}
+              {status === 'blocked' ? sebep || t(title) : <span className="unity-compile-lines">{sebep}</span>}
             </span>
           )}
           {error && <span className="unity-err" role="alert">{error}</span>}

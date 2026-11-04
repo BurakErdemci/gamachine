@@ -207,7 +207,8 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
         ? instances.flatMap(instance => instance && typeof instance === 'object' && typeof instance.project === 'string' ? [instance.project] : [])
         : []);
       setUnityMcpReason(status === 'blocked' ? reason : null);
-      setUnityMcpReasonCode(status === 'running' && typeof res.data?.reason_code === 'string'
+      // `blocked` carries one too: the supervisor's give-up (supervisor_gave_up) gets its own title.
+      setUnityMcpReasonCode((status === 'running' || status === 'blocked') && typeof res.data?.reason_code === 'string'
         ? res.data.reason_code : null);
       setUnityMcpReasonLines(status === 'running' && Array.isArray(res.data?.reason_lines)
         ? res.data.reason_lines.filter((line: unknown): line is string => typeof line === 'string') : []);

@@ -853,6 +853,7 @@ export const tr = {
   // `blocked` durumunda Unity'nin açık olması hiçbir şeyi değiştirmiyor; sorun
   // portun sahibi. Eski davranış bu duruma da "Unity açık olmalı" diyordu.
   'home.unityBlocked': '8080 portu bize ait olmayan bir sunucuda — o sunucuyu kapatıp tekrar deneyin',
+  'home.unityGaveUp': 'Sunucu tekrar tekrar kapandı — yeniden başlatmak için tıklayın',
   'home.openChat': 'Sohbeti Aç',
   'home.editorHint': "Düzenlemek için bir dosya aç ya da sağdaki chat'ten direkt bir şey iste",
   'home.bugfix': 'BUG FIX',
@@ -2911,6 +2912,7 @@ export const en: Record<keyof typeof tr, string> = {
   'home.unityStarting': 'Starting server...',
   'home.unityOpen': 'Open Unity MCP (Unity must be open)',
   'home.unityBlocked': 'Port 8080 is held by a server that is not ours — close it and try again',
+  'home.unityGaveUp': 'The server kept shutting down — click to start it again',
   'home.openChat': 'Open Chat',
   'home.editorHint': 'Open a file to edit or directly ask something from the chat on the right',
   'home.bugfix': 'BUG FIX',

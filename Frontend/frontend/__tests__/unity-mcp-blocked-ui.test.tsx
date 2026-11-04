@@ -77,6 +77,18 @@ describe('UnityMcpToggle — blocked görünürlüğü', () => {
     expect(title).toMatch(/8080|port/i)
   })
 
+  it('2b) the supervisor gave up: the title names the crash loop, not a foreign port, and the switch stays usable', () => {
+    render(
+      <UnityMcpToggle status="blocked" reasonCode="supervisor_gave_up" toggling={false}
+                      reason="Unity bağlantı sunucusu tekrar tekrar kapandı; Unity MCP'yi kapatıp açın."
+                      error={null} onToggle={vi.fn()} />
+    )
+    const title = toggleButton().getAttribute('title') || ''
+    expect(title).toBe(cevir('home.unityGaveUp'))
+    expect(title).not.toMatch(/8080/)
+    expect((toggleButton() as HTMLButtonElement).disabled).toBe(false)
+  })
+
   it('3) blocked hareketsiz — yalnız starting/running "bağlanıyor" (LED koşusu) görünümünde', () => {
     // The chase animation is bound to data-unity="connecting" in shell.css, so the
     // look IS the motion switch: blocked must never land on it.
