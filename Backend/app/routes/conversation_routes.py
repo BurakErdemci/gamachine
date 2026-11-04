@@ -1405,6 +1405,11 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
             return "approval_pending"
         if any(_gate_blocks(gate_id) for gate_id in _mcp_pending):
             return "mcp_pending"
+        # The consecutive-wake limit would refuse the claim anyway; hold the
+        # offer so the notice waits until a real user message resets the chain.
+        from agentic import wake_queue
+        if wake_queue.chain_exhausted(conv_id):
+            return "chain_exhausted"
         # Every provider's turn is counted in AgentRunner.run; the Claude
         # checks below only saw the Claude session, so mail to a busy Codex or
         # OpenCode chat would have started a second turn on top of the first.
@@ -2223,6 +2228,11 @@ Max 300 kelime. Türkçe yaz.
             if wake_queue.chain_exhausted(request.conversation_id):
                 logger.info("[wake] conv=%s consecutive-wake limit reached -> turn not started",
                             request.conversation_id)
+                # The ticket took the notices out of the queue: put them back so
+                # the next wake after a user message still delivers them. Mail
+                # notes are DB rows and stay queued on their own.
+                for _n in wake_notices:
+                    wake_queue.enqueue(request.conversation_id, _n)
 
                 async def _exhausted():
                     yield f"data: {json.dumps({'type': 'done', 'stop_reason': 'wake_chain_exhausted'})}\n\n"

@@ -406,3 +406,71 @@ def test_a_stale_wake_keeps_an_owed_reply_and_a_detached_turn(runner):
     assert 1 in owed
     assert (turn_replies.get(1, 55) or {}).get("state") != "ended"
     turn_replies.clear()
+
+
+# ── The consecutive-wake limit must not lose the notice (audit B12, 4 Nov 2026) ──
+def _exhaust(conv_id):
+    for _ in range(wake_queue.MAX_CHAIN):
+        wake_queue.bump_chain(conv_id)
+    assert wake_queue.chain_exhausted(conv_id)
+
+
+def _wake_blocked_fn():
+    route = _route()
+    cells = dict(zip(route.endpoint.__code__.co_freevars,
+                     (c.cell_contents for c in route.endpoint.__closure__)))
+    return cells["_wake_blocked"]
+
+
+from routes.conversation_routes import create_conversation_router  # noqa: E402
+
+
+def test_a_wake_refused_by_the_chain_limit_puts_its_notice_back(runner):
+    wake_queue.enqueue(1, "tasks_done|audit")
+    wake_queue.issue_ticket(1, wake_queue.drain(1))
+    _exhaust(1)
+    out = _post(_db(), ChatRequest(conversation_id=1, message="x", user_id=1, origin="wake"))
+    assert "wake_chain_exhausted" in str(out)
+    assert runner.messages == []
+    assert wake_queue.pending(1) == 1
+    assert wake_queue.drain(1) == ["tasks_done|audit"]
+
+
+def test_no_wake_is_offered_while_the_chain_limit_holds():
+    wake_queue.enqueue(MINE, "tasks_done|audit")
+    _exhaust(MINE)
+    assert _wake_blocked_fn()(MINE) == "chain_exhausted"
+
+    async def run():
+        frames, close = await _open(_route())
+        try:
+            await asyncio.sleep(1.0)
+        finally:
+            await close()
+        return frames
+
+    frames = asyncio.run(run())
+    assert [f for f in frames if f.get("type") == "wake"] == []
+    assert not wake_queue.ticket_outstanding(MINE)
+    assert wake_queue.pending(MINE) == 1
+
+
+def test_the_notice_is_offered_after_a_user_message_resets_the_chain():
+    async def run():
+        wake_queue.enqueue(MINE, "tasks_done|audit")
+        _exhaust(MINE)
+        frames, close = await _open(_route())
+        try:
+            await asyncio.sleep(0.6)
+            assert [f for f in frames if f.get("type") == "wake"] == []
+            wake_queue.reset_chain(MINE)
+            for _ in range(100):
+                if [f for f in frames if f.get("type") == "wake"]:
+                    break
+                await asyncio.sleep(0.05)
+        finally:
+            await close()
+        return frames
+
+    frames = asyncio.run(run())
+    assert [f["notices"] for f in frames if f.get("type") == "wake"] == [["tasks_done|audit"]]
