@@ -8,6 +8,10 @@ from starlette.requests import Request
 
 
 EN: dict[str, str] = {
+    # show_image (routes/chat_files_routes.py)
+    "conversation_id gerekli": "conversation_id is required",
+    "Yan sohbet salt okunur; görüntü gösterilemez.": "A side chat is read-only; it cannot show an image.",
+    "Görüntü istenen boyuta sığmıyor": "The image does not fit the requested size",
     "Bilgisayar kullanımı çalışma durumu yalnız uygulama arayüzünden bildirilebilir.":
         "Computer-use runtime can only be reported from the app interface.",
     "Bilgisayar kullanımı çalışma durumu geçersiz.": "Invalid computer-use runtime state.",
