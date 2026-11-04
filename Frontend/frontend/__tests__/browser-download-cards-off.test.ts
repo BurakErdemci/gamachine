@@ -58,7 +58,10 @@ function fixture() {
     now: () => clock.now, setTimeout: later, fetch: vi.fn(async () => { throw new Error('no network') }) as any,
     downloadsDir: () => DIR, fileExists: () => false, showItemInFolder: vi.fn(),
   }
-  const reply = async (index: number, cardsOff: boolean) => { settings[index].resolve({ data: { enabled: true, cards_off: cardsOff } }); await flush() }
+  const reply = async (index: number, cardsOff: boolean, extra: Record<string, unknown> = {}) => {
+    settings[index].resolve({ data: { enabled: true, cards_off: cardsOff, halted: [], ...extra } })
+    await flush()
+  }
   const fail = async (index: number) => { settings[index].reject(new Error('backend down')); await flush() }
   return { host: new BrowserHost(deps), views, session, clock, settings, request, reply, fail }
 }
@@ -157,5 +160,31 @@ describe('agent download with browser cards off', () => {
     await flush()
     expect(item.pause).not.toHaveBeenCalled()
     expect(settingsCalls(f)).toHaveLength(0)
+  })
+
+  it('stays paused when the user stopped that chat', async () => {
+    const f = fixture()
+    const wc = await agentTab(f)
+    const { item } = download(f, wc, 'theme.mp3')
+    await f.reply(0, true, { halted: [9, 4] })
+    expect(item.resume).not.toHaveBeenCalled()
+    expect((await list(f))[0].state).toBe('awaiting_approval')
+  })
+
+  it('stays paused when the browser is disabled', async () => {
+    const f = fixture()
+    const wc = await agentTab(f)
+    const { item } = download(f, wc, 'theme.mp3')
+    await f.reply(0, true, { enabled: false })
+    expect(item.resume).not.toHaveBeenCalled()
+  })
+
+  it('does not resume when the host shut down before the settings reply', async () => {
+    const f = fixture()
+    const wc = await agentTab(f)
+    const { item } = download(f, wc, 'theme.mp3')
+    await f.host.shutdown()
+    await f.reply(0, true)
+    expect(item.resume).not.toHaveBeenCalled()
   })
 })

@@ -1205,7 +1205,9 @@ export class BrowserHost {
         // wait for that reply (or the 3 minute cancel). Ask the setting now; any failure leaves it paused.
         void (async () => {
           const { data } = await this.request('get', '/browser/settings')
-          if (data?.cards_off === true && entry.state === 'awaiting_approval') this.resumeDownload(entry)
+          // The gateway's order: a disabled browser and a chat the user stopped deny before cards_off allows.
+          const halted = Array.isArray(data?.halted) && data.halted.some((id: unknown) => Number(id) === entry.conversationId)
+          if (!this.stopped && data?.enabled === true && data?.cards_off === true && !halted && entry.state === 'awaiting_approval') this.resumeDownload(entry)
         })().catch(() => { /* stays paused for the gateway */ })
       }
       item.on('updated', (_event, state) => {
