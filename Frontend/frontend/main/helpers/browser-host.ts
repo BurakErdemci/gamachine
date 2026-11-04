@@ -5,7 +5,7 @@ import { randomBytes } from 'crypto'
 import { existsSync } from 'fs'
 import { isIP } from 'net'
 import path from 'path'
-import { isAllowedNavigation, isPrivateAddress, resolvesToPrivate, type LookupAll } from './browser-url-policy'
+import { gamachinePorts, isAllowedNavigation, isAllowedRequest, isLoopbackAddress, isLoopbackHost, isPrivateAddress, pageOriginOf, resolvesToPrivate, tempRoot, type LookupAll, type NavigationContext, type PageOrigin } from './browser-url-policy'
 import { historyUrl, type BrowserHistory } from './browser-history'
 import { mt, uiLanguage, type UiLang } from './main-i18n'
 
@@ -946,6 +946,13 @@ interface Tab {
   faviconSeq: number
   /** The main-frame address being loaded and not yet committed (getURL still shows the old page); null once it commits. */
   target: string | null
+  /**
+   * What kind of page the host's own load is headed for (so a redirect off a public page cannot land on loopback
+   * just because the page shown before it was local); null for page-started navigations. Cleared when loading stops.
+   */
+  hostNav: PageOrigin | null
+  /** Where a file: page of this tab may read from; set by the agent's navigate, null after any other host load. */
+  fileRoots: readonly string[] | null
   /** Settles when the tab is closed, so a command waiting on something else can stop at once. */
   gone: Promise<void>
   markGone: () => void
@@ -1145,7 +1152,7 @@ export class BrowserHost {
     session.setPermissionCheckHandler(() => false)
     session.on('will-download', (event, item, webContents) => this.willDownload(event, item, webContents))
     session.webRequest.onBeforeRequest((details, callback) => {
-      void this.requestBlocked(details.url, details.resourceType).then(
+      void this.requestBlocked(details.url, details.resourceType, details.webContentsId).then(
         (blocked) => callback({ cancel: blocked }),
         () => callback({ cancel: true }),
       )
@@ -1343,14 +1350,19 @@ export class BrowserHost {
     return { ok: true, download: this.downloadView(entry), ...page }
   }
 
-  private checkConnectedIp(details: { url: string; ip?: string; webContentsId?: number }): void {
+  private checkConnectedIp(details: { url: string; ip?: string; webContentsId?: number; resourceType?: string }): void {
     const ip = (details.ip || '').replace(/^\[|\]$/g, '')
     if (!ip || !isPrivateAddress(ip)) return
     let host: string
-    try { host = new URL(details.url).hostname } catch { return }
-    // A literal host was already judged by the static policy, so the connection is not a rebinding.
-    if (isIP(host.replace(/^\[|\]$/g, ''))) return
-    this.hostCache.set(host.toLowerCase(), { blocked: true, at: this.now() })
+    try { host = new URL(details.url).hostname.replace(/^\[|\]$/g, '').toLowerCase() } catch { return }
+    // A literal host was already judged by the static policy, so a private connection is not a rebinding; a
+    // loopback one is fine only for a page that is itself local. localhost names are judged the same way.
+    const literal = isIP(host) !== 0
+    const localName = !literal && isLoopbackHost(host)
+    if (literal && !isLoopbackAddress(ip)) return
+    if ((literal || localName) && isLoopbackAddress(ip) &&
+      this.originFor(this.tabOfContents(details.webContentsId), details.resourceType === 'mainFrame') === 'loopback') return
+    if (!literal && !localName) this.hostCache.set(host, { blocked: true, at: this.now() })
     // A request with no page behind it (a worker) cannot be pinned to one tab, so every tab is stopped.
     const hit = [...this.tabs.values()].filter((tab) => details.webContentsId === undefined ||
       (!tab.view.webContents.isDestroyed() && tab.view.webContents.id === details.webContentsId))
@@ -1365,16 +1377,21 @@ export class BrowserHost {
     }
   }
 
-  /** Sub-resource gate: frames follow the navigation rule, every http(s)/ws(s) host must not resolve to a private address. */
-  async requestBlocked(url: string, resourceType: string): Promise<boolean> {
+  /**
+   * Request gate. The page shown decides what a request may reach: a public page nothing local, a loopback page
+   * loopback (except Gamachine's ports) and public hosts, a file: page only files inside its roots. Every http(s)/ws(s)
+   * host must also not resolve to a private address.
+   */
+  async requestBlocked(url: string, resourceType: string, webContentsId?: number): Promise<boolean> {
     let parsed: URL
     try { parsed = new URL(url) } catch { return true }
     const frame = resourceType === 'mainFrame' || resourceType === 'subFrame'
-    if (frame && !isAllowedNavigation(url)) return true
+    const tab = this.tabOfContents(webContentsId)
+    const origin = this.originFor(tab, resourceType === 'mainFrame')
+    const ctx = this.navContext(tab?.fileRoots)
+    if (parsed.protocol === 'file:') return !isAllowedRequest(url, origin, ctx)
     if (['http:', 'https:', 'ws:', 'wss:'].includes(parsed.protocol)) {
-      const asHttp = new URL(url)
-      asHttp.protocol = parsed.protocol.startsWith('ws') ? 'http:' : parsed.protocol
-      if (!isAllowedNavigation(asHttp.toString())) return true
+      if (!isAllowedRequest(url, origin, ctx)) return true
       return this.hostBlocked(parsed.hostname)
     }
     // Inline sub-resources the page made itself (images from data:, blob: workers) carry no host.
@@ -1383,6 +1400,8 @@ export class BrowserHost {
 
   private async hostBlocked(hostname: string): Promise<boolean> {
     const key = hostname.toLowerCase()
+    // localhost and loopback literals are judged by the origin and port rules, not by a lookup.
+    if (isLoopbackHost(key)) return false
     const hit = this.hostCache.get(key)
     if (hit && this.now() - hit.at < HOST_CACHE_MS) return true
     // Allowed verdicts are not cached: a name that resolved publicly a moment ago may rebind.
@@ -1452,7 +1471,7 @@ export class BrowserHost {
     let markGone = () => {}
     const gone = new Promise<void>((resolve) => { markGone = resolve })
     const tab: Tab = { id: ++this.nextTabId, conversationId, agent, view, favicon: '', snapshotId: '', loadWaiter: null,
-      popupBlocked: null, userControl: false, lastGesture: null, userTouched: false, annotating: false, overlay: null, pick: null, notes: [], pinSeq: 0, frameSeq: 0, navGen: 0, waiting: 0, refreshing: false, refreshTimer: null, shows: null, faviconSeq: 0, target: null, gone, markGone, expected: [], busy: 0, lastAgentCommandAt: null, lastUserNavigationAt: null, lastUsed: 0 }
+      popupBlocked: null, userControl: false, lastGesture: null, userTouched: false, annotating: false, overlay: null, pick: null, notes: [], pinSeq: 0, frameSeq: 0, navGen: 0, waiting: 0, refreshing: false, refreshTimer: null, shows: null, faviconSeq: 0, target: null, hostNav: null, fileRoots: null, gone, markGone, expected: [], busy: 0, lastAgentCommandAt: null, lastUserNavigationAt: null, lastUsed: 0 }
     this.wire(tab)
     win.contentView.addChildView(view)
     view.setBounds(this.bounds)
@@ -1482,7 +1501,8 @@ export class BrowserHost {
     wc.setWindowOpenHandler(({ url, disposition }) => {
       if (tab.agent) tab.popupBlocked = url
       // A page-open the lock refuses does not spend the page's tab budget.
-      else if ((disposition === 'foreground-tab' || disposition === 'background-tab') && !this.clearing && this.pageMayOpenTab(tab)) {
+      else if ((disposition === 'foreground-tab' || disposition === 'background-tab') && !this.clearing && this.pageMayOpenTab(tab) &&
+        isAllowedRequest(url, this.originFor(tab, false), this.navContext(tab.fileRoots))) {
         // The slot is spent only by a tab that was created: any refusal gives it back.
         this.openUserTab(tab.conversationId, url, true, disposition === 'background-tab')
           .then((result) => { if (result.error) this.refundPageOpen(tab.conversationId) })
@@ -1497,7 +1517,7 @@ export class BrowserHost {
         this.settleLoad(tab, { ok: false, error: 'clearing' })
         return
       }
-      if (isAllowedNavigation(event.url)) return
+      if (isAllowedRequest(event.url, this.originFor(tab, event.isMainFrame), this.navContext(tab.fileRoots))) return
       event.preventDefault()
       // A refused main-frame navigation ends as ERR_ABORTED, which waitForLoad ignores.
       if (event.isMainFrame) this.settleLoad(tab, { ok: false, error: 'url_not_allowed' })
@@ -1527,6 +1547,7 @@ export class BrowserHost {
     // Loading ended: a navigation that did not commit by now (aborted, refused on redirect) is no longer pending.
     wc.on('did-stop-loading', () => {
       tab.target = null
+      tab.hostNav = null
       this.emitLive(tab.conversationId)
     })
     wc.on('render-process-gone', () => this.settleLoad(tab, { ok: false, error: 'page_crashed' }))
@@ -2332,8 +2353,10 @@ export class BrowserHost {
   }
 
   /** The host's own navigation of a tab; the address is its target until it commits. */
-  private load(tab: Tab, url: string): void {
+  private load(tab: Tab, url: string, fileRoots: readonly string[] | null = null): void {
     tab.target = url
+    tab.hostNav = pageOriginOf(url)
+    tab.fileRoots = fileRoots
     tab.view.webContents.loadURL(url).catch(() => { /* reported by did-fail-load */ })
   }
 
@@ -2461,14 +2484,14 @@ export class BrowserHost {
   private async loadFavicon(tab: Tab, href: string): Promise<void> {
     const seq = tab.faviconSeq
     const page = tab.view.webContents.getURL()
-    const icon = await this.fetchFavicon(href).catch(() => '')
+    const icon = await this.fetchFavicon(href, pageOriginOf(page)).catch(() => '')
     if (!icon || !this.isLive(tab) || tab.faviconSeq !== seq || this.tabs.get(tab.id) !== tab) return
     tab.favicon = icon
     this.deps.history?.update(page, { favicon: icon })
     this.emitLive(tab.conversationId)
   }
 
-  private async fetchFavicon(href: string): Promise<string> {
+  private async fetchFavicon(href: string, from: PageOrigin): Promise<string> {
     const get = this.deps.fetch ?? ((url, init) => this.session().fetch(url, init))
     const controller = new AbortController()
     const timer = this.later(() => controller.abort(), FAVICON_TIMEOUT_MS)
@@ -2476,7 +2499,7 @@ export class BrowserHost {
       let url = href
       for (let hop = 0; hop <= MAX_FAVICON_REDIRECTS; hop++) {
         const parsed = new URL(url)
-        if (parsed.username || parsed.password || !(await this.navigationAllowed(url))) return ''
+        if (parsed.username || parsed.password || !(await this.navigationAllowed(url, null, from))) return ''
         const response = await get(url, { credentials: 'omit', redirect: 'manual', signal: controller.signal })
         const location = response.headers.get('location')
         if (response.status >= 300 && response.status < 400 && location) {
@@ -2524,10 +2547,57 @@ export class BrowserHost {
     try { win.webContents.send(BROWSER_LIVE_CHANNEL, error ? { ...payload, error } : payload) } catch { /* window closing */ }
   }
 
-  /** Same checks as the agent's navigate: allow-list, then the host must not resolve privately. */
-  private async navigationAllowed(url: unknown): Promise<boolean> {
-    if (!str(url) || !isAllowedNavigation(url)) return false
+  /**
+   * Same checks as the agent's navigate: allow-list, then the host must not resolve privately. `from` is the page
+   * the request comes from when it is not the host itself (a favicon); `fileRoots` are the agent's file: roots.
+   */
+  private async navigationAllowed(url: unknown, fileRoots?: readonly string[] | null, from: PageOrigin = 'loopback'): Promise<boolean> {
+    if (!str(url)) return false
+    const ctx = this.navContext(fileRoots)
+    if (url.toLowerCase().startsWith('file:')) return isAllowedNavigation(url, ctx)
+    if (from === 'loopback' ? !isAllowedNavigation(url, ctx) : !isAllowedRequest(url, from, ctx)) return false
     return !(await this.hostBlocked(new URL(url).hostname))
+  }
+
+  /** The ports of Gamachine's own listeners, or null while one this host needs is unknown (then no loopback address opens). */
+  private ownPorts(): Set<number> | null {
+    const backend = this.backendPort()
+    if (!backend || !this.runtime) return null
+    // process.argv[2] is the port of the dev renderer (nextron), which Electron main loads in dev.
+    return gamachinePorts([backend, this.runtime.port, Number(process.argv[2])])
+  }
+
+  private backendPort(): number | null {
+    try { return Number(new URL(this.deps.baseUrl()).port) || null } catch { return null }
+  }
+
+  private navContext(fileRoots?: readonly string[] | null): NavigationContext {
+    return { ports: this.ownPorts(), fileRoots }
+  }
+
+  /** The roots an agent navigate may carry: the backend's list, plus the OS temp folder the host always allows. */
+  private agentFileRoots(value: unknown): string[] {
+    const roots = Array.isArray(value) ? value.filter((root): root is string => str(root) && path.isAbsolute(root)).slice(0, 4) : []
+    return roots.length ? [...roots, tempRoot()] : []
+  }
+
+  private tabOfContents(id: number | undefined): Tab | null {
+    if (id === undefined) return null
+    return [...this.tabs.values()].find((tab) => this.isLive(tab) && tab.view.webContents.id === id) ?? null
+  }
+
+  /** The kind of page a request of this tab comes from: the host's own load while one is under way, else the page shown. */
+  private originFor(tab: Tab | null, mainFrame: boolean): PageOrigin {
+    if (!tab) return 'public'
+    return mainFrame && tab.hostNav ? tab.hostNav : pageOriginOf(tab.view.webContents.getURL())
+  }
+
+  /** Marks a back/forward as the host's own load of the history entry it goes to, so a local page is reachable from a public one. */
+  private markHistoryNav(tab: Tab, offset: number): void {
+    const history = tab.view.webContents.navigationHistory as { getActiveIndex?: () => number; getEntryAtIndex?: (i: number) => { url?: string } | undefined }
+    let url: string | undefined
+    try { url = history.getEntryAtIndex?.((history.getActiveIndex?.() ?? 0) + offset)?.url } catch { url = undefined }
+    tab.hostNav = url ? pageOriginOf(url) : null
   }
 
   async invoke(req: unknown): Promise<unknown> {
@@ -2623,6 +2693,7 @@ export class BrowserHost {
         const history = wc.navigationHistory
         if (op !== 'reload' && (op === 'back' ? !history.canGoBack() : !history.canGoForward())) return { error: 'no_history' }
         tab.lastUserNavigationAt = this.now()
+        if (op !== 'reload') this.markHistoryNav(tab, op === 'back' ? -1 : 1)
         if (op === 'reload') wc.reload()
         else if (op === 'back') history.goBack()
         else history.goForward()
@@ -3032,20 +3103,26 @@ export class BrowserHost {
     switch (op) {
       case 'navigate': {
         const url = args.url
+        // The backend names the folders a file: page may be read from (the chat's project); checked again here.
+        const fileRoots = this.agentFileRoots(args.file_roots)
         // A Stop or a closed tab ends the wait at once instead of when the lookup finishes.
-        const allowed = await this.untilHalted(tab, this.navigationAllowed(url))
+        const allowed = await this.untilHalted(tab, this.navigationAllowed(url, fileRoots))
         if (allowed === 'halted') return { error: 'halted' }
         if (!allowed) return { error: 'url_not_allowed' }
         if (halted()) return { error: 'halted' }
         if (this.clearing) return { error: 'clearing' }
         if (!this.isLive(tab)) return { error: 'tab_closed' }
-        return this.loadResult(await this.waitForLoad(tab, () => this.load(tab, url as string)))
+        return this.loadResult(await this.waitForLoad(tab, () => this.load(tab, url as string, fileRoots)))
       }
       case 'back':
       case 'forward': {
         const history = wc.navigationHistory
         if (op === 'back' ? !history.canGoBack() : !history.canGoForward()) return { error: 'no_history' }
-        return this.loadResult(await this.waitForLoad(tab, () => (op === 'back' ? history.goBack() : history.goForward())))
+        return this.loadResult(await this.waitForLoad(tab, () => {
+          this.markHistoryNav(tab, op === 'back' ? -1 : 1)
+          if (op === 'back') history.goBack()
+          else history.goForward()
+        }))
       }
       case 'reload':
         return this.loadResult(await this.waitForLoad(tab, () => wc.reload()))

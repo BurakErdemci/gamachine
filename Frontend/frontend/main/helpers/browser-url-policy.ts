@@ -1,5 +1,9 @@
 import { isIP } from 'net'
 import { promises as dns } from 'dns'
+import { fileURLToPath } from 'url'
+import fs from 'fs'
+import os from 'os'
+import path from 'path'
 
 export type LookupAll = (hostname: string, options: { all: true }) => Promise<{ address: string; family: number }[]>
 
@@ -54,21 +58,162 @@ export function isPrivateAddress(ip: string): boolean {
 }
 
 function hostOf(url: URL): string {
-  return url.hostname.replace(/^\[|\]$/g, '').toLowerCase()
+  return url.hostname.replace(/^\[|\]$/g, '').replace(/\.$/, '').toLowerCase()
 }
 
-/** Static check on a URL: http(s) only, and no loopback, private or localhost host written literally. */
-export function isAllowedNavigation(url: string): boolean {
+/**
+ * Ports of Gamachine's own local listeners: a page in the agent browser must never reach them (the backend and
+ * the browser host carry tokens, the Unity MCP server drives the editor). Backend/app/browser_use/policy.py keeps
+ * the same list; change both together.
+ */
+export const GAMACHINE_DEFAULT_PORTS: readonly number[] = [
+  8000, // backend HTTP: Backend main.py PORT default, docker-compose.yml, DOCKER_BACKEND_PORT default in background.ts
+  8080, // Unity MCP HTTP server: unity_mcp_manager.mcp_port, mcp_port_guard.DEFAULT_MCP_PORT
+  6400, // Unity editor bridge: unity-mcp transport/legacy/port_discovery.py DEFAULT_PORT
+  9876, // Blender connector bridge: Backend connectors/views.py BRIDGE_PORTS
+  8799, // relay dev server: relay/package.json "wrangler dev --port 8799"
+  8888, // nextron renderer dev server (background.ts loads it in dev, port in process.argv[2])
+]
+
+/**
+ * The defaults plus the ports this process knows at run time (`known`: the backend's port, the browser
+ * command server's port, the dev renderer's port; a missing or invalid value adds nothing).
+ * Callers pass null as the context's ports when a runtime value they need is unavailable: loopback is then refused outright.
+ */
+export function gamachinePorts(known: Iterable<number | null | undefined> = []): Set<number> {
+  const ports = new Set<number>(GAMACHINE_DEFAULT_PORTS)
+  for (const port of known) if (typeof port === 'number' && Number.isInteger(port) && port > 0 && port < 65536) ports.add(port)
+  return ports
+}
+
+export type PageOrigin = 'public' | 'loopback' | 'file'
+
+export interface NavigationContext {
+  /** Gamachine's own ports; null when they are not known, which refuses every loopback address. */
+  ports: ReadonlySet<number> | null
+  /** The directories a file: page may be read from; none (or empty) refuses every file: address. */
+  fileRoots?: readonly string[] | null
+}
+
+const FAIL_CLOSED: NavigationContext = { ports: null }
+
+/** Loopback addresses only: 127.0.0.0/8, ::1 and their IPv4-mapped forms. */
+export function isLoopbackAddress(ip: string): boolean {
+  const v4 = ipv4Octets(ip)
+  if (v4) return v4[0] === 127
+  const g = ipv6Groups(ip)
+  if (!g) return false
+  if (g.slice(0, 7).every((x) => x === 0) && g[7] === 1) return true
+  return g.slice(0, 5).every((x) => x === 0) && g[5] === 0xffff && (g[6] >> 8) === 127
+}
+
+/** localhost, *.localhost and loopback IP literals (URL parsing has already normalised legacy spellings such as 2130706433). */
+export function isLoopbackHost(hostname: string): boolean {
+  const host = hostname.replace(/^\[|\]$/g, '').replace(/\.$/, '').toLowerCase()
+  if (host === 'localhost' || host.endsWith('.localhost')) return true
+  return isIP(host) !== 0 && isLoopbackAddress(host)
+}
+
+function portOf(url: URL): number {
+  if (url.port) return Number(url.port)
+  return url.protocol === 'https:' || url.protocol === 'wss:' ? 443 : 80
+}
+
+/** The kind of page a URL is: file:, a loopback address, or anything else. */
+export function pageOriginOf(url: string): PageOrigin {
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol === 'file:') return 'file'
+    return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && isLoopbackHost(parsed.hostname) ? 'loopback' : 'public'
+  } catch {
+    return 'public'
+  }
+}
+
+/** The path with its links resolved; a path that does not exist yet is resolved through its nearest existing parent. */
+function realPathLoose(target: string): string {
+  const rest: string[] = []
+  let current = path.resolve(target)
+  for (;;) {
+    try {
+      return path.join(fs.realpathSync.native(current), ...rest.reverse())
+    } catch {
+      const parent = path.dirname(current)
+      if (parent === current) return path.resolve(target)
+      rest.push(path.basename(current))
+      current = parent
+    }
+  }
+}
+
+function insideDir(target: string, root: string): boolean {
+  const relative = path.relative(root, target)
+  return relative === '' || (relative.split(path.sep)[0] !== '..' && !path.isAbsolute(relative))
+}
+
+const RESERVED_FILE_NAMES = /^(con|prn|aux|nul|conin\$|conout\$|com[1-9]|lpt[1-9])$/i
+
+/** True when a file: URL names a plain local path inside one of `roots` (links, UNC, device and stream names refused). */
+export function isFileInRoots(url: string, roots: readonly string[] | null | undefined): boolean {
+  if (!roots || roots.length === 0) return false
+  let target: string
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'file:' || parsed.hostname !== '') return false
+    target = fileURLToPath(parsed)
+  } catch {
+    return false
+  }
+  const win = process.platform === 'win32'
+  if (target.includes('\0') || target.startsWith('\\\\') || target.startsWith('//')) return false
+  if (win && !/^[A-Za-z]:[\\/]/.test(target)) return false
+  const rest = win ? target.slice(2) : target
+  if (rest.includes(':')) return false
+  const names = rest.split(/[\\/]/).filter((name) => name !== '' && name !== '.' && name !== '..')
+  if (names.some((name) => /[. ]$/.test(name) || RESERVED_FILE_NAMES.test(name.split('.')[0]))) return false
+  const real = realPathLoose(target)
+  return roots.some((root) => typeof root === 'string' && root !== '' && insideDir(real, realPathLoose(root)))
+}
+
+/** The OS temp folder, one of the roots a file: page may always read from. */
+export function tempRoot(): string {
+  return realPathLoose(os.tmpdir())
+}
+
+/**
+ * Static check on one request or navigation made while the page shown is of kind `origin` (the host's own
+ * navigations count as 'loopback': the most permissive origin that may still reach public pages):
+ * - file: only from a file: page, and only inside the roots;
+ * - a file: page loads nothing over http(s), ws(s) or from loopback;
+ * - loopback only from a loopback page, and never a Gamachine port (or any port while those are unknown);
+ * - private, link-local, CGNAT, unspecified, multicast and reserved IP literals never;
+ * - everything else (public names and addresses) is judged by the caller's DNS check as well.
+ */
+export function isAllowedRequest(url: string, origin: PageOrigin, ctx: NavigationContext = FAIL_CLOSED): boolean {
   let parsed: URL
   try {
     parsed = new URL(url)
   } catch {
     return false
   }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false
-  const host = hostOf(parsed).replace(/\.$/, '')
-  if (!host || host === 'localhost' || host.endsWith('.localhost')) return false
+  if (parsed.protocol === 'file:') return origin === 'file' && isFileInRoots(url, ctx.fileRoots)
+  if (!['http:', 'https:', 'ws:', 'wss:'].includes(parsed.protocol) || origin === 'file') return false
+  const host = hostOf(parsed)
+  if (!host) return false
+  if (isLoopbackHost(host)) return origin === 'loopback' && ctx.ports !== null && !ctx.ports.has(portOf(parsed))
   return !(isIP(host) && isPrivateAddress(host))
+}
+
+/** Static check on a URL the host itself opens: http(s) anywhere public, loopback except Gamachine's ports, file: inside the roots. */
+export function isAllowedNavigation(url: string, ctx: NavigationContext = FAIL_CLOSED): boolean {
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return false
+  }
+  if (parsed.protocol === 'file:') return isAllowedRequest(url, 'file', ctx)
+  return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && isAllowedRequest(url, 'loopback', ctx)
 }
 
 /**

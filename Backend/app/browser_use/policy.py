@@ -1,12 +1,15 @@
 """Navigation allow-list and the critical-step classifier for the agent browser."""
 import ipaddress
 import json
+import os
 import re
 import socket
+import sys
 import unicodedata
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from computer_use.policy import critical_name
+from path_containment import is_within
 
 _DOWNLOAD_SUFFIXES = (
     ".zip", ".rar", ".7z", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".zst",
@@ -90,16 +93,96 @@ def file_type(name) -> str:
     return base[dot:] if dot > 0 else ""
 
 
+# Ports of Gamachine's own local listeners: a page opened in the agent browser must never reach them
+# (the backend and the browser host carry tokens, the Unity MCP server drives the editor). Each default
+# below is the port the named code listens on when nothing overrides it; gamachine_ports() adds the values
+# this process knows at run time.
+_GAMACHINE_DEFAULT_PORTS = frozenset({
+    8000,  # backend HTTP: main.py PORT default, docker-compose.yml, Docker backend mode
+    8080,  # Unity MCP HTTP server: unity_mcp_manager.mcp_port, mcp_port_guard.DEFAULT_MCP_PORT
+    6400,  # Unity editor bridge: unity-mcp transport/legacy/port_discovery.py DEFAULT_PORT
+    9876,  # Blender connector bridge: connectors/views.py BRIDGE_PORTS
+    8799,  # relay dev server: relay/package.json "wrangler dev --port 8799"
+    8888,  # nextron renderer dev server (Electron main loads it in dev)
+})
+# Environment values that carry a port Gamachine listens on (an int, or a URL with a port).
+_GAMACHINE_PORT_ENV = ("PORT", "UNITY_MCP_HTTP_PORT", "UNITY_MCP_HTTP_URL", "UNITYAI_URL", "ANTIGRAVITY_URL")
+_DEFAULT_SCHEME_PORT = {"http": 80, "https": 443}
+_FILE_RESERVED_NAMES = frozenset({"con", "prn", "aux", "nul", "conin$", "conout$"}
+                                 | {f"com{n}" for n in range(1, 10)} | {f"lpt{n}" for n in range(1, 10)})
+
+
+def _port_of(value) -> int | None:
+    """The port in an int, a numeric string or a URL, or None."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value if 0 < value < 65536 else None
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    try:
+        port = int(text) if text.isdigit() else urlsplit(text).port
+    except ValueError:
+        return None
+    return port if port and 0 < port < 65536 else None
+
+
+def gamachine_ports(extra=()) -> frozenset:
+    """Every port Gamachine's own services may listen on: the defaults above, the ports this process was
+    configured with (environment), the Unity MCP manager's port when it is loaded, and `extra` (the browser
+    host's command port, which only the caller knows). A value that cannot be read adds nothing and the
+    defaults stay denied."""
+    ports = set(_GAMACHINE_DEFAULT_PORTS)
+    ports.update(port for name in _GAMACHINE_PORT_ENV if (port := _port_of(os.environ.get(name))))
+    manager = getattr(sys.modules.get("unity_ai_mcp.unity_mcp_manager"), "unity_mcp_manager", None)
+    ports.update(port for port in (_port_of(getattr(manager, "mcp_port", None)),) if port)
+    ports.update(port for port in map(_port_of, extra or ()) if port)
+    return frozenset(ports)
+
+
+def _unmapped(ip):
+    return getattr(ip, "ipv4_mapped", None) or ip
+
+
 def _blocked_address(ip) -> bool:
-    mapped = getattr(ip, "ipv4_mapped", None)
-    if mapped is not None:
-        ip = mapped
-    return (ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_unspecified
-            or ip.is_multicast or ip.is_reserved)
+    """Private, link-local (metadata), CGNAT, unspecified, multicast and reserved addresses. Loopback is
+    judged by the caller, which knows the port."""
+    ip = _unmapped(ip)
+    return (ip.is_private or ip.is_link_local or ip.is_unspecified or ip.is_multicast or ip.is_reserved
+            or not ip.is_global)
 
 
-def navigation_refusal(url) -> str:
-    """'' when the URL may be opened, otherwise the reason it is refused."""
+def _file_refusal(parts, roots) -> str:
+    """'' when the file: URL names a path inside one of `roots` (the chat's workspace, the OS temp dir)."""
+    if not roots:
+        return "Only http and https pages can be opened."
+    if parts.netloc.casefold() not in {"", "localhost"}:
+        return "Network file shares cannot be opened in the agent browser."
+    raw = parts.path
+    if re.search(r"%(2f|5c)", raw, re.I):
+        return "The file address hides a path separator."
+    path = unquote(raw)
+    if "\\" in path or any(ord(char) < 0x20 or ord(char) == 0x7f for char in path) or path.startswith("//"):
+        return "The file address is not a plain local path."
+    if os.name == "nt":
+        drive = re.match(r"/([A-Za-z]:)(?=/|$)", path)
+        if not drive:
+            return "The file address is not a plain local path."
+        path = drive.group(1) + path[len(drive.group(0)):]
+        rest = path[2:]
+    else:
+        rest = path
+    names = [name for name in rest.split("/") if name not in ("", ".", "..")]
+    if ":" in rest or any(name.endswith((".", " ")) or name.split(".")[0].casefold() in _FILE_RESERVED_NAMES
+                          for name in names):
+        return "The file address is not a plain local path."
+    if not any(is_within(path, root) for root in roots if isinstance(root, str) and root):
+        return "Only files inside this chat's project or the temp folder can be opened."
+    return ""
+
+
+def navigation_refusal(url, file_roots=None, extra_ports=()) -> str:
+    """'' when the URL may be opened, otherwise the reason it is refused. Loopback pages open except on a
+    Gamachine port; file: opens only inside `file_roots`; `extra_ports` are more Gamachine ports."""
     if not isinstance(url, str) or not url.strip():
         return "The URL is empty."
     if any(ord(char) < 0x20 or ord(char) == 0x7f for char in url) or url != url.strip():
@@ -107,26 +190,32 @@ def navigation_refusal(url) -> str:
     try:
         parts = urlsplit(url)
         host = parts.hostname
-        parts.port
+        port = parts.port
     except ValueError:
         return "The URL is not valid."
-    if parts.scheme.lower() not in {"http", "https"}:
+    scheme = parts.scheme.lower()
+    if scheme == "file":
+        return _file_refusal(parts, file_roots)
+    if scheme not in _DEFAULT_SCHEME_PORT:
         return "Only http and https pages can be opened."
     if not host or re.search(r"\s", host):
         return "The URL has no valid host."
     host = host.rstrip(".").casefold()
-    if host == "localhost" or host.endswith(".localhost"):
-        return "Local addresses cannot be opened in the agent browser."
-    try:
-        ip = ipaddress.ip_address(host.split("%", 1)[0])
-    except ValueError:
+    ip = None
+    if not (host == "localhost" or host.endswith(".localhost")):
         try:
-            # Legacy spellings such as 2130706433 or 0x7f.1 reach the same loopback address.
-            ip = ipaddress.ip_address(socket.inet_aton(host))
-        except OSError:
-            return ""
-    if _blocked_address(ip):
-        return "Local and private network addresses cannot be opened in the agent browser."
+            ip = ipaddress.ip_address(host.split("%", 1)[0])
+        except ValueError:
+            try:
+                # Legacy spellings such as 2130706433 or 0x7f.1 reach the same loopback address.
+                ip = ipaddress.ip_address(socket.inet_aton(host))
+            except OSError:
+                return ""
+        ip = _unmapped(ip)
+        if not ip.is_loopback:
+            return "Private network addresses cannot be opened in the agent browser." if _blocked_address(ip) else ""
+    if (port or _DEFAULT_SCHEME_PORT[scheme]) in gamachine_ports(extra_ports):
+        return "Gamachine's own local services cannot be opened in the agent browser."
     return ""
 
 

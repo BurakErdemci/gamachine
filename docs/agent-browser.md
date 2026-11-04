@@ -355,12 +355,26 @@ only answers two read-only calls and keeps no pick state; nothing is ever reconc
    `contextIsolation: true`, `sandbox: true`. It cannot reach `window.ipc`.
 2. The session denies every permission request (camera, mic, geolocation, notifications,
    clipboard read, ...). Downloads follow the rules in Downloads below.
-3. Navigation allow-list: `http:` and `https:` only. Refused: `file:`, `data:` (top level),
-   `javascript:`, `chrome:`, `devtools:`, and any host that resolves to loopback, link-local
-   or private ranges (127.0.0.0/8, ::1, 10/8, 172.16/12, 192.168/16, 169.254/16, fc00::/7,
-   `localhost`, `*.localhost`). The Gamachine backend and MCP servers live on loopback;
-   the page must not reach them. The check runs in `will-navigate`, `will-redirect` and
-   `will-frame-navigate`, and in `session.webRequest.onBeforeRequest` for sub-resources.
+3. Navigation allow-list (owner decision, 4 Nov 2026: the agent may show its own screenshot, HTML page or local
+   game preview). `http:` and `https:` pages open, and so do loopback pages (`localhost`, `*.localhost`,
+   127.0.0.0/8, ::1, IPv4-mapped and legacy spellings) **except on a port Gamachine itself listens on**: the
+   backend's, the browser host's own command port, Unity MCP's (8080), and the other fixed listeners (6400 Unity
+   bridge, 9876 Blender bridge, 8799 relay dev, 8888 renderer dev, 8000 default backend). Each copy of the rule keeps
+   that list with where every port comes from (`gamachine_ports()` in `browser_use/policy.py`, `GAMACHINE_DEFAULT_PORTS`
+   and `gamachinePorts()` in `browser-url-policy.ts`); a runtime value that is not known adds nothing in the backend and,
+   in the host, refuses every loopback address. Still refused: the private network (10/8, 172.16/12, 192.168/16,
+   fc00::/7), link-local and cloud metadata (169.254/16), CGNAT (100.64/10), unspecified, multicast and reserved ranges,
+   `data:` (top level), `javascript:`, `chrome:`, `devtools:`, and any public name that resolves to a loopback or
+   non-public address (DNS rebinding; the connected IP is checked too). `file:` opens only for the agent's `navigate`
+   (the backend sends the chat's project folder and the OS temp folder as `file_roots`; the host checks the same roots
+   again) and for links between files inside those roots: realpath inside a root, percent-decoded, no UNC, `\?\`
+   or device path, no stream (`:`) in a name, directory listings allowed. **Origin rule:** a request (frame,
+   sub-resource, redirect, window open) to a loopback address is allowed only while the tab's page is itself a loopback
+   page, or while the host's own load of a loopback address is under way; a public page reaches nothing local or
+   private; a `file:` page loads only files inside its roots, never http(s) or loopback. The two copies of the rule
+   (`browser_use/policy.py` and `main/helpers/browser-url-policy.ts`) change in the same commit. The check runs in
+   `will-navigate`, `will-redirect` and `will-frame-navigate`, and in `session.webRequest.onBeforeRequest` for
+   sub-resources.
 4. `setWindowOpenHandler` denies pop-ups; the agent's pop-up URL is offered to it as a link, not
    opened. A user tab's page can open a tab only after genuine input (see "Pages opening tabs").
 5. On-screen page text is data, never instructions. The MCP tool descriptions say so,
@@ -410,7 +424,7 @@ at a time per tab (one queue per chat's tab; a second caller for that tab waits)
 
 | op | args | extra reply fields |
 |---|---|---|
-| `navigate` | `{url}` | — |
+| `navigate` | `{url}`; `{url, file_roots}` for a `file:` URL (the gateway adds the roots) | — |
 | `snapshot` | `{max_chars?}` (default 20 000) | `text` (readable text), `elements`: `[{ref, role, name, href?, value?, kind}]` (links, buttons, inputs, selects; at most 300), `snapshot_id` |
 | `click` | `{snapshot_id, ref}` | — |
 | `fill` | `{snapshot_id, ref, value}` | — |
@@ -548,6 +562,7 @@ Order: A and B in parallel against this contract; C in parallel against a mocked
 2. "Find a free CC0 walk-cycle animation" ends with candidates shown, no card.
 3. A form submit, a password fill and a "Buy" click each open a card and the agent says it
    is waiting; approving the card lets the identical retry through; rejecting it does not.
-4. `http://127.0.0.1:<backend port>/` and `file:///` are refused.
+4. `http://127.0.0.1:<backend port>/`, `http://127.0.0.1:8080/` (Unity MCP) and a `file:` path outside the chat's project
+   and the temp folder are refused; `http://127.0.0.1:<free port>/` and a file inside the project open (owner decision, 4 Nov 2026).
 5. Stop halts an in-flight navigation and denies the next browser tool until the user's
    next message.

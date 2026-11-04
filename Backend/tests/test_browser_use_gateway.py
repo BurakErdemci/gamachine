@@ -188,7 +188,7 @@ def test_malformed_args_are_refused_before_the_host(op, args):
     assert fake.cmds == []
 
 
-@pytest.mark.parametrize("url", ["file:///etc/hosts", "http://127.0.0.1:8000/", "http://localhost/",
+@pytest.mark.parametrize("url", ["file:///etc/hosts", "http://127.0.0.1:8000/", "http://localhost:8080/",
                                  "javascript:alert(1)", "http://192.168.1.2/", "data:text/html,x"])
 def test_refused_urls_never_reach_the_host(url):
     fake = Fake()

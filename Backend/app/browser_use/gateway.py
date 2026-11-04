@@ -12,6 +12,7 @@ import os
 import re
 import secrets
 import shutil
+import tempfile
 import time
 from urllib.parse import unquote, urlsplit
 
@@ -207,6 +208,12 @@ class BrowserGateway:
         # One command at a time per chat, like the host's own per-tab queue: a step's describe must
         # see its own page. A chat waiting for its card blocks no other chat.
         self._locks: dict[int, asyncio.Lock] = {}
+
+    def _file_roots(self, conversation_id) -> list:
+        """Where a file: page may be read from: the chat's project (when it has one) and the OS temp folder."""
+        workspace = self._workspace(conversation_id) if self._workspace else None
+        roots = [workspace] if isinstance(workspace, str) and os.path.isdir(workspace) else []
+        return [os.path.realpath(root) for root in roots + [tempfile.gettempdir()]]
 
     async def _cmd(self, runtime, conversation_id, op, args):
         try:
@@ -531,8 +538,10 @@ class BrowserGateway:
             runtime, refusal = _usable(before)
             if refusal:
                 return _refusal(refusal)
+            file_roots = None
             if op == "navigate":
-                refusal = policy.navigation_refusal(args.get("url"))
+                file_roots = self._file_roots(conversation_id)
+                refusal = policy.navigation_refusal(args.get("url"), file_roots, (runtime["port"],))
                 if refusal:
                     return _refusal(f"Refused: {refusal}")
             click_pass = None
@@ -543,6 +552,9 @@ class BrowserGateway:
             if op == "download_to_project":
                 return await self._to_project(runtime, conversation_id, args)
             forward = {key: args[key] for key in _ARGS[op] if key in args}
+            if file_roots and str(args.get("url")).lower().startswith("file:"):
+                # The host checks a file: page against the same roots again, for the links it follows.
+                forward["file_roots"] = file_roots
             send = self._download_cmd if op == "downloads" else self._cmd
             reply = await send(runtime, conversation_id, op, forward)
             if click_pass is not None:
