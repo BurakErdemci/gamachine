@@ -19,6 +19,8 @@ def create_chat_files_router(db):
 
     @router.post("/chat-files")
     async def add_chat_file(body: dict, x_session_token: str = Header(alias="X-Session-Token", default="")):
+        # The token comes before any body check: a caller without one learns nothing about the body rules.
+        _check_token(x_session_token)
         conv_id = body.get("conversation_id")
         if type(conv_id) is not int:
             raise HTTPException(status_code=422, detail="conversation_id gerekli")
