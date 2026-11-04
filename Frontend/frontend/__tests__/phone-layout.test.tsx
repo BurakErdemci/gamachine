@@ -359,3 +359,45 @@ describe('the composer draft set from outside the typing path', () => {
     expect(box().value).toBe('@2 ')
   })
 })
+
+describe('a chat opened again starts at its end', () => {
+  it('asks the page to follow the thread every time a chat screen opens', async () => {
+    const onThreadOpened = vi.fn()
+    render(<Harness chat={{ ...Harness.defaultChat, onThreadOpened }} />)
+    expect(onThreadOpened).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('phone-row-1'))
+    expect(onThreadOpened).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByRole('button', { name: tr['phone.back'] }))
+    await waitFor(() => expect(screen.getByTestId('phone-row-1')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('phone-row-1'))
+    // A waiting card is drawn at the end of the thread: a reopened chat must not start at its top.
+    expect(onThreadOpened).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('a phone draft across a rotation to a wide layout', () => {
+  // home.tsx owns the drafts above the phone branch; rotating unmounts only the shell.
+  function RotateHarness({ phone }: { phone: boolean }) {
+    const route = usePhoneRoute()
+    const drafts = React.useRef(new Map()).current
+    const [active, setActive] = React.useState<number | null>(null)
+    const [v, setV] = React.useState('')
+    const chats = [conv(1, 'Sohbet 1')]
+    if (!phone) return <div data-testid="wide" />
+    return (
+      <PhoneShell route={route} drafts={drafts} conversations={chats} activeConvId={active} convStatus={{}} unknownGates={0} projectName="P"
+        onSwitchProject={vi.fn()} onOpenSettings={vi.fn()} selectConversation={(c) => setActive(c.id)} createNewConversation={vi.fn()} session={null}
+        chat={{ ...Harness.defaultChat, composer: <AnimatedChatInput value={v} setValue={setV} onSendMessage={vi.fn()} isLoading={false} currentChatId={active} /> }} />
+    )
+  }
+
+  it('keeps the half-written message when the phone shell unmounts and comes back', () => {
+    const { rerender } = render(<RotateHarness phone />)
+    fireEvent.click(screen.getByTestId('phone-row-1'))
+    fireEvent.change(box(), { target: { value: 'dönerken kaybolmasın' } })
+    rerender(<RotateHarness phone={false} />)
+    expect(screen.getByTestId('wide')).toBeTruthy()
+    rerender(<RotateHarness phone />)
+    expect(box().value).toBe('dönerken kaybolmasın')
+  })
+})

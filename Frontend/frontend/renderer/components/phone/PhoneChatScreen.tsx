@@ -28,6 +28,8 @@ export interface PhoneChatScreenProps {
   covered?: boolean;
   /** The Sohbet tab is shown again after the Ekran tab (the hidden thread may have grown meanwhile). */
   onThreadShown?: () => void;
+  /** The chat screen was just opened: its thread is a new scroll container (a waiting card sits at the end). */
+  onThreadOpened?: () => void;
   menu: Omit<PhoneMenuSheetProps, 'open' | 'onClose' | 'convId'>;
 }
 
@@ -42,6 +44,7 @@ export function PhoneChatScreen(props: PhoneChatScreenProps) {
     ? `${t('strip.memory')} ${t('strip.pct', { yuzde: contextUsage.percent })}`
     : `${t('strip.memory')}: ${t('usage.noData')}`;
   const prevTab = useRef(tab);
+  useEffect(() => { props.onThreadOpened?.(); }, [convId]);
   useEffect(() => {
     if (tab === 'chat' && prevTab.current !== 'chat') props.onThreadShown?.();
     prevTab.current = tab;

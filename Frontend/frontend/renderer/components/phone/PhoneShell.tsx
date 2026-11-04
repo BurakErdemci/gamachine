@@ -52,7 +52,9 @@ export interface PhoneShellProps {
   createNewConversation: () => unknown;
   /** A full-screen page (settings, profile, guide) is drawn over the shell. */
   covered?: boolean;
-  chat: Pick<PhoneChatScreenProps, 'thread' | 'tray' | 'composer' | 'contextUsage' | 'menu' | 'onThreadShown'>;
+  /** Half-written messages per chat, owned above the phone branch so a rotation to a wide layout and back keeps them. */
+  drafts?: Map<string, ComposerDraft>;
+  chat: Pick<PhoneChatScreenProps, 'thread' | 'tray' | 'composer' | 'contextUsage' | 'menu' | 'onThreadShown' | 'onThreadOpened'>;
   /** Tests pass a fake; the page reads the running remote session. */
   session?: SessionLike | null;
 }
@@ -67,7 +69,8 @@ export function PhoneShell(props: PhoneShellProps) {
   const { t } = useLang();
   useMarkPhoneShell(!props.covered);
   // Half-written messages per chat, kept while the phone shows the list (the page session, not a reload).
-  const drafts = useRef(new Map<string, ComposerDraft>()).current;
+  const ownDrafts = useRef(new Map<string, ComposerDraft>()).current;
+  const drafts = props.drafts ?? ownDrafts;
   const [creating, setCreating] = useState(false);
   const conn = useConnection(props.session === undefined ? remoteSession() : props.session);
   const line = <ConnectionLine {...conn} />;

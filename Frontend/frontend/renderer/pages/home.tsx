@@ -33,7 +33,7 @@ import { ProjectFiles } from '../components/home/FileTree';
 import { ControlPanel, ThinkingLevel, EffortCaps } from '../components/home/ControlPanel';
 import { SessionReportPanel } from '../components/home/SessionReportPanel';
 import { UnityMcpToggle } from '../components/home/UnityMcpToggle';
-import { AnimatedChatInput, type ComposerPickers } from '../components/ui/animated-ai-chat';
+import { AnimatedChatInput, type ComposerPickers, type ComposerDraft } from '../components/ui/animated-ai-chat';
 import { ToastContainer } from '../components/ui/Toast';
 
 import { useAppInitialization } from '../hooks/home/useAppInitialization';
@@ -376,6 +376,8 @@ export default function Home() {
   // (lib/mobile.ts); the desktop app is never a remote page, so for it `phone` stays false.
   const phone = usePhoneLayout();
   const phoneRoute = usePhoneRoute();
+  // Phone drafts live above the phone branch: rotating to a wide layout unmounts the phone shell, not the page.
+  const phoneDrafts = useRef(new Map<string, ComposerDraft>()).current;
   // The right column is the workspace (Sahne / Dosyalar / Kod / Önizleme + the terminal drawer)
   // since the v4 column swap; the chat is the main stage and is never hidden. Width modes
   // dar / yarim / odak replace P2's drag handle (lib/workspacePanel.ts).
@@ -1125,6 +1127,7 @@ export default function Home() {
         />
         <PhoneShell
           route={phoneRoute}
+          drafts={phoneDrafts}
           covered={ai.showSettings || profileOpen || guide.guideOpen}
           conversations={chat.conversations} activeConvId={chat.activeConvId} convStatus={chat.convStatus}
           unknownGates={mcp.unknownGates.length}
@@ -1138,6 +1141,8 @@ export default function Home() {
             composer, contextUsage: chat.contextUsage,
             // Back from the Ekran tab: follow the stream if the user was at the bottom, else offer the jump.
             onThreadShown: () => { if (chatScroll.isPinned) chatScroll.scrollToBottom('auto'); else setHasUnreadBelow(true); },
+            // A freshly opened chat screen starts at its end, where a waiting card is drawn.
+            onThreadOpened: () => { chatScroll.scrollToBottom('auto'); setHasUnreadBelow(false); },
             menu: {
               models: ai.availableModels,
               currentModel: { provider_type: ai.aiConfig.provider_type, model_name: ai.aiConfig.model_name },
