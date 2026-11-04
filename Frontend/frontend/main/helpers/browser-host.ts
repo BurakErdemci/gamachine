@@ -1203,10 +1203,13 @@ export class BrowserHost {
         }, DOWNLOAD_APPROVAL_MS)
         // The gateway only sees a paused download in the agent's next reply, so with browser cards off it would
         // wait for that reply (or the 3 minute cancel). Ask the setting now; any failure leaves it paused.
+        // A Stop pressed while the settings read is in flight is not in that reply's `halted`.
+        const epoch = this.haltEpoch(entry.conversationId)
         void (async () => {
           const { data } = await this.request('get', '/browser/settings')
           // The gateway's order: a disabled browser and a chat the user stopped deny before cards_off allows.
-          const halted = Array.isArray(data?.halted) && data.halted.some((id: unknown) => Number(id) === entry.conversationId)
+          const halted = this.haltEpoch(entry.conversationId) !== epoch ||
+            (Array.isArray(data?.halted) && data.halted.some((id: unknown) => Number(id) === entry.conversationId))
           if (!this.stopped && data?.enabled === true && data?.cards_off === true && !halted && entry.state === 'awaiting_approval') this.resumeDownload(entry)
         })().catch(() => { /* stays paused for the gateway */ })
       }

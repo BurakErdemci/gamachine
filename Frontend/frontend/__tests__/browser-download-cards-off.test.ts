@@ -179,6 +179,16 @@ describe('agent download with browser cards off', () => {
     expect(item.resume).not.toHaveBeenCalled()
   })
 
+  it('stays paused when Stop is pressed while the settings read is in flight', async () => {
+    const f = fixture()
+    const wc = await agentTab(f)
+    const { item } = download(f, wc, 'theme.mp3')
+    f.host.halt(4)
+    await f.reply(0, true)
+    expect(item.resume).not.toHaveBeenCalled()
+    expect((await list(f))[0].state).toBe('awaiting_approval')
+  })
+
   it('does not resume when the host shut down before the settings reply', async () => {
     const f = fixture()
     const wc = await agentTab(f)
