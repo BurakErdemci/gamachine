@@ -61,7 +61,8 @@ def test_unknown_chat_is_refused(env, chat_id):
 def test_empty_project_path_is_refused(env):
     client, chat, _, _, _ = env
     body = _check(client, chat, "").json()
-    assert body["ok"] is False and "proje yolunu bildirmedi" in body["detail"]
+    assert body == {"ok": False, "detail": "Unity editörü şu an Gamachine'e bağlı değil; Gamachine "
+                    "yeniden bağlamayı deniyor. Birkaç saniye sonra tekrar dene; sürerse Unity MCP'yi kapatıp aç."}
 
 
 def test_no_open_workspace_is_refused(env, monkeypatch):

@@ -205,7 +205,10 @@ def project_scope_detail(workspace_path, project_path) -> str | None:
     if not workspace_path:
         return NO_WORKSPACE_DETAIL
     if not project_path:
-        return "Hedef Unity editörü proje yolunu bildirmedi; istek gönderilmedi."
+        # Agents read this and must know what to do next (measured 4 Nov 2026:
+        # the old "did not report its project path" left them stuck).
+        return ("Unity editörü şu an Gamachine'e bağlı değil; Gamachine yeniden bağlamayı deniyor. "
+                "Birkaç saniye sonra tekrar dene; sürerse Unity MCP'yi kapatıp aç.")
     if _same_dir(project_path, workspace_path):
         return None
     target = os.path.basename(os.path.normpath(project_path))
