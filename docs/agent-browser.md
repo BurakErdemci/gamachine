@@ -362,7 +362,8 @@ only answers two read-only calls and keeps no pick state; nothing is ever reconc
    other fixed listeners (6400-6499 Unity bridge and its fallback ports, 9876 Blender bridge, 8799 relay dev, 8888
    renderer dev, 8000 default backend). Each copy of the rule keeps that list with where every port comes from
    (`gamachine_ports()` in `browser_use/policy.py`, `GAMACHINE_DEFAULT_PORTS` and `gamachinePorts()` in
-   `browser-url-policy.ts`). The backend gateway sends its full computed list as `denied_ports` with every command; the
+   `browser-url-policy.ts`). The backend gateway sends its full computed list as `denied_ports` with every command, and
+   pushes a new one (op `ports`, within 5 s) when a Gamachine listener starts or moves with no command in between; the
    host keeps the latest one per runtime and merges it with what it knows itself (its ports, `UNITY_MCP_HTTP_PORT` /
    `UNITY_MCP_HTTP_URL`), and until it has received one it refuses every loopback address. A runtime value that is not
    known adds nothing in the backend. Still refused: the private network (10/8, 172.16/12, 192.168/16,
@@ -373,15 +374,23 @@ only answers two read-only calls and keeps no pick state; nothing is ever reconc
    again) and for links between files inside those roots: realpath inside a root, percent-decoded, no UNC, `\?\`
    or device path, no stream (`:`) in a name, directory listings allowed; inside the temp folder Gamachine's own files
    (`gamachine.log` and anything under a name that starts with `gamachine`) stay closed. Both copies also refuse
-   spellings a browser reads differently (control characters, no `//` after the scheme, backslashes, a percent-encoded
-   or non-ASCII host, port 0, `file:` without `file:///`); the shared case table `Backend/tests/data/browser_policy_cases.json`
+   spellings a browser reads differently (control characters, no `//` after the scheme, backslashes anywhere, a
+   percent-encoded or non-ASCII host, port 0, `file:` without `file:///`, and IPv6 hosts that carry an IPv4 address:
+   IPv4-mapped or -compatible, NAT64 64:ff9b::/96, 6to4 2002::/16, Teredo 2001::/32); the shared case table `Backend/tests/data/browser_policy_cases.json`
    run against both copies. **Origin rule:** a request (frame, sub-resource, redirect, window open) to a loopback
-   address is allowed only when the *requesting frame* is itself a loopback page (a public child frame inside a loopback
-   page reaches nothing local; a blank frame speaks for its parent; a request that names no frame is public), or while
-   the host's own load of a loopback address is under way. A main-frame redirect is judged by the hop before it, so a
-   loopback page that sends the tab through a public site cannot be redirected back to loopback. A public page reaches
-   nothing local or private; a `file:` page loads only files inside its roots, never http(s) or loopback; a tab keeps
-   the roots of every `file:` address it opened, so Back and Forward to one restores them. The two copies of the rule
+   address is allowed only when it comes from a loopback page. A sub-resource comes from the document of its frame (a
+   public child frame inside a loopback page reaches nothing local; about:blank and about:srcdoc, with or without a
+   fragment, blob: and data: frames speak for their parent, the top frame for the tab's page); a request that names no
+   frame is public, so workers of a loopback page cannot reach loopback (owner decision, 4 Nov 2026: security over
+   worker loopback). A navigation hop of any frame, main or sub, comes from the previous hop of the same frame, its
+   first hop from the frame's document: a new iframe of a loopback page sent through a public site cannot be
+   redirected back to loopback. A page never starts a main-frame trip from a public page to loopback; only the host's
+   own load does (the agent's navigate, the address bar, Back/Forward), and that load counts only until it ends or, if
+   it never starts (a page cancelled it), for 10 s. A public page reaches nothing local or private; a `file:` page
+   loads only files inside its roots, never http(s) or loopback; a tab keeps the roots of every `file:` address it
+   opened (keyed without the fragment), and Back and Forward to one restore them when the entry commits. Accepted as
+   low: a public iframe that navigates the top of a loopback page (target=_top, needs a user gesture) is judged by that
+   top page. The two copies of the rule
    (`browser_use/policy.py` and `main/helpers/browser-url-policy.ts`) change in the same commit. The check runs in
    `will-navigate`, `will-redirect` and `will-frame-navigate`, and in `session.webRequest.onBeforeRequest` for
    sub-resources.

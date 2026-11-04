@@ -71,6 +71,13 @@ async function open(f: Fixture, url: string, extra: Record<string, unknown> = {}
   return reply
 }
 
+/** A host load committing in the fake page the way Electron reports it: started by no frame, committed, finished. */
+function commit(f: Fixture, url: string) {
+  f.wc.emit('did-start-navigation', { url, isMainFrame: true, isSameDocument: false })
+  f.wc.emit('did-navigate', {}, url)
+  f.wc.finish(url)
+}
+
 /** A request the page shown makes itself (its frame is the page). */
 const blocked = (f: Fixture, url: string, type = 'xhr', frame: string | undefined = f.wc.url) => f.host.requestBlocked(url, type, 1, frame)
 
@@ -120,8 +127,14 @@ describe('request origin rule', () => {
     await open(f, `http://127.0.0.1:${FREE}/`)
     expect(await f.host.requestBlocked(`http://127.0.0.1:${FREE}/worker.js`, 'script')).toBe(true)
     expect(await f.host.requestBlocked(`http://127.0.0.1:${FREE}/worker.js`, 'script', 99)).toBe(true)
-    // A tab's request that names no frame is not the page's: it counts as public.
+  })
+
+  it('refuses loopback to a request of a loopback tab that names no frame', async () => {
+    const f = fixture()
+    await open(f, `http://127.0.0.1:${FREE}/`)
+    // A worker a public iframe starts is frameless too, so no frame is public even in a loopback tab.
     expect(await f.host.requestBlocked(`http://127.0.0.1:${FREE}/x.js`, 'script', 1)).toBe(true)
+    expect(await f.host.requestBlocked('https://cdn.example/x.js', 'script', 1)).toBe(false)
   })
 
   it('lets a loopback page load loopback and public resources, except on Gamachine ports', async () => {
@@ -157,9 +170,10 @@ describe('request origin rule', () => {
     f.wc.emit('will-navigate', toLocal)
     expect(toLocal.preventDefault).toHaveBeenCalled()
     await open(f, `http://localhost:${FREE}/`)
-    const ownLink = { url: `http://localhost:${FREE}/level2`, isMainFrame: true, preventDefault: vi.fn() }
-    const toGamachine = { url: 'http://127.0.0.1:8080/mcp', isMainFrame: true, preventDefault: vi.fn() }
-    const toFile = { url: 'file:///C:/Windows/win.ini', isMainFrame: true, preventDefault: vi.fn() }
+    const top = { url: f.wc.url, parent: null }
+    const ownLink = { url: `http://localhost:${FREE}/level2`, isMainFrame: true, frame: top, preventDefault: vi.fn() }
+    const toGamachine = { url: 'http://127.0.0.1:8080/mcp', isMainFrame: true, frame: top, preventDefault: vi.fn() }
+    const toFile = { url: 'file:///C:/Windows/win.ini', isMainFrame: true, frame: top, preventDefault: vi.fn() }
     for (const event of [ownLink, toGamachine, toFile]) f.wc.emit('will-navigate', event)
     expect(ownLink.preventDefault).not.toHaveBeenCalled()
     expect(toGamachine.preventDefault).toHaveBeenCalled()
@@ -241,9 +255,9 @@ describe('file: pages', () => {
   it('keeps a file: page to links inside its roots', async () => {
     const f = fixture()
     await open(f, url(path.join(workspace, 'index.html')), { file_roots: [workspace] })
-    const inside = { url: url(path.join(workspace, 'shot.png')), isMainFrame: true, preventDefault: vi.fn() }
-    const out = { url: url(path.join(outside, 'package.json')), isMainFrame: true, preventDefault: vi.fn() }
-    const web = { url: 'https://example.com/', isMainFrame: true, preventDefault: vi.fn() }
+    const inside = { url: url(path.join(workspace, 'shot.png')), isMainFrame: true, frame: { url: f.wc.url, parent: null }, preventDefault: vi.fn() }
+    const out = { url: url(path.join(outside, 'package.json')), isMainFrame: true, frame: inside.frame, preventDefault: vi.fn() }
+    const web = { url: 'https://example.com/', isMainFrame: true, frame: inside.frame, preventDefault: vi.fn() }
     for (const event of [inside, out, web]) f.wc.emit('will-navigate', event)
     expect(inside.preventDefault).not.toHaveBeenCalled()
     expect(out.preventDefault).toHaveBeenCalled()
@@ -293,8 +307,26 @@ describe('the requesting frame decides, not the tab', () => {
     }
     expect(await ask(blank({ url: local }))).toBe(false)
     expect(await ask(blank({ url: evil }))).toBe(true)
-    expect(await ask(blank(null))).toBe(true)
+    // A blank top frame is the page the tab shows; no frame at all is public.
+    expect(await ask(blank(null))).toBe(false)
     expect(await ask(null)).toBe(true)
+    await open(f, 'https://example.com/')
+    expect(await ask(blank(null))).toBe(true)
+  })
+
+  it('judges about:blank with a fragment, srcdoc, blob: and data: frames by their parent', async () => {
+    const f = fixture()
+    await open(f, local)
+    const ask = (frame: unknown) => {
+      const handler = f.session.webRequest.onBeforeRequest.mock.calls[0][0]
+      return new Promise<boolean>((resolve) => handler({ url: `http://127.0.0.1:${FREE}/x`, resourceType: 'xhr', webContentsId: 1, frame }, (r: { cancel: boolean }) => resolve(r.cancel)))
+    }
+    for (const url of ['about:blank#preview', 'about:srcdoc', 'about:srcdoc#x', `blob:${local}0b6e`, 'data:text/html,<p>x</p>']) {
+      expect(await ask({ url, parent: { url: local } }), `${url} in a loopback page`).toBe(false)
+      expect(await ask({ url, parent: { url: evil, parent: { url: local } } }), `${url} in a public frame`).toBe(true)
+    }
+    // Inherited all the way up: two blank frames under the loopback page.
+    expect(await ask({ url: 'about:blank', parent: { url: 'about:blank#a', parent: { url: local } } })).toBe(false)
   })
 
   it('refuses a subframe navigation to loopback from a public frame, and a redirect of it', async () => {
@@ -318,7 +350,7 @@ describe('hops of one navigation', () => {
     const f = fixture()
     await open(f, `http://127.0.0.1:${FREE}/`)
     const hop = (url: string, kind = 'will-navigate') => {
-      const e = { url, isMainFrame: true, preventDefault: vi.fn() }
+      const e = { url, isMainFrame: true, frame: { url: f.wc.url, parent: null }, preventDefault: vi.fn() }
       f.wc.emit(kind, e)
       return e.preventDefault.mock.calls.length > 0
     }
@@ -401,7 +433,7 @@ describe('file roots across history', () => {
       const entries = [{ url: page }, { url: 'https://example.com/' }]
       f.wc.navigationHistory = {
         canGoBack: () => true, canGoForward: () => false, getActiveIndex: () => 1, getEntryAtIndex: (i: number) => entries[i],
-        goBack: vi.fn(() => f.wc.finish(page)), goForward: vi.fn(),
+        goBack: vi.fn(() => commit(f, page)), goForward: vi.fn(),
       }
       expect(await send(f, { op: 'back', conversation_id: 4, args: {} })).toMatchObject({ ok: true })
       expect(f.wc.navigationHistory.goBack).toHaveBeenCalled()
@@ -409,6 +441,186 @@ describe('file roots across history', () => {
     } finally {
       fs.rmSync(work, { recursive: true, force: true })
     }
+  })
+
+  it('gives a fragment entry of a file page the page\'s roots', async () => {
+    const f = fixture()
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), 'gm-frag-'))
+    try {
+      fs.writeFileSync(path.join(work, 'index.html'), 'x')
+      fs.writeFileSync(path.join(work, 'shot.png'), 'x')
+      const page = pathToFileURL(path.join(work, 'index.html')).toString()
+      const shot = pathToFileURL(path.join(work, 'shot.png')).toString()
+      await open(f, page, { file_roots: [work] })
+      f.wc.url = `${page}#sec2`
+      f.wc.emit('did-navigate-in-page', {}, f.wc.url, true)
+      await open(f, 'https://example.com/')
+      const entries = [{ url: page }, { url: `${page}#sec2` }, { url: 'https://example.com/' }]
+      f.wc.navigationHistory = {
+        canGoBack: () => true, canGoForward: () => false, getActiveIndex: () => 2, getEntryAtIndex: (i: number) => entries[i],
+        goBack: vi.fn(), goForward: vi.fn(),
+      }
+      // The load of the entry itself (before it commits), then the page's own image once it has.
+      void send(f, { op: 'back', conversation_id: 4, args: {} })
+      await vi.waitFor(() => expect(f.wc.navigationHistory.goBack).toHaveBeenCalled())
+      expect(await blocked(f, `${page}#sec2`, 'mainFrame', 'https://example.com/')).toBe(false)
+      commit(f, `${page}#sec2`)
+      expect(await blocked(f, shot, 'image')).toBe(false)
+    } finally {
+      fs.rmSync(work, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps the roots of the file page shown when a Back does not happen', async () => {
+    const f = fixture()
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), 'gm-keep-'))
+    try {
+      fs.writeFileSync(path.join(work, 'a.html'), 'x')
+      fs.writeFileSync(path.join(work, 'i.png'), 'x')
+      const a = pathToFileURL(path.join(work, 'a.html')).toString()
+      await open(f, 'https://example.com/')
+      await open(f, a, { file_roots: [work] })
+      const entries = [{ url: 'https://example.com/' }, { url: a }]
+      f.wc.navigationHistory = {
+        canGoBack: () => true, canGoForward: () => false, getActiveIndex: () => 1, getEntryAtIndex: (i: number) => entries[i],
+        goBack: vi.fn(), goForward: vi.fn(),
+      }
+      // The page cancels the Back (beforeunload): no navigation starts.
+      void send(f, { op: 'back', conversation_id: 4, args: {} })
+      await vi.waitFor(() => expect(f.wc.navigationHistory.goBack).toHaveBeenCalled())
+      expect(await blocked(f, pathToFileURL(path.join(work, 'i.png')).toString(), 'image')).toBe(false)
+    } finally {
+      fs.rmSync(work, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('the hops of every frame', () => {
+  const local = `http://127.0.0.1:${FREE}/`
+  const hop = (f: Fixture, kind: string, url: string, frame: unknown, isMainFrame = false) => {
+    const e = { url, isMainFrame, frame, preventDefault: vi.fn() }
+    f.wc.emit(kind, e)
+    return e.preventDefault.mock.calls.length > 0
+  }
+  const request = (f: Fixture, url: string, resourceType: string, frame: unknown) => {
+    const handler = f.session.webRequest.onBeforeRequest.mock.calls[0][0]
+    return new Promise<boolean>((resolve) => handler({ url, resourceType, webContentsId: 1, frame }, (r: { cancel: boolean }) => resolve(r.cancel)))
+  }
+
+  it('stops a new iframe of a loopback page that a public site redirects to loopback', async () => {
+    const f = fixture()
+    await open(f, local)
+    const fresh = { url: 'about:blank', parent: { url: local } }
+    expect(hop(f, 'will-frame-navigate', 'https://evil.example/r', fresh)).toBe(false)
+    expect(await request(f, 'https://evil.example/r', 'subFrame', fresh)).toBe(false)
+    expect(hop(f, 'will-redirect', `${local}delete?id=1`, fresh)).toBe(true)
+    expect(await request(f, `${local}delete?id=1`, 'subFrame', fresh)).toBe(true)
+  })
+
+  it('lets a new iframe of a loopback page open loopback and follow its loopback redirects', async () => {
+    const f = fixture()
+    await open(f, local)
+    const fresh = { url: 'about:srcdoc', parent: { url: local } }
+    expect(hop(f, 'will-frame-navigate', `${local}a`, fresh)).toBe(false)
+    expect(await request(f, `${local}a`, 'subFrame', fresh)).toBe(false)
+    expect(hop(f, 'will-redirect', `http://localhost:${FREE + 1}/b`, fresh)).toBe(false)
+    expect(await request(f, `http://localhost:${FREE + 1}/b`, 'subFrame', fresh)).toBe(false)
+  })
+
+  it('stops a new iframe inside a public frame from opening loopback', async () => {
+    const f = fixture()
+    await open(f, local)
+    const fresh = { url: 'about:blank', parent: { url: 'https://evil.example/', parent: { url: local } } }
+    expect(hop(f, 'will-frame-navigate', `${local}a`, fresh)).toBe(true)
+    expect(await request(f, `${local}a`, 'subFrame', fresh)).toBe(true)
+  })
+
+  it('judges the redirect of a page-started history navigation by the hop before it', async () => {
+    const f = fixture()
+    await open(f, local)
+    f.wc.emit('did-stop-loading')
+    // history.back() to a public entry skips will-navigate: the request itself is the first hop.
+    const top = { url: local, parent: null }
+    expect(await request(f, 'https://example.com/back', 'mainFrame', top)).toBe(false)
+    expect(hop(f, 'will-redirect', `${local}in`, top, true)).toBe(true)
+  })
+
+  it('forgets the hops when loading stops', async () => {
+    const f = fixture()
+    await open(f, local)
+    const fresh = { url: 'about:blank', parent: { url: local } }
+    expect(hop(f, 'will-frame-navigate', 'https://evil.example/r', fresh)).toBe(false)
+    expect(hop(f, 'will-redirect', `${local}x`, fresh)).toBe(true)
+    f.wc.emit('did-stop-loading')
+    // The frame is still blank (its navigation never committed): a new one starts from the loopback page.
+    expect(hop(f, 'will-frame-navigate', `${local}x`, fresh)).toBe(false)
+  })
+})
+
+describe('the host\'s own load', () => {
+  const local = `http://127.0.0.1:${FREE}/`
+  const backFromPublic = async (f: Fixture) => {
+    await open(f, local)
+    await open(f, 'https://example.com/')
+    const entries = [{ url: local }, { url: 'https://example.com/' }]
+    f.wc.navigationHistory = { canGoBack: () => true, canGoForward: () => false, getActiveIndex: () => 1, getEntryAtIndex: (i: number) => entries[i], goBack: vi.fn(), goForward: vi.fn() }
+    void send(f, { op: 'back', conversation_id: 4, args: {} })
+    await vi.waitFor(() => expect(f.wc.navigationHistory.goBack).toHaveBeenCalled())
+  }
+
+  it('gives the public page shown no way to loopback when a Back never starts', async () => {
+    const f = fixture()
+    await backFromPublic(f)
+    const e = { url: `${local}x`, isMainFrame: true, frame: { url: 'https://example.com/', parent: null }, preventDefault: vi.fn() }
+    f.wc.emit('will-navigate', e)
+    expect(e.preventDefault).toHaveBeenCalled()
+  })
+
+  it('drops a Back that has not started within 10 s', async () => {
+    const f = fixture()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      await backFromPublic(f)
+      expect(await blocked(f, `${local}x`, 'mainFrame')).toBe(false)
+      vi.advanceTimersByTime(10_001)
+      expect(await blocked(f, `${local}x`, 'mainFrame')).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not lend a waiting Back to a history navigation the page starts itself', async () => {
+    const f = fixture()
+    await backFromPublic(f)
+    f.wc.emit('did-start-navigation', { url: local, isMainFrame: true, isSameDocument: false, frame: { url: 'https://example.com/' }, initiator: { url: 'https://example.com/' } })
+    expect(await blocked(f, `${local}x`, 'mainFrame')).toBe(true)
+  })
+
+  it('ignores the end of an older load while its own has not started, and ends with its own', async () => {
+    const f = fixture()
+    await open(f, local)
+    void send(f, { op: 'navigate', conversation_id: 4, args: { url: 'https://example.com/go' } })
+    await vi.waitFor(() => expect(f.wc.pending).toBe('https://example.com/go'))
+    // The loopback page's late finish and stop belong to the load before.
+    f.wc.loading = false
+    f.wc.emit('did-finish-load')
+    f.wc.emit('did-stop-loading')
+    expect(await blocked(f, `${local}landing`, 'mainFrame')).toBe(true)
+    f.wc.emit('did-start-navigation', { url: 'https://example.com/go', isMainFrame: true, isSameDocument: false })
+    f.wc.emit('did-fail-load', {}, -105, 'NAME_NOT_RESOLVED', 'https://example.com/go', true)
+    // The public load is over: the loopback page still shown judges its own next load.
+    expect(await blocked(f, `${local}landing`, 'mainFrame')).toBe(false)
+  })
+})
+
+describe('Gamachine ports that start later', () => {
+  it('takes a list the backend pushes with no agent command', async () => {
+    const f = fixture()
+    await open(f, `http://127.0.0.1:${FREE}/`)
+    expect(await blocked(f, 'http://127.0.0.1:52000/')).toBe(false)
+    expect(await f.host.handle({ op: 'ports', denied_ports: [...DENIED, 52000] } as never)).toMatchObject({ ok: true })
+    expect(await blocked(f, 'http://127.0.0.1:52000/')).toBe(true)
+    expect(await blocked(f, `http://127.0.0.1:${FREE}/`)).toBe(false)
   })
 })
 

@@ -147,6 +147,17 @@ def _unmapped(ip):
     return getattr(ip, "ipv4_mapped", None) or ip
 
 
+_NAT64 = ipaddress.ip_network("64:ff9b::/96")
+_IPV4_COMPATIBLE = ipaddress.ip_network("::/96")
+
+
+def _embeds_ipv4(ip) -> bool:
+    """IPv6 forms that carry an IPv4 address (mapped, compatible, NAT64, 6to4, Teredo): refused whatever they
+    carry, in both copies of the rule; loopback is judged before this."""
+    return ip.version == 6 and bool(ip.ipv4_mapped or ip.sixtofour or ip.teredo
+                                    or ip in _NAT64 or ip in _IPV4_COMPATIBLE)
+
+
 def _blocked_address(ip) -> bool:
     """Private, link-local (metadata), CGNAT, unspecified, multicast and reserved addresses. Loopback is
     judged by the caller, which knows the port."""
@@ -230,9 +241,9 @@ def navigation_refusal(url, file_roots=None, extra_ports=()) -> str:
                 ip = ipaddress.ip_address(socket.inet_aton(host))
             except OSError:
                 return ""
-        ip = _unmapped(ip)
-        if not ip.is_loopback:
-            return "Private network addresses cannot be opened in the agent browser." if _blocked_address(ip) else ""
+        if not _unmapped(ip).is_loopback:
+            return ("Private network addresses cannot be opened in the agent browser."
+                    if _embeds_ipv4(ip) or _blocked_address(ip) else "")
     if (port or _DEFAULT_SCHEME_PORT[scheme]) in gamachine_ports(extra_ports):
         return "Gamachine's own local services cannot be opened in the agent browser."
     return ""

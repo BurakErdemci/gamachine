@@ -536,6 +536,46 @@
   {
    "url": "http://[fe80::1%25eth0]/",
    "allow": false
+  },
+  {
+   "url": "http://[2002:808:808::]/",
+   "allow": false
+  },
+  {
+   "url": "http://[2002:0808:0808::1]/",
+   "allow": false
+  },
+  {
+   "url": "http://[64:ff9b::808:808]/",
+   "allow": false
+  },
+  {
+   "url": "http://[64:ff9b::8.8.8.8]/",
+   "allow": false
+  },
+  {
+   "url": "http://[2001:0:4136:e378:8000:63bf:3fff:fdd2]/",
+   "allow": false
+  },
+  {
+   "url": "http://[::ffff:8.8.8.8]/",
+   "allow": false
+  },
+  {
+   "url": "http://[::ffff:808:808]/",
+   "allow": false
+  },
+  {
+   "url": "http://[::8.8.8.8]/",
+   "allow": false
+  },
+  {
+   "url": "http://[::808:808]/",
+   "allow": false
+  },
+  {
+   "url": "http://[2606:4700:4700::1111]/",
+   "allow": true
   }
  ],
  "file": [
@@ -787,6 +827,18 @@
   },
   {
    "url": "file://{tmp}/gamachine.log.1",
+   "allow": false
+  },
+  {
+   "url": "file://{ws}\\ok.html",
+   "allow": false
+  },
+  {
+   "url": "file://{ws}/sub\\page.html",
+   "allow": false
+  },
+  {
+   "url": "file://{tmp}/sub\\page.html",
    "allow": false
   }
  ]

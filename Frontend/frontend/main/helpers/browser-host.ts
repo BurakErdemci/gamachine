@@ -33,21 +33,30 @@ const HOST_CACHE_MAX = 1000
 /** Most file: addresses of one tab whose roots are remembered for back/forward. */
 const FILE_ROOTS_MAX = 200
 
-/**
- * The address of the frame a request or navigation comes from, read at once (a frame's address is gone after it
- * navigates). A blank or srcdoc frame speaks for its parent; undefined when nothing is known, which counts as public.
- */
-function frameAddress(frame: { url?: string; parent?: unknown } | null | undefined): string | undefined {
+/** A frame as webRequest and navigation events give it (Electron's WebFrameMain; its properties throw once it is gone). */
+type FrameLike = { url?: string; parent?: unknown; frameTreeNodeId?: number } | null | undefined
+/** The main frame's key in a tab's hop record. */
+const MAIN_FRAME = 'main'
+/** Most frames of one tab with a navigation under way at once: a page creates the frames, so the record is bounded. */
+const HOPS_MAX = 256
+/** How long the host's own load may take to start (a page's beforeunload can cancel it, and nothing then follows). */
+const HOST_NAV_START_MS = 10_000
+
+/** A document with no address of its own (about:blank or about:srcdoc, with or without a fragment, blob:, data:) speaks for its parent. */
+function inheritsOrigin(url: string): boolean {
+  return url === '' || /^(about:(blank|srcdoc)(#|$)|blob:|data:)/i.test(url)
+}
+
+/** A file: address without its fragment, the key its roots are remembered by; '' for any other address. */
+function fileKey(url: string): string {
   try {
-    let current = frame
-    for (let depth = 0; current && depth < 16; depth++) {
-      const url = current.url
-      if (typeof url !== 'string') return undefined
-      if (url !== '' && url !== 'about:blank' && url !== 'about:srcdoc') return url
-      current = current.parent as typeof frame
-    }
-  } catch { /* the frame is gone */ }
-  return undefined
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'file:') return ''
+    parsed.hash = ''
+    return parsed.href
+  } catch {
+    return ''
+  }
 }
 // A page may open a tab only within this long after its own click or key, and only so often.
 const GESTURE_MS = 1_000
@@ -968,12 +977,15 @@ interface Tab {
   /** The main-frame address being loaded and not yet committed (getURL still shows the old page); null once it commits. */
   target: string | null
   /**
-   * The kind of page the main-frame navigation under way last came from: its previous hop, so a redirect off a public
-   * page cannot land on loopback just because the page shown before it was local. Set by the host's own load and
-   * moved on at every hop that passes will-navigate / will-redirect; cleared when loading stops, unless a newer
-   * navigation is already loading. Null when no navigation is under way.
+   * The previous hop of each frame's navigation under way (MAIN_FRAME for the main frame), which its next hop is
+   * judged by: a redirect off a public site cannot land on loopback because the page around it is local.
    */
-  hostNav: PageOrigin | null
+  hops: Map<unknown, PageOrigin>
+  /**
+   * The host's own main-frame load (agent navigate, address bar, Back/Forward) with the file roots its page gets when it
+   * commits; `started` once Electron reports it began. Its first hop counts as one from the page it goes to.
+   */
+  hostNav: { roots: readonly string[] | null; started: boolean; timer: ReturnType<typeof setTimeout> } | null
   /** Where a file: page of this tab may read from; set by the agent's navigate, null after any other host load. */
   fileRoots: readonly string[] | null
   /** The roots each file: address of this tab was opened with, so back/forward to it gets them again. */
@@ -1181,7 +1193,7 @@ export class BrowserHost {
     session.setPermissionCheckHandler(() => false)
     session.on('will-download', (event, item, webContents) => this.willDownload(event, item, webContents))
     session.webRequest.onBeforeRequest((details, callback) => {
-      void this.requestBlocked(details.url, details.resourceType, details.webContentsId, frameAddress(details.frame)).then(
+      void this.requestBlocked(details.url, details.resourceType, details.webContentsId, details.frame).then(
         (blocked) => callback({ cancel: blocked }),
         () => callback({ cancel: true }),
       )
@@ -1379,19 +1391,18 @@ export class BrowserHost {
     return { ok: true, download: this.downloadView(entry), ...page }
   }
 
-  private checkConnectedIp(details: { url: string; ip?: string; webContentsId?: number; resourceType?: string; frame?: { url?: string; parent?: unknown } | null }): void {
+  private checkConnectedIp(details: { url: string; ip?: string; webContentsId?: number; resourceType?: string; frame?: FrameLike }): void {
     const ip = (details.ip || '').replace(/^\[|\]$/g, '')
     if (!ip || !isPrivateAddress(ip)) return
     let host: string
     try { host = new URL(details.url).hostname.replace(/^\[|\]$/g, '').toLowerCase() } catch { return }
     // A literal host was already judged by the static policy, so a private connection is not a rebinding; a
-    // loopback one is fine only for a page that is itself local. localhost names are judged the same way.
-    const frameUrl = frameAddress(details.frame)
+    // loopback one is fine only for a request that comes from a local page. localhost names are judged the same way.
     const literal = isIP(host) !== 0
     const localName = !literal && isLoopbackHost(host)
     if (literal && !isLoopbackAddress(ip)) return
     if ((literal || localName) && isLoopbackAddress(ip) &&
-      this.requestOrigin(this.tabOfContents(details.webContentsId), details.resourceType === 'mainFrame', frameUrl) === 'loopback') return
+      this.requestOrigin(this.tabOfContents(details.webContentsId), details.resourceType ?? '', details.frame) === 'loopback') return
     if (!literal && !localName) this.denyHost(host)
     // A request with no page behind it (a worker) cannot be pinned to one tab, so every tab is stopped.
     const hit = [...this.tabs.values()].filter((tab) => details.webContentsId === undefined ||
@@ -1408,25 +1419,27 @@ export class BrowserHost {
   }
 
   /**
-   * Request gate. The frame that makes the request decides what it may reach (a main-frame request, the hop of the
-   * navigation it continues): a public frame nothing local, a loopback frame loopback (except Gamachine's ports) and
-   * public hosts, a file: frame only files inside its roots. `frameUrl` is that frame's address; without it (no
-   * frame, no tab) the request counts as public. Every http(s)/ws(s) host must also not resolve to a private address.
+   * Request gate. What a request may reach depends on where it comes from (requestOrigin): from a public page
+   * nothing local, from a loopback page loopback (except Gamachine's ports) and public hosts, from a file: page only
+   * files inside its roots. Every http(s)/ws(s) host must also not resolve to a private address. A navigation request
+   * that passes is the hop its frame's next one is judged by. `frame` is Electron's frame, or only its address.
    */
-  async requestBlocked(url: string, resourceType: string, webContentsId?: number, frameUrl?: string): Promise<boolean> {
+  async requestBlocked(url: string, resourceType: string, webContentsId?: number, frame?: FrameLike | string): Promise<boolean> {
     let parsed: URL
     try { parsed = new URL(url) } catch { return true }
-    const frame = resourceType === 'mainFrame' || resourceType === 'subFrame'
+    const navigation = resourceType === 'mainFrame' || resourceType === 'subFrame'
     const tab = this.tabOfContents(webContentsId)
-    const origin = this.requestOrigin(tab, resourceType === 'mainFrame', frameUrl)
-    const ctx = this.navContext(tab?.fileRoots)
-    if (parsed.protocol === 'file:') return !isAllowedRequest(url, origin, ctx)
-    if (['http:', 'https:', 'ws:', 'wss:'].includes(parsed.protocol)) {
-      if (!isAllowedRequest(url, origin, ctx)) return true
-      return this.hostBlocked(parsed.hostname)
-    }
+    const frameOf = typeof frame === 'string' ? { url: frame, parent: null } : frame
+    // Read now: a frame's address is gone once it navigates.
+    const origin = this.requestOrigin(tab, resourceType, frameOf)
+    const ctx = this.navContext(this.rootsFor(tab, resourceType === 'mainFrame'))
+    let allowed: boolean
+    if (parsed.protocol === 'file:') allowed = isAllowedRequest(url, origin, ctx)
+    else if (['http:', 'https:', 'ws:', 'wss:'].includes(parsed.protocol)) allowed = isAllowedRequest(url, origin, ctx) && !(await this.hostBlocked(parsed.hostname))
     // Inline sub-resources the page made itself (images from data:, blob: workers) carry no host.
-    return frame || !['data:', 'blob:'].includes(parsed.protocol)
+    else return navigation || !['data:', 'blob:'].includes(parsed.protocol)
+    if (allowed && navigation && tab) allowed = this.passHop(tab, resourceType === 'mainFrame', typeof frame === 'string' ? undefined : frame, url)
+    return !allowed
   }
 
   private async hostBlocked(hostname: string): Promise<boolean> {
@@ -1513,7 +1526,7 @@ export class BrowserHost {
     let markGone = () => {}
     const gone = new Promise<void>((resolve) => { markGone = resolve })
     const tab: Tab = { id: ++this.nextTabId, conversationId, agent, view, favicon: '', snapshotId: '', loadWaiter: null,
-      popupBlocked: null, userControl: false, lastGesture: null, userTouched: false, annotating: false, overlay: null, pick: null, notes: [], pinSeq: 0, frameSeq: 0, navGen: 0, waiting: 0, refreshing: false, refreshTimer: null, shows: null, faviconSeq: 0, target: null, hostNav: null, fileRoots: null, fileRootsByUrl: new Map(), gone, markGone, expected: [], busy: 0, lastAgentCommandAt: null, lastUserNavigationAt: null, lastUsed: 0 }
+      popupBlocked: null, userControl: false, lastGesture: null, userTouched: false, annotating: false, overlay: null, pick: null, notes: [], pinSeq: 0, frameSeq: 0, navGen: 0, waiting: 0, refreshing: false, refreshTimer: null, shows: null, faviconSeq: 0, target: null, hops: new Map(), hostNav: null, fileRoots: null, fileRootsByUrl: new Map(), gone, markGone, expected: [], busy: 0, lastAgentCommandAt: null, lastUserNavigationAt: null, lastUsed: 0 }
     this.wire(tab)
     win.contentView.addChildView(view)
     view.setBounds(this.bounds)
@@ -1552,25 +1565,32 @@ export class BrowserHost {
       }
       return { action: 'deny' }
     })
-    const refuse = (event: { url: string; isMainFrame: boolean; frame?: { url?: string; parent?: unknown } | null; preventDefault(): void }) => {
-      if (event.isMainFrame && this.isBeingRemoved(event.url)) {
+    // `start`: will-navigate / will-frame-navigate, a navigation the page starts (never the host's own loadURL); else
+    // will-redirect, the next hop of one under way.
+    const refuse = (start: boolean) => (event: { url: string; isMainFrame: boolean; frame?: FrameLike; preventDefault(): void }) => {
+      const main = event.isMainFrame
+      if (main && this.isBeingRemoved(event.url)) {
         event.preventDefault()
         // Like a refused address: an agent command waiting on this load must not wait for its timeout.
         this.settleLoad(tab, { ok: false, error: 'clearing' })
         return
       }
-      if (isAllowedRequest(event.url, this.requestOrigin(tab, event.isMainFrame, frameAddress(event.frame)), this.navContext(tab.fileRoots))) {
-        // The next hop of this main-frame navigation is judged by the one that just passed.
-        if (event.isMainFrame) tab.hostNav = pageOriginOf(event.url)
-        return
+      // A page-started navigation is judged by the document of the frame it navigates, never by a host load that has
+      // not started. Accepted as low: a public iframe that navigates the top of a loopback page (target=_top, needs a
+      // user gesture) is judged by that top page and may reach a free loopback port; `event.initiator` is not used.
+      const origin = !start ? this.requestOrigin(tab, main ? 'mainFrame' : 'subFrame', event.frame)
+        : this.documentOrigin(tab, event.frame)
+      if (isAllowedRequest(event.url, origin, this.navContext(this.rootsFor(tab, main && !start)))) {
+        if (start && main) this.dropHostNav(tab)
+        if (this.passHop(tab, main, event.frame, event.url)) return
       }
       event.preventDefault()
       // A refused main-frame navigation ends as ERR_ABORTED, which waitForLoad ignores.
-      if (event.isMainFrame) this.settleLoad(tab, { ok: false, error: 'url_not_allowed' })
+      if (main) this.settleLoad(tab, { ok: false, error: 'url_not_allowed' })
     }
-    wc.on('will-navigate', refuse)
-    wc.on('will-redirect', refuse)
-    wc.on('will-frame-navigate', refuse)
+    wc.on('will-navigate', refuse(true))
+    wc.on('will-redirect', refuse(false))
+    wc.on('will-frame-navigate', refuse(true))
     wc.on('will-attach-webview', (event) => event.preventDefault())
     // Every main-frame load, the host's own and back/forward/reload included, starts here.
     wc.on('did-start-navigation', (details) => {
@@ -1578,24 +1598,33 @@ export class BrowserHost {
       // History navigations the page starts itself (history.back()) skip will-navigate, so they are dropped here.
       const dropped = this.isBeingRemoved(details.url)
       tab.target = dropped ? null : details.url
+      // The host's own load has begun; one a frame started (the page's history.back()) is not the host's.
+      if (tab.hostNav && !details.isSameDocument) {
+        if (details.initiator) this.dropHostNav(tab)
+        else { tab.hostNav.started = true; clearTimeout(tab.hostNav.timer) }
+      }
       if (!dropped) return
       if (!wc.isDestroyed()) wc.stop()
       this.settleLoad(tab, { ok: false, error: 'clearing' })
     })
-    wc.on('did-finish-load', () => this.settleLoad(tab, { ok: true }))
+    wc.on('did-finish-load', () => {
+      this.loadEnded(tab, false)
+      this.settleLoad(tab, { ok: true })
+    })
     wc.on('did-fail-load', (_event, code, description, _url, isMainFrame) => {
       // -3 is ERR_ABORTED: a new navigation replaced this one, and its own load event will follow.
       if (isMainFrame && code !== -3) {
         tab.target = null
+        this.loadEnded(tab, false)
         this.settleLoad(tab, { ok: false, error: `load_failed: ${description || code}` })
       }
     })
     // Loading ended: a navigation that did not commit by now (aborted, refused on redirect) is no longer pending.
     wc.on('did-stop-loading', () => {
-      // A stop that was queued by the navigation a newer one replaced must not clear the newer one's hop.
+      // A stop that was queued by the navigation a newer one replaced must not clear the newer one.
       if (!(typeof wc.isLoading === 'function' && wc.isLoading())) {
         tab.target = null
-        tab.hostNav = null
+        this.loadEnded(tab, true)
       }
       this.emitLive(tab.conversationId)
     })
@@ -1611,6 +1640,11 @@ export class BrowserHost {
       if (this.tabs.get(tab.id) !== tab) return
       tab.favicon = ''
       tab.faviconSeq++
+      // The host's own load committed: its page gets the roots it was opened with (none for a web page).
+      if (tab.hostNav) {
+        tab.fileRoots = tab.hostNav.roots
+        this.endHostNav(tab)
+      }
       this.rememberFileRoots(tab, url)
       this.deps.history?.visit(url, wc.getTitle())
     })
@@ -1782,6 +1816,7 @@ export class BrowserHost {
       if (this.selected.get(tab.conversationId) === tab.id) this.reselect(tab)
     }
     this.settleLoad(tab, { ok: false, error: 'halted' })
+    this.endHostNav(tab)
     tab.markGone()
     const win = this.deps.window()
     try { if (win && !win.isDestroyed()) win.contentView.removeChildView(tab.view) } catch { /* window closing */ }
@@ -2405,8 +2440,8 @@ export class BrowserHost {
   /** The host's own navigation of a tab; the address is its target until it commits. */
   private load(tab: Tab, url: string, fileRoots: readonly string[] | null = null): void {
     tab.target = url
-    tab.hostNav = pageOriginOf(url)
     tab.fileRoots = fileRoots
+    this.startHostNav(tab, url, fileRoots)
     this.rememberFileRoots(tab, url)
     tab.view.webContents.loadURL(url).catch(() => { /* reported by did-fail-load */ })
   }
@@ -2643,14 +2678,100 @@ export class BrowserHost {
   }
 
   /**
-   * The kind of page a request comes from. A main-frame request continues the navigation under way, so it is judged
-   * by that navigation's previous hop (or the page shown when none is under way); any other request by the frame
-   * that made it (`frameUrl`), never by the tab's top-level page. No tab, or no frame, is public.
+   * The origin rule, one for every request and navigation: the kind of page it comes from.
+   * - A navigation hop (a main-frame or subframe request, a redirect) is judged by the previous hop of the same frame
+   *   (`tab.hops`), else by the frame's own document.
+   * - Any other request is judged by the document of the frame that made it.
+   * No tab, or no frame (a worker), is public.
    */
-  private requestOrigin(tab: Tab | null, mainFrame: boolean, frameUrl?: string): PageOrigin {
+  private requestOrigin(tab: Tab | null, resourceType: string, frame: FrameLike): PageOrigin {
     if (!tab) return 'public'
-    if (mainFrame) return tab.hostNav ?? pageOriginOf(tab.view.webContents.getURL())
-    return frameUrl === undefined ? 'public' : pageOriginOf(frameUrl)
+    const main = resourceType === 'mainFrame'
+    if (!main && resourceType !== 'subFrame') return this.documentOrigin(tab, frame)
+    const key = this.hopKey(main, frame)
+    const hop = key === undefined ? undefined : tab.hops.get(key)
+    return hop ?? this.documentOrigin(tab, frame)
+  }
+
+  /**
+   * The kind of document a frame shows. One with no address of its own (inheritsOrigin) speaks for its parent, the top
+   * frame for the tab's committed page. A frame that is gone is public.
+   */
+  private documentOrigin(tab: Tab | null, frame: FrameLike): PageOrigin {
+    // No frame is public, never the tab's page (owner decision, 4 Nov 2026: security over worker loopback): a worker
+    // a public iframe of a loopback page starts is frameless too, so workers of a loopback page cannot reach loopback.
+    // The host's own main-frame load does not need a frame: its first hop is in tab.hops.
+    if (!tab || !frame) return 'public'
+    try {
+      let current = frame
+      for (let depth = 0; current; depth++) {
+        const url = current.url
+        if (typeof url !== 'string' || depth >= 16) return 'public'
+        if (!inheritsOrigin(url)) return pageOriginOf(url)
+        current = current.parent as FrameLike
+      }
+    } catch {
+      return 'public'
+    }
+    return pageOriginOf(tab.view.webContents.getURL())
+  }
+
+  /** The key of a frame in the hop record: the main frame's, Electron's frame tree id, else the frame itself; undefined for none. */
+  private hopKey(main: boolean, frame: FrameLike): unknown {
+    if (main) return MAIN_FRAME
+    try {
+      return frame ? (typeof frame.frameTreeNodeId === 'number' ? frame.frameTreeNodeId : frame) : undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  /** Records a hop that passed as the previous hop of its frame; false (refuse it) when the record is full. */
+  private passHop(tab: Tab, main: boolean, frame: FrameLike, url: string): boolean {
+    const key = this.hopKey(main, frame)
+    if (key === undefined) return true
+    if (!tab.hops.has(key) && tab.hops.size >= HOPS_MAX) return false
+    tab.hops.set(key, pageOriginOf(url))
+    return true
+  }
+
+  /** The roots a request may read files from: a main-frame hop of the host's own load uses that load's, anything else the page's. */
+  private rootsFor(tab: Tab | null, mainFrameHop: boolean): readonly string[] | null {
+    if (!tab) return null
+    return mainFrameHop && tab.hostNav ? tab.hostNav.roots : tab.fileRoots
+  }
+
+  /** The host's own main-frame load of `url` begins: its first hop counts as one from the page it goes to (none for an unknown address). */
+  private startHostNav(tab: Tab, url: string | undefined, roots: readonly string[] | null): void {
+    this.endHostNav(tab)
+    tab.hops.delete(MAIN_FRAME)
+    if (url) tab.hops.set(MAIN_FRAME, pageOriginOf(url))
+    const timer = setTimeout(() => { if (tab.hostNav?.timer === timer && !tab.hostNav.started) this.dropHostNav(tab) }, HOST_NAV_START_MS)
+    timer.unref?.()
+    tab.hostNav = { roots, started: false, timer }
+  }
+
+  private endHostNav(tab: Tab): void {
+    if (tab.hostNav) clearTimeout(tab.hostNav.timer)
+    tab.hostNav = null
+  }
+
+  /** The host's own load is not happening (never started, or the page started another): its first hop goes with it. */
+  private dropHostNav(tab: Tab): void {
+    if (!tab.hostNav) return
+    this.endHostNav(tab)
+    tab.hops.delete(MAIN_FRAME)
+  }
+
+  /**
+   * A load ended (main frame finished or failed; `all`: the tab stopped loading, so the subframes' hops go too). A host
+   * load that has not started is not the one that ended: an end from the navigation before it leaves it alone.
+   */
+  private loadEnded(tab: Tab, all: boolean): void {
+    if (all) for (const key of [...tab.hops.keys()]) if (key !== MAIN_FRAME) tab.hops.delete(key)
+    if (tab.hostNav && !tab.hostNav.started) return
+    this.endHostNav(tab)
+    tab.hops.delete(MAIN_FRAME)
   }
 
   /** The origin a window.open of the page may have: the top-level page's, unless any frame of the page is public. */
@@ -2660,16 +2781,15 @@ export class BrowserHost {
     if (origin === 'public') return origin
     try {
       const frames = (wc as { mainFrame?: { framesInSubtree?: { url?: string }[] } }).mainFrame?.framesInSubtree ?? []
-      if (frames.some((frame) => frame.url && frame.url !== 'about:blank' && frame.url !== 'about:srcdoc' && pageOriginOf(frame.url) === 'public')) return 'public'
+      if (frames.some((frame) => frame.url && !inheritsOrigin(frame.url) && pageOriginOf(frame.url) === 'public')) return 'public'
     } catch { /* the frames are gone */ }
     return origin
   }
 
   /** Remembers the roots a file: address was opened with (bounded), for back/forward to it. */
   private rememberFileRoots(tab: Tab, url: string): void {
-    if (!tab.fileRoots?.length || !url.toLowerCase().startsWith('file:')) return
-    let key: string
-    try { key = new URL(url).href } catch { return }
+    const key = fileKey(url)
+    if (!tab.fileRoots?.length || !key) return
     tab.fileRootsByUrl.delete(key)
     tab.fileRootsByUrl.set(key, tab.fileRoots)
     if (tab.fileRootsByUrl.size > FILE_ROOTS_MAX) tab.fileRootsByUrl.delete(tab.fileRootsByUrl.keys().next().value as string)
@@ -2677,16 +2797,14 @@ export class BrowserHost {
 
   /**
    * Marks a back/forward as the host's own load of the history entry it goes to, so a local page is reachable from a
-   * public one, and gives a file: entry the roots it was opened with.
+   * public one; a file: entry gets the roots it was opened with once it commits (a Back that does not happen keeps
+   * the page shown as it is).
    */
   private markHistoryNav(tab: Tab, offset: number): void {
     const history = tab.view.webContents.navigationHistory as { getActiveIndex?: () => number; getEntryAtIndex?: (i: number) => { url?: string } | undefined }
     let url: string | undefined
     try { url = history.getEntryAtIndex?.((history.getActiveIndex?.() ?? 0) + offset)?.url } catch { url = undefined }
-    tab.hostNav = url ? pageOriginOf(url) : null
-    let key = ''
-    try { key = url && url.toLowerCase().startsWith('file:') ? new URL(url).href : '' } catch { key = '' }
-    tab.fileRoots = tab.fileRootsByUrl.get(key) ?? null
+    this.startHostNav(tab, url, (url && tab.fileRootsByUrl.get(fileKey(url))) || null)
   }
 
   async invoke(req: unknown): Promise<unknown> {
@@ -3082,6 +3200,8 @@ export class BrowserHost {
    */
   async handle(cmd: BrowserCommand): Promise<Reply> {
     this.takeDeniedPorts(cmd)
+    // The backend pushes a new list on its own when a Gamachine listener starts or moves (gateway _push_ports).
+    if (cmd.op === 'ports') return { ok: true, url: '', title: '' }
     const reply = await this.command(cmd)
     const id = this.commandConversation(cmd)
     if (id !== null && cmd.op !== 'halt' && cmd.op !== 'describe' && reply.error !== 'user_control'

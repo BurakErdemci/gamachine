@@ -2,7 +2,9 @@
 import asyncio
 import hashlib
 import json
+import sys
 import time
+import types
 
 import pytest
 
@@ -416,3 +418,53 @@ def test_post_cmd_sends_the_bearer_token_to_the_host_port(monkeypatch):
     assert sent["json"] == {"op": "snapshot", "conversation_id": 3, "args": {}}
     # Every command carries the ports the host must keep closed to loopback pages, its own among them.
     assert {RUNTIME["port"], 8000, 8080, 6400, 6450, 6499} <= set(denied) and denied == sorted(denied)
+
+
+def test_a_gamachine_port_that_opens_later_is_pushed_to_the_host_without_a_command(monkeypatch):
+    posts = []
+    down = {"host": False}
+
+    class Response:
+        def raise_for_status(self):
+            if down["host"]:
+                raise gateway.httpx.HTTPStatusError("gone", request=None, response=None)
+
+        def json(self):
+            return {"ok": True}
+
+    class Client:
+        def __init__(self, timeout):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def post(self, url, headers, json):
+            posts.append((url, headers, json))
+            return Response()
+    monkeypatch.setattr(gateway.httpx, "AsyncClient", Client)
+    monkeypatch.setattr(gateway, "_PORTS_PUSH_S", 0.01)
+    monkeypatch.setitem(sys.modules, "providers.stt_whisper", types.SimpleNamespace(_server=None))
+
+    async def scenario():
+        await gateway.post_cmd(RUNTIME, "snapshot", 3, {})
+        await asyncio.sleep(0.05)
+        assert len(posts) == 1  # nothing new to say
+        # The whisper server starts on a random port with no agent command in between.
+        monkeypatch.setitem(sys.modules, "providers.stt_whisper",
+                            types.SimpleNamespace(_server=types.SimpleNamespace(_port=47000)))
+        await asyncio.sleep(0.05)
+        pushed = [body for _url, _headers, body in posts[1:]]
+        assert len(pushed) == 1 and pushed[0]["op"] == "ports" and 47000 in pushed[0]["denied_ports"]
+        assert posts[1][0] == "http://127.0.0.1:4711/cmd"
+        assert posts[1][1] == {"Authorization": f"Bearer {RUNTIME['token']}"}
+        # A host that does not take the list (closed, or replaced) ends the pushes until the next command.
+        down["host"] = True
+        monkeypatch.setitem(sys.modules, "providers.stt_whisper",
+                            types.SimpleNamespace(_server=types.SimpleNamespace(_port=47001)))
+        await asyncio.sleep(0.05)
+        assert len(posts) == 3 and gateway._ports_push["task"].done()
+    asyncio.run(scenario())

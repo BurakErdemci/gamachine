@@ -71,17 +71,51 @@ _ARGS = {
 _TEXT_ARG = {"fill": "value", "select": "option", "press": "key"}
 
 
-async def post_cmd(runtime: dict, op: str, conversation_id: int, args: dict) -> dict:
+async def _post_host(runtime: dict, body: dict) -> dict:
     async with httpx.AsyncClient(timeout=_CMD_TIMEOUT_S) as client:
         response = await client.post(
             f"http://127.0.0.1:{runtime['port']}/cmd",
-            headers={"Authorization": f"Bearer {runtime['token']}"},
-            # The host denies the same local ports as the policy here, including ones only this process knows
-            # (the whisper server's random port); it refuses every loopback address until it has seen this list.
-            json={"op": op, "conversation_id": conversation_id, "args": args,
-                  "denied_ports": sorted(policy.gamachine_ports((runtime["port"],)))})
+            headers={"Authorization": f"Bearer {runtime['token']}"}, json=body)
         response.raise_for_status()
         return response.json()
+
+
+def _denied_ports(runtime: dict) -> list:
+    return sorted(policy.gamachine_ports((runtime["port"],)))
+
+
+async def post_cmd(runtime: dict, op: str, conversation_id: int, args: dict) -> dict:
+    # The host denies the same local ports as the policy here, including ones only this process knows
+    # (the whisper server's random port); it refuses every loopback address until it has seen this list.
+    denied = _denied_ports(runtime)
+    _ports_push.update(runtime={"port": runtime["port"], "token": runtime["token"]}, sent=denied)
+    if _ports_push["task"] is None or _ports_push["task"].done():
+        _ports_push["task"] = asyncio.get_running_loop().create_task(_push_ports())
+    return await _post_host(runtime, {"op": op, "conversation_id": conversation_id, "args": args,
+                                      "denied_ports": denied})
+
+
+# A Gamachine listener can start or move with no agent command in between (the whisper server's random
+# port, a Unity MCP restart): one task sends the host the new list within _PORTS_PUSH_S. It ends when the
+# host does not take a list (closed, or replaced by a runtime with another port or token); the next command
+# starts it again.
+_PORTS_PUSH_S = 5.0
+_ports_push = {"runtime": None, "sent": None, "task": None}
+
+
+async def _push_ports() -> None:
+    while True:
+        await asyncio.sleep(_PORTS_PUSH_S)
+        runtime = _ports_push["runtime"]
+        denied = _denied_ports(runtime)
+        if denied == _ports_push["sent"]:
+            continue
+        try:
+            await _post_host(runtime, {"op": "ports", "denied_ports": denied})
+        except Exception:
+            return
+        if _ports_push["runtime"] == runtime:
+            _ports_push["sent"] = denied
 
 
 def _refusal(text, **extra) -> dict:

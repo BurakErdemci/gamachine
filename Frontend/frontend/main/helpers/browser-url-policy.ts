@@ -60,6 +60,18 @@ export function isPrivateAddress(ip: string): boolean {
   return (g[0] === 0x2001 && (g[1] < 0x0200 || g[1] === 0x0db8)) || (g[0] === 0x3fff && g[1] < 0x1000)
 }
 
+/**
+ * IPv6 forms that carry an IPv4 address (mapped, compatible, NAT64 64:ff9b::/96, 6to4 2002::/16, Teredo 2001::/32):
+ * refused as a URL host whatever they carry, as in the backend's copy; loopback is judged before this.
+ */
+function embedsIpv4(ip: string): boolean {
+  const g = ipv6Groups(ip)
+  if (!g) return false
+  const zero = (from: number, to: number) => g.slice(from, to).every((x) => x === 0)
+  return (zero(0, 5) && (g[5] === 0xffff || g[5] === 0)) || (g[0] === 0x64 && g[1] === 0xff9b && zero(2, 6)) ||
+    g[0] === 0x2002 || (g[0] === 0x2001 && g[1] === 0)
+}
+
 function hostOf(url: URL): string {
   return url.hostname.replace(/^\[|\]$/g, '').replace(/\.$/, '').toLowerCase()
 }
@@ -160,10 +172,10 @@ function insideDir(target: string, root: string): boolean {
  * and a file: address that is not file:///path, file://localhost/path or file:/path.
  */
 function plainAddress(url: string, parsed: URL): boolean {
-  if (/[\x00-\x1f\x7f]/.test(url) || url !== url.trim()) return false
+  if (/[\x00-\x1f\x7f]/.test(url) || url !== url.trim() || url.includes('\\')) return false
   if (parsed.protocol === 'file:') return /^file:(\/\/(localhost)?\/(?!\/)|\/(?!\/))/i.test(url)
   const authority = /^[a-z][a-z0-9+.-]*:\/\/([^/?#]*)/i.exec(url)
-  return authority !== null && authority[1] !== '' && !url.includes('\\') && !authority[1].includes('%') && !/[^\x00-\x7f]/.test(authority[1]) && parsed.port !== '0'
+  return authority !== null && authority[1] !== '' && !authority[1].includes('%') && !/[^\x00-\x7f]/.test(authority[1]) && parsed.port !== '0'
 }
 
 const RESERVED_FILE_NAMES = /^(con|prn|aux|nul|conin\$|conout\$|com[1-9]|lpt[1-9])$/i
@@ -224,7 +236,7 @@ export function isAllowedRequest(url: string, origin: PageOrigin, ctx: Navigatio
   const host = hostOf(parsed)
   if (!host) return false
   if (isLoopbackHost(host)) return origin === 'loopback' && ctx.ports !== null && !ctx.ports.has(portOf(parsed))
-  return !(isIP(host) && isPrivateAddress(host))
+  return !(isIP(host) && (isPrivateAddress(host) || embedsIpv4(host)))
 }
 
 /** Static check on a URL the host itself opens: http(s) anywhere public, loopback except Gamachine's ports, file: inside the roots. */
