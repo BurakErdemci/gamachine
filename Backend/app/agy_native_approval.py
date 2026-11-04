@@ -12,7 +12,6 @@ import urllib.request
 import uuid
 
 import local_token_file
-from path_containment import is_within
 import unity_file_guard
 
 # The hook supplies its actual state file without adding a model-controlled argument.
@@ -185,6 +184,7 @@ def request_native_write(tool_name, args, workspace):
     """Return (allowed, reason); never write the target and never allow on error."""
     deadline = time.monotonic() + TOTAL_SECONDS
     try:
+        import action_risk  # stdlib-only; like agy_step_gate, only on a gated write
         if tool_name not in ("write_to_file", "replace_file_content"):
             return False, "Unsupported native write tool."
         if not isinstance(workspace, str) or not workspace or not os.path.isabs(workspace):
@@ -201,8 +201,10 @@ def request_native_write(tool_name, args, workspace):
         target = args["TargetFile"].replace("\\", os.sep).replace("/", os.sep)
         target = target if os.path.isabs(target) else os.path.join(workspace, target)
         path = os.path.realpath(target)
-        if not is_within(path, workspace):
-            return False, "TargetFile is outside the workspace."
+        # Outside the workspace is the card's decision (owner decision, 4 Nov
+        # 2026); Gamachine's own key and token files are refused in every mode.
+        if action_risk.gamachine_secret_target(path) is not None:
+            return False, action_risk.secret_refusal(path)
         refusal = unity_file_guard.check_write(path, workspace)
         if refusal is not None:
             return False, refusal.message

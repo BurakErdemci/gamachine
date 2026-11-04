@@ -6,6 +6,7 @@ import os
 from mcp.server.mcpserver import MCPServer
 
 from unity_ai_mcp.approval_bridge import request_approval
+import action_risk
 import unity_file_guard
 from path_containment import resolve_within
 
@@ -66,7 +67,14 @@ def register_file_tools(mcp: MCPServer, get_workspace: callable):
     async def write_file(path: str, content: str) -> str:
         """Dosya oluşturur veya düzenler. ONAY GEREKTİRİR."""
         workspace = get_workspace()
-        abs_path = _resolve(path, workspace)
+        if action_risk.gamachine_secret_target(path, workspace) is not None:
+            return f"❌ {action_risk.secret_refusal(path)}"
+        # Outside the workspace is the approval card's decision below
+        # (owner decision, 4 Nov 2026): the backend rates it critical
+        # file_outside_workspace, so balanced and step ask and auto lets it pass.
+        abs_path = action_risk.write_target(path, workspace)
+        if abs_path is None:
+            raise PermissionError(f"Güvenlik: {path} workspace dışında.")
         refusal = unity_file_guard.check_write(abs_path, workspace)
         if refusal is not None:
             return f"❌ {refusal.message}"

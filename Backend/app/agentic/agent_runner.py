@@ -759,6 +759,20 @@ def _consume_abandoned_request(istek: "asyncio.Task") -> None:
                        f"bitti: {hata!r}")
 
 
+def _outside_write_target(tool_name: str, tool_args: Any, workspace: Optional[str]) -> Optional[str]:
+    """The resolved target of a write_file call that lands outside the workspace, else None."""
+    if tool_name != "write_file" or not isinstance(tool_args, dict) or not workspace:
+        return None
+    file_path = tool_args.get("file_path")
+    if not isinstance(file_path, str) or not file_path.strip():
+        return None
+    import action_risk
+    from path_containment import is_within
+    if is_within(file_path, workspace):
+        return None
+    return action_risk.write_target(file_path, workspace)
+
+
 class _ApprovalDecision(NamedTuple):
     """The gate's answer, plus the sentence the model and the user are told.
 
@@ -1303,7 +1317,9 @@ class AgentRunner:
         `write_file` BİLEREK kapsam dışı: kod yazmak ürünün asıl işi ve her
         yazımda onay istemek kullanıcıyı refleks-onaya alıştırır — bu kapıyı
         güçlendirmez, tamamen değersizleştirir. Silme ise seyrek ve geri alınamaz.
-        Yazma zaten `_validate_path` ile workspace'e hapsedilmiş durumda.
+        A write OUTSIDE the workspace is the exception (owner decision, 4 Nov
+        2026): it gets the card in step mode too, and file_tools.write_file runs
+        it only for the one path this decision let through.
 
         Global auto mode shows no card on any path (owner decision, 25 Sep 2026).
         Balanced mode (Burak, 27 Sep 2026) asks action_risk instead: a critical
@@ -1320,11 +1336,25 @@ class AgentRunner:
         # Read-only: no card, `_execute_tool_with_approval` refuses the write.
         if getattr(self, "read_only", False):
             return None
+        if tool_name == "write_file":
+            import action_risk
+            # Gamachine's own key/token files: file_tools refuses them in every
+            # mode, so a card would only ask for something that cannot happen.
+            if action_risk.gamachine_secret_target(tool_args.get("file_path"), self.workspace_path or ""):
+                return None
         mode = approval_mode.current_mode()
         if mode == "auto":
             return None
         if mode == "balanced":
             return self._balanced_approval_prompt(tool_name, tool_args, mode)
+        if tool_name == "write_file" and _outside_write_target(tool_name, tool_args, self.workspace_path):
+            # Owner decision (4 Nov 2026): a write outside the workspace asks
+            # like an outside shell command does; inside writes stay cardless.
+            file_path = tool_args.get("file_path")
+            risk = action_risk.classify({"kind": "file_write", "paths": [file_path],
+                                         "workspace": self.workspace_path or ""})
+            self._approval_risk = (risk.reason, risk.detail)
+            return f"write_file {file_path}"
         if tool_name == "run_command":
             command = tool_args.get("command", "")
             return command if _is_dangerous_command(command, self.workspace_path) else None
@@ -1451,6 +1481,20 @@ class AgentRunner:
         if is_async_tool(tool_name):
             return await execute_tool_async(
                 tool_name, tool_args, self.workspace_path, self.conversation_id), []
+        outside = _outside_write_target(tool_name, tool_args, self.workspace_path)
+        if outside:
+            # The approval decision above let this one path through (card or
+            # auto mode). Called directly, not through execute_tool: that one
+            # glues every path not starting with "/" onto the workspace, which
+            # turns a Windows "C:\..." target into a name inside it.
+            from tools import file_tools
+            token = file_tools.OUTSIDE_WRITE_ALLOWED.set(outside)
+            try:
+                return await asyncio.to_thread(
+                    file_tools.write_file, tool_args.get("file_path"),
+                    tool_args.get("content", ""), self.workspace_path), []
+            finally:
+                file_tools.OUTSIDE_WRITE_ALLOWED.reset(token)
         result = await asyncio.to_thread(
             execute_tool, tool_name, tool_args, self.workspace_path, self.conversation_id
         )

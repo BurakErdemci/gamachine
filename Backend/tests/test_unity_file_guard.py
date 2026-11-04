@@ -191,10 +191,12 @@ def test_module_is_stdlib_only():
     assert "'action_risk'" in offenders[2] and "'unity_tool_policy'" in offenders[3]
     with open(os.path.join(app, "agy_native_approval.py"), encoding="utf-8") as f:
         native_offenders = find_non_stdlib_imports(f.read())
+    # action_risk (secret-file refusal, lazy) replaced path_containment on 4 Nov 2026;
+    # its own imports are held to stdlib in test_action_risk.
     assert len(native_offenders) == 3
     assert "'local_token_file'" in native_offenders[0]
-    assert "'path_containment'" in native_offenders[1]
-    assert "'unity_file_guard'" in native_offenders[2]
+    assert "'unity_file_guard'" in native_offenders[1]
+    assert "'action_risk'" in native_offenders[2]
     # path_containment is the one local module command_safety may import, and it
     # stays stdlib-only itself.
     with open(os.path.join(app, "agentic", "command_safety.py"), encoding="utf-8") as f:

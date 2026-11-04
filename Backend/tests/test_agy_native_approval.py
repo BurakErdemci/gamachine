@@ -1,6 +1,7 @@
 """Native file previews and approval decisions, without network access."""
 import io
 import json
+import os
 from unittest.mock import patch
 
 import pytest
@@ -111,12 +112,35 @@ def test_existing_file_without_overwrite(approval):
     assert calls == []
 
 
-@pytest.mark.parametrize("path", ["../outside.txt", "Assets/A.cs.meta", "Assets/Main.unity"])
-def test_outside_and_unity_paths_never_request(approval, path):
+@pytest.mark.parametrize("path", ["Assets/A.cs.meta", "Assets/Main.unity"])
+def test_unity_paths_never_request(approval, path):
     workspace, _, calls, _ = approval
     (workspace / "Assets").mkdir()
     (workspace / "ProjectSettings").mkdir()
     assert not write(approval, TargetFile=path)[0]
+    assert calls == []
+
+
+@pytest.mark.parametrize("approved", [True, False])
+def test_outside_path_goes_to_the_card(approval, approved):
+    # Owner decision (4 Nov 2026): outside the workspace is the card's call, not a silent deny.
+    workspace, _, calls, answers = approval
+    answers[:] = [{"status": "resolved", "approved": approved}]
+    assert write(approval, TargetFile="../outside.txt")[0] is approved
+    assert len(calls) == 1
+    params = json.loads(calls[0].data)["params"]
+    assert params["path"] == os.path.realpath(str(workspace.parent / "outside.txt"))
+    assert not (workspace.parent / "outside.txt").exists()
+
+
+def test_secret_target_is_refused_without_request(approval, monkeypatch):
+    workspace, _, calls, _ = approval
+    home = workspace / "home"
+    (home / ".unity-mcp").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    allowed, reason = write(approval, TargetFile=str(home / ".unity-mcp" / "local-api-token"))
+    assert not allowed and "token" in reason
     assert calls == []
 
 
@@ -282,15 +306,16 @@ def test_missing_state_before_return_denies(approval):
     assert not write(approval)[0]
 
 
-def test_symlink_outside_workspace_denies(approval, tmp_path_factory):
-    workspace, _, calls, _ = approval
+def test_symlink_outside_workspace_asks_for_the_real_target(approval, tmp_path_factory):
+    workspace, _, calls, answers = approval
     outside = tmp_path_factory.mktemp("outside")
     try:
         (workspace / "link").symlink_to(outside, target_is_directory=True)
     except OSError:
         pytest.skip("Directory symlinks are unavailable on this machine")
+    answers[:] = [{"status": "resolved", "approved": False}]
     assert not write(approval, TargetFile="link/a.txt")[0]
-    assert calls == []
+    assert json.loads(calls[0].data)["params"]["path"] == os.path.realpath(str(outside / "a.txt"))
 
 
 def test_hook_exception_always_prints_deny_json(approval, monkeypatch, capsys):

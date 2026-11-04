@@ -220,6 +220,64 @@ def protected_reason(parts: list) -> Optional[str]:
     return None
 
 
+# Owner decision (Burak, 4 Nov 2026): agents may write outside the workspace
+# under the approval mode, but never to the files holding Gamachine's own keys
+# and tokens. Every agent write path refuses these in every mode.
+_SECRET_DB_NAMES = ("unity_master_v3.db", "unity_master_v3.db-wal", "unity_master_v3.db-shm")
+
+
+def write_target(path: Any, workspace: str) -> Optional[str]:
+    """The real path a write of `path` lands on (relative = under `workspace`), inside or not.
+
+    None for an empty path, or for a relative one without a workspace. Case is
+    kept (no normcase): callers write to it and show it on the card.
+    """
+    if not isinstance(path, str) or not path.strip() or "\x00" in path:
+        return None
+    p = os.path.expanduser(path)
+    if not os.path.isabs(p):
+        if not workspace:
+            return None
+        p = os.path.join(os.path.expanduser(workspace), p)
+    return os.path.realpath(p)
+
+
+def secret_refusal(path: Any) -> str:
+    return f"'{path}' Gamachine'in kendi anahtar/token dosyası; hiçbir modda yazılmaz."
+
+
+def _secret_files() -> list:
+    # Built on every call: home and DB_PATH may change (tests, a moved profile).
+    home = os.path.expanduser("~")
+    app_dir = os.path.join(home, ".unity_architect_ai")
+    files = [os.path.join(app_dir, name) for name in
+             ("api_key_fernet.key", "local-app-token") + _SECRET_DB_NAMES]
+    files.append(os.path.join(home, ".unity-mcp", "local-api-token"))
+    db_path = os.environ.get("DB_PATH")
+    if db_path:
+        # database.py keeps the Fernet key next to whichever database is in use.
+        files += [db_path, db_path + "-wal", db_path + "-shm",
+                  os.path.join(os.path.dirname(db_path), "api_key_fernet.key")]
+    return files
+
+
+def gamachine_secret_target(path: Any, base: str = "") -> Optional[str]:
+    """The resolved target when `path` names one of Gamachine's secret files, else None.
+
+    Compared by directory realpath plus the Windows-folded file name, so a
+    symlink, an 8.3 name, a trailing dot or `name::$DATA` cannot slip past.
+    """
+    target = _resolve(path, base)
+    if target is None:
+        return None
+    head, name = os.path.split(target)
+    for secret in _secret_files():
+        s_head, s_name = os.path.split(_real(os.path.abspath(secret)))
+        if head == s_head and _part(name) == _part(s_name):
+            return target
+    return None
+
+
 def _classify_write(paths: list, base: str, workspace: str) -> Risk:
     if not paths:
         return _critical("unknown_action", "file write without a path")

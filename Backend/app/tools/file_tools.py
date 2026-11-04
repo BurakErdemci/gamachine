@@ -1,10 +1,12 @@
 """
 Unity Proje Dosya Araçları — Agentic AI'ın projede dosya okuma, yazma ve listeleme yapabilmesi için.
 """
+import contextvars
 import os
 import logging
 from typing import Optional
 
+import action_risk
 import unity_file_guard
 from path_containment import resolve_within
 
@@ -17,6 +19,25 @@ def _validate_path(file_path: str, workspace_path: str) -> str:
     if resolved is None:
         raise PermissionError(f"Güvenlik: {file_path} workspace dışında.")
     return resolved
+
+
+# The one resolved path outside the workspace the agent loop has just let
+# through its approval decision (card approved, or auto mode). A context
+# variable, not a tool argument: the model's arguments reach write_file as
+# they are, so an argument would let the model grant itself the allowance.
+OUTSIDE_WRITE_ALLOWED: contextvars.ContextVar = contextvars.ContextVar(
+    "outside_write_allowed", default=None)
+
+
+def _validate_write_path(file_path: str, workspace_path: str) -> str:
+    resolved = resolve_within(file_path, workspace_path)
+    if resolved is not None:
+        return resolved
+    allowed = OUTSIDE_WRITE_ALLOWED.get()
+    target = action_risk.write_target(file_path, workspace_path) if allowed else None
+    if target and os.path.normcase(target) == os.path.normcase(allowed):
+        return target
+    raise PermissionError(f"Güvenlik: {file_path} workspace dışında.")
 
 
 def read_file(file_path: str, workspace_path: str) -> dict:
@@ -57,7 +78,9 @@ def read_file(file_path: str, workspace_path: str) -> dict:
 def write_file(file_path: str, content: str, workspace_path: str) -> dict:
     """Belirtilen dosyaya içerik yazar. Klasör yoksa oluşturur."""
     try:
-        abs_path = _validate_path(file_path, workspace_path)
+        if action_risk.gamachine_secret_target(file_path, workspace_path) is not None:
+            return {"success": False, "error": action_risk.secret_refusal(file_path)}
+        abs_path = _validate_write_path(file_path, workspace_path)
         refusal = unity_file_guard.check_write(abs_path, workspace_path)
         if refusal is not None:
             return {"success": False, "error": refusal.message}

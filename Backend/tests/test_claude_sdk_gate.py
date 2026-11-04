@@ -251,14 +251,16 @@ async def test_symlink_read_escape_shows_card(symlink_escape):
 @pytest.mark.baglar_gerekli
 
 
-async def test_write_outside_still_hard_denied(symlink_escape):
-    """Yazım dalı davranış değiştirmemeli: sormadan reddediliyor."""
+@pytest.mark.parametrize("approve", [True, False])
+async def test_write_outside_through_a_link_goes_to_the_card(symlink_escape, approve):
+    """Owner decision (4 Nov 2026): an outside write is the card's decision in step
+    mode, not a silent deny; the link must not hide that the target is outside."""
     ws, _outside, link = symlink_escape
     s = _mk_session(cwd=ws, auto_approve=False, approval_timeout=2.0)
     res, ev = await _drive_gate(s, "Write", {"file_path": os.path.join(link, "x.cs"),
-                                             "content": "x"})
-    assert not _is_allow(res)
-    assert ev is not None and ev["type"] == "tool_result" and ev["success"] is False
+                                             "content": "x"}, approve=approve)
+    assert ev is not None and ev["type"] == "command_approval_needed"
+    assert _is_allow(res) is approve
 
 
 # ── DÜZELTME 4: Windows mutlak Glob desenleri kapıyı atlıyordu ───────────────

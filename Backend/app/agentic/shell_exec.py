@@ -12,9 +12,9 @@ import re
 import subprocess
 from typing import NamedTuple
 
+import action_risk
 import unity_file_guard
 from agentic.command_safety import auto_safe_argv
-from path_containment import resolve_within
 
 
 def shell_refusal(command: str, workspace: str) -> str | None:
@@ -109,7 +109,9 @@ class FileWrite(NamedTuple):
 def prepare_file_write(command: str, workspace: str) -> FileWrite | None:
     """Everything the approval card needs when the command writes a file, else None.
 
-    A target outside the workspace raises the same `PermissionError` text as `_resolve`.
+    A target outside the workspace is the approval card's decision, like any
+    outside shell write (owner decision, 4 Nov 2026); Gamachine's own key and
+    token files come back refused in every mode.
     """
     parsed = _parse_file_write(command)
     if not parsed:
@@ -117,9 +119,11 @@ def prepare_file_write(command: str, workspace: str) -> FileWrite | None:
     path, content = parsed
     if not content.strip():
         return FileWrite(path, content, None, "", None)
-    abs_path = resolve_within(path, workspace)
+    abs_path = action_risk.write_target(path, workspace)
     if abs_path is None:
         raise PermissionError(f"Güvenlik: {path} workspace dışında.")
+    if action_risk.gamachine_secret_target(abs_path) is not None:
+        return FileWrite(path, content, abs_path, "", action_risk.secret_refusal(path))
     refusal = unity_file_guard.check_write(abs_path, workspace)
     if refusal is not None:
         return FileWrite(path, content, abs_path, "", refusal.message)

@@ -1,5 +1,6 @@
 """shell_exec: the single approved-shell-command path and its three entry points."""
 import asyncio
+import os
 import subprocess
 
 import pytest
@@ -62,7 +63,7 @@ def test_run_raw_string_uses_the_shell(ws, spawned):
     assert spawned[0]["shell"] is True
 
 
-def test_prepare_file_write_shapes(ws):
+def test_prepare_file_write_shapes(ws, tmp_path, monkeypatch):
     assert shell_exec.prepare_file_write("cat notes.txt", ws) is None
 
     fw = shell_exec.prepare_file_write("echo 'hi' > notes.txt", ws)
@@ -75,8 +76,18 @@ def test_prepare_file_write_shapes(ws):
     refused = shell_exec.prepare_file_write("echo 'hi' > Assets/a.cs.meta", ws)
     assert refused.refusal
 
-    with pytest.raises(PermissionError, match="workspace dışında"):
-        shell_exec.prepare_file_write("echo 'hi' > /etc/evil", ws)
+    # Owner decision (4 Nov 2026): an outside target is the card's decision,
+    # not a PermissionError; Gamachine's own token files come back refused.
+    outside = os.path.join(os.path.dirname(ws), "outside.txt")
+    out = shell_exec.prepare_file_write(f"echo 'hi' > {outside}", ws)
+    assert (out.abs_path, out.content, out.refusal) == (os.path.realpath(outside), "hi", None)
+
+    home = tmp_path / "home"
+    (home / ".unity-mcp").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    secret = shell_exec.prepare_file_write(f"echo 'hi' > {home / '.unity-mcp' / 'local-api-token'}", ws)
+    assert secret.refusal and "token" in secret.refusal
 
 
 class _FakeMcp:

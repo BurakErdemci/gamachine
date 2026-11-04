@@ -52,6 +52,7 @@ from agentic.command_gates import APPROVAL_TIMEOUT_S
 # unityMCP salt-okuma sınıflandırması. `spawn_env` ile aynı desen: app kökündeki
 # modül çıplak adla import ediliyor (`backend.spec` `pathex=['app']` taşıyor).
 from unity_tool_policy import is_unity_mcp_read_only
+import action_risk
 import unity_file_guard
 from path_containment import is_within
 from providers.text_blocks import block_break
@@ -1135,15 +1136,20 @@ class ClaudeSDKSession:
                 return PermissionResultDeny(message="Kullanıcı soruyu yanıtlamadı (zaman aşımı).")
             return PermissionResultAllow(updated_input={**input_data, "answers": answers})
 
-        # Path güvenliği: workspace dışına yazımı kullanıcıya sormadan reddet
+        # Gamachine's own key and token files: refused in every mode. A write
+        # outside the workspace is otherwise an ordinary approval decision
+        # (owner decision, 4 Nov 2026): action_risk calls it critical
+        # file_outside_workspace, so the card below asks in balanced and step
+        # mode and auto mode lets it through, exactly like an outside shell write.
         if tool_name in _FILE_WRITE_TOOLS:
-            fp = input_data.get("file_path", input_data.get("path", ""))
-            if fp and not _path_in_workspace(fp, self.cwd or ""):
-                logger.warning(f"[ClaudeSDKSession:{self.conversation_id}] workspace dışı yazım reddedildi: {fp}")
-                if out_q is not None:
-                    await out_q.put({"type": "tool_result", "tool": tool_name, "success": False,
-                                     "summary": f"🚫 Workspace dışı yazım engellendi: {fp}"})
-                return PermissionResultDeny(message=f"'{fp}' workspace dışında — güvenlik nedeniyle reddedildi.")
+            for key in ("file_path", "path", "notebook_path"):
+                fp = (input_data or {}).get(key)
+                if action_risk.gamachine_secret_target(fp, self.cwd or "") is not None:
+                    logger.warning(f"[ClaudeSDKSession:{self.conversation_id}] secret file write refused: {fp}")
+                    if out_q is not None:
+                        await out_q.put({"type": "tool_result", "tool": tool_name, "success": False,
+                                         "summary": f"🚫 Gizli dosyaya yazım engellendi: {fp}"})
+                    return PermissionResultDeny(message=action_risk.secret_refusal(fp))
 
         refusal = _unity_file_refusal(tool_name, input_data, self.cwd or "")
         if refusal is not None:
