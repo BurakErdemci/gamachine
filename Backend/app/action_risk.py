@@ -35,6 +35,7 @@ import ntpath
 import os
 import re
 import shlex
+import socket
 from typing import Any, Iterable, Mapping, NamedTuple, Optional
 
 from agentic import command_safety
@@ -226,6 +227,27 @@ def protected_reason(parts: list) -> Optional[str]:
 _SECRET_DB_NAMES = ("unity_master_v3.db", "unity_master_v3.db-wal", "unity_master_v3.db-shm")
 
 
+_LOCAL_UNC_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
+_ADMIN_SHARE = re.compile(r"^[a-z]\$$", re.IGNORECASE)
+
+
+def _local_admin_share(path: str) -> str:
+    r"""`\\localhost\C$\x` (also 127.0.0.1, ::1, this computer's name) as `C:\x`.
+
+    The same file under another spelling must meet the same secret rule; any
+    other UNC path is returned unchanged.
+    """
+    if os.name != "nt" or not path.startswith(("\\\\", "//")):
+        return path
+    parts = re.split(r"[\\/]+", path[2:], maxsplit=2)
+    if len(parts) < 2 or not _ADMIN_SHARE.match(parts[1]):
+        return path
+    host = parts[0].lower().rstrip(".")
+    if host not in _LOCAL_UNC_HOSTS and host != socket.gethostname().lower():
+        return path
+    return parts[1][0] + ":\\" + (parts[2] if len(parts) > 2 else "")
+
+
 def write_target(path: Any, workspace: str) -> Optional[str]:
     """The real path a write of `path` lands on (relative = under `workspace`), inside or not.
 
@@ -234,7 +256,7 @@ def write_target(path: Any, workspace: str) -> Optional[str]:
     """
     if not isinstance(path, str) or not path.strip() or "\x00" in path:
         return None
-    p = os.path.expanduser(path)
+    p = _local_admin_share(os.path.expanduser(path))
     if not os.path.isabs(p):
         if not workspace:
             return None
@@ -267,7 +289,7 @@ def gamachine_secret_target(path: Any, base: str = "") -> Optional[str]:
     Compared by directory realpath plus the Windows-folded file name, so a
     symlink, an 8.3 name, a trailing dot or `name::$DATA` cannot slip past.
     """
-    target = _resolve(path, base)
+    target = _resolve(_local_admin_share(path.strip()) if isinstance(path, str) else path, base)
     if target is None:
         return None
     head, name = os.path.split(target)

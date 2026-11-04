@@ -142,6 +142,8 @@ def delete_file(file_path: str, workspace_path: str) -> dict:
     """
     try:
         abs_path = _validate_path(file_path, workspace_path)
+        if action_risk.gamachine_secret_target(abs_path, workspace_path) is not None:
+            return {"success": False, "error": action_risk.secret_refusal(file_path)}
         refusal = unity_file_guard.check_delete(abs_path, workspace_path)
         if refusal is not None:
             return {"success": False, "error": refusal.message}

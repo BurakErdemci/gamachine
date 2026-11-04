@@ -36,6 +36,7 @@ import subprocess
 from unity_ai_mcp.approval_bridge import request_approval
 from unity_ai_mcp.tools.file_tools import _resolve
 from agentic import shell_exec
+import action_risk
 import unity_file_guard
 
 
@@ -73,7 +74,15 @@ def cmd_list_dir(args) -> int:
 
 def cmd_save_file(args) -> int:
     workspace = _workspace()
-    abs_path = _resolve(args.path, workspace)
+    if action_risk.gamachine_secret_target(args.path, workspace) is not None:
+        print(f"❌ {action_risk.secret_refusal(args.path)}")
+        return 1
+    # Outside the workspace is the approval card's decision below, as in the
+    # MCP save_file (owner decision, 4 Nov 2026).
+    abs_path = action_risk.write_target(args.path, workspace)
+    if abs_path is None:
+        print(f"❌ Güvenlik: {args.path} workspace dışında.")
+        return 1
     refusal = unity_file_guard.check_write(abs_path, workspace)
     if refusal is not None:
         print(f"❌ {refusal.message}")

@@ -337,6 +337,11 @@ async def execute_tool_async(tool_name: str, arguments: Dict[str, Any], workspac
 _TOOLS_NEEDING_WORKSPACE = {"search_in_project", "find_files", "read_file", "write_file", "list_directory", "delete_file", "run_command"}
 
 
+def _is_absolute(path: str) -> bool:
+    """A POSIX root, a Windows drive-absolute path or a UNC path; anything else is workspace-relative."""
+    return path.startswith(("/", "\\\\")) or (len(path) > 2 and path[0].isalpha() and path[1] == ":" and path[2] in ("\\", "/"))
+
+
 def execute_tool(tool_name: str, arguments: Dict[str, Any], workspace_path: str, conversation_id: str = None) -> Dict[str, Any]:
     """Verilen tool'u güvenli şekilde çalıştırır. Unity MCP tool'larını da destekler."""
 
@@ -366,10 +371,9 @@ def execute_tool(tool_name: str, arguments: Dict[str, Any], workspace_path: str,
         if tool_name in _TOOLS_NEEDING_CONV_ID:
             arguments["conversation_id"] = conversation_id
 
-        if "file_path" in arguments and not arguments["file_path"].startswith("/"):
-            arguments["file_path"] = f"{workspace_path}/{arguments['file_path']}"
-        if "dir_path" in arguments and not arguments["dir_path"].startswith("/"):
-            arguments["dir_path"] = f"{workspace_path}/{arguments['dir_path']}"
+        for key in ("file_path", "dir_path"):
+            if key in arguments and not _is_absolute(arguments[key]):
+                arguments[key] = f"{workspace_path}/{arguments[key]}"
 
         result = func(**arguments)
         logger.info(f"  🔧 Tool [{tool_name}] çalıştırıldı: success={result.get('success', '?')}")

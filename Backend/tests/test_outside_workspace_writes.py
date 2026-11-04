@@ -359,3 +359,100 @@ async def test_mcp_inside_write_unchanged(ws, home, mcp):
     assert (await tools["save_file"]("Assets/A.cs", "x")).startswith("✅")
     assert asked[0]["params"]["path"] == "Assets/A.cs"
     assert os.path.exists(os.path.join(ws, "Assets", "A.cs"))
+
+
+# ── Closing the remaining gaps (4 Nov 2026, second round) ────────────────────
+
+
+@pytest.mark.skipif(os.name != "nt", reason="admin-share UNC paths exist on Windows only")
+def test_local_admin_share_spellings_of_a_secret_are_refused(home):
+    import socket
+    bs = chr(92)
+    secret = str(home / ".unity_architect_ai" / "api_key_fernet.key")
+    drive, rest = secret[0], secret[2:]
+    for host in ("localhost", "LOCALHOST", "127.0.0.1", "::1", socket.gethostname()):
+        unc = bs + bs + host + bs + drive + "$" + rest
+        assert action_risk.gamachine_secret_target(unc), unc
+        assert action_risk.write_target(unc, "").lower() == os.path.realpath(secret).lower()
+    # Any other UNC target stays what it was: an outside path for the approval policy.
+    other = bs + bs + "fileserver" + bs + drive + "$" + rest
+    assert action_risk.gamachine_secret_target(other) is None
+    assert action_risk.write_target(other, "").startswith(bs + bs)
+    plain = bs + bs + "localhost" + bs + drive + "$" + bs + "notes.txt"
+    assert action_risk.gamachine_secret_target(plain) is None
+
+
+@pytest.mark.parametrize("current", ["auto", "step", "balanced"])
+def test_agy_secret_write_is_refused_in_every_mode(ws, home, current):
+    import agy_step_gate as gate
+    state = os.path.join(ws, ".agents", "state.json")
+    gate.write_state(state, current, "unityai", workspace=ws)
+    secret = str(home / ".unity_architect_ai" / "api_key_fernet.key")
+    payload = {"toolCall": {"name": "write_to_file", "args": {"TargetFile": secret, "CodeContent": "x"}}}
+    with mock.patch.object(gate, "_hook_workspace", return_value=ws):
+        verdict = gate.decide(json.dumps(payload).encode(), state)
+    assert verdict["decision"] == "deny" and "token" in verdict["reason"]
+
+
+@pytest.fixture
+def cli(ws, monkeypatch, capsys):
+    import unityai_cli
+    asked, answer = [], {"approved": True}
+
+    async def request_approval(**kwargs):
+        asked.append(kwargs)
+        return dict(answer)
+
+    monkeypatch.setattr(unityai_cli, "request_approval", request_approval)
+    monkeypatch.setenv("WORKSPACE", ws)
+
+    def save(path, content="hello"):
+        args = NS(path=path, content=content, content_stdin=False)
+        return unityai_cli.cmd_save_file(args), capsys.readouterr().out
+    return save, asked, answer
+
+
+@pytest.mark.parametrize("approved", [True, False])
+def test_unityai_save_file_outside_goes_to_the_card(outside, home, cli, approved):
+    save, asked, answer = cli
+    answer["approved"] = approved
+    rc, _ = save(outside)
+    assert [a["tool_name"] for a in asked] == ["write_file"]
+    assert asked[0]["params"]["path"] == outside
+    assert (rc == 0) is approved and os.path.exists(outside) is approved
+
+
+def test_unityai_save_file_secret_is_refused_without_a_card(home, cli):
+    save, asked, _ = cli
+    secret = home / ".unity-mcp" / "local-api-token"
+    rc, out = save(str(secret))
+    assert rc == 1 and "token" in out and asked == [] and not secret.exists()
+
+
+def test_unityai_save_file_inside_unchanged(ws, home, cli):
+    save, asked, _ = cli
+    assert save("Assets/A.cs")[0] == 0
+    assert asked[0]["params"]["path"] == "Assets/A.cs"
+    assert os.path.exists(os.path.join(ws, "Assets", "A.cs"))
+
+
+def test_api_delete_file_refuses_a_secret_inside_the_workspace(ws, home, monkeypatch):
+    from tools import file_tools
+    key = os.path.join(ws, "api_key_fernet.key")
+    with open(key, "w", encoding="utf-8") as f:
+        f.write("k")
+    monkeypatch.setenv("DB_PATH", os.path.join(ws, "x.db"))
+    result = file_tools.delete_file(key, ws)
+    assert result["success"] is False and "token" in result["error"]
+    assert os.path.exists(key)
+
+
+def test_api_write_file_accepts_an_absolute_path_inside_the_workspace(ws, home):
+    from tools.tool_registry import execute_tool
+    target = os.path.join(ws, "Assets", "a.txt")
+    result = execute_tool("write_file", {"file_path": target, "content": "x"}, ws)
+    assert result["success"] is True
+    with open(target, encoding="utf-8") as f:
+        assert f.read() == "x"
+    assert execute_tool("write_file", {"file_path": "b.txt", "content": "y"}, ws)["success"] is True
+    assert os.path.exists(os.path.join(ws, "b.txt"))

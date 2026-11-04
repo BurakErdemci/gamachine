@@ -352,6 +352,30 @@ def _unity_file_refusal(raw: bytes):
     return None
 
 
+def _action_risk():
+    import action_risk  # stdlib-only; imported only when a gate rule needs it
+    return action_risk
+
+
+def _secret_refusal(raw: bytes, cwd: str):
+    """Gamachine's own key/token files are never written, in any mode (owner
+    decision, 4 Nov 2026). Like the Unity file rule it can only deny."""
+    try:
+        call = json.loads(raw.decode("utf-8"))["toolCall"]
+        name = call["name"]
+        args = call.get("args") or {}
+    except Exception:
+        return None
+    if name not in _FILE_WRITERS or not isinstance(args, dict):
+        return None
+    action_risk = _action_risk()
+    for key, value in args.items():
+        if isinstance(key, str) and key.replace("_", "").lower() == "targetfile":
+            if action_risk.gamachine_secret_target(value, cwd) is not None:
+                return action_risk.secret_refusal(value)
+    return None
+
+
 def _hook_workspace(start: str):
     """The nearest directory at or above `start` whose hooks file holds
     Gamachine's entry; None when there is none (balanced then allows
@@ -373,7 +397,7 @@ def _hook_workspace(start: str):
 
 def _balanced_risk(name: str, args, cwd: str):
     """action_risk's verdict for a built-in agy call in balanced mode."""
-    import action_risk  # stdlib-only; imported only in balanced mode
+    action_risk = _action_risk()
     workspace = _hook_workspace(cwd)
     if not workspace or not isinstance(args, dict):
         return action_risk.Risk(action_risk.CRITICAL, "unknown_action", name)
@@ -480,6 +504,9 @@ def decide(raw: bytes, state_path: str, windows: bool = None, cwd: str = None) -
         refusal = _unity_file_refusal(raw)
         if refusal is not None:
             return _deny(refusal.message)
+        secret = _secret_refusal(raw, cwd)
+        if secret is not None:
+            return _deny(secret)
     if mode == "auto":
         return {"decision": "allow"}
     if mode == CLOSED_MODE:
