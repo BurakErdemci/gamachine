@@ -153,6 +153,8 @@ const keyOf = (id: number | null | undefined) => id ?? NO_CONV;
 // 28 Sep 2026). Server ids are small row numbers, so these never meet them.
 let lastClientMsgId = 0;
 const nextClientMsgId = () => (lastClientMsgId = Math.max(Date.now(), lastClientMsgId + 1));
+// Client ids start at Date.now(); server ids are row numbers far below this.
+const LIVE_ID_MIN = 1e12;
 
 const hasClientState = (r: ConvRuntime) =>
   r.loading || !!r.pendingCommand || !!r.pendingQuestion || r.parkedCards.length > 0
@@ -1715,6 +1717,29 @@ export const useChat = (
                   if (Number.isSafeInteger(liveId) && liveId > 0 && !iptal) turnLiveRef.current.frame(liveId, Number(data.seq), String(data.kind ?? ''));
                   continue;
                 }
+                if (data?.type === 'chat_file') {
+                  // An image the agent showed (its show_image tool): the backend has stored the
+                  // message row; add it to a chat whose list is loaded here. A chat not loaded
+                  // reads it from the server when it is opened. Loading and the queue stay as
+                  // they are.
+                  const fileConv = Number(data.conversation_id);
+                  const shown = data.message;
+                  if (!iptal && Number.isSafeInteger(fileConv) && fileConv > 0
+                    && Number.isSafeInteger(shown?.id) && typeof shown?.content === 'string') {
+                    patchConv(fileConv, r => {
+                      if (r.messages.length === 0 || r.messages.some(m => m.id === shown.id)) return {};
+                      const row: Message = {
+                        id: shown.id, role: 'assistant', content: shown.content, smells: [],
+                        timestamp: String(shown.created_at ?? ''),
+                      };
+                      // A turn in flight keeps its live bubble last (its id is a client id, not a row number).
+                      const last = r.messages[r.messages.length - 1];
+                      const at = r.loading && last.id >= LIVE_ID_MIN ? r.messages.length - 1 : r.messages.length;
+                      return { messages: [...r.messages.slice(0, at), row, ...r.messages.slice(at)] };
+                    });
+                  }
+                  continue;
+                }
                 if (data?.type === 'card_closed') {
                   if (!iptal) applyCardClosed(data, showToastRef.current);
                   continue;
@@ -1763,7 +1788,7 @@ export const useChat = (
       }
     })();
     return () => { iptal = true; ac.abort(); };
-  }, [API, userId, sessionToken, rt, applyServerTitle]);
+  }, [API, userId, sessionToken, rt, patchConv, applyServerTitle]);
 
   // `convId` is a phone's `/compact` naming its chat; the desktop button and
   // composer pass nothing and mean the chat on screen.

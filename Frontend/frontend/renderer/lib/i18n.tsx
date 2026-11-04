@@ -918,6 +918,13 @@ export const tr = {
   'mention.chatNumber': 'Sohbet numarası: mesajda @{no} yazarak bu sohbeti anabilirsin',
   'mention.unknown': 'Bu numarada sohbet yok',
   'mention.resolved': 'Bu mesajda anılan sohbetler',
+  // An image in a message (the agent's show_image tool)
+  'chat.image.chip': 'görüntü: {name}',
+  'chat.image.notFound': 'bulunamadı',
+  'chat.image.useTool': 'görüntü aracıyla gösterilmedi',
+  'chat.image.loading': 'görüntü yükleniyor',
+  'chat.image.failed': 'açılamadı',
+  'chat.image.close': 'Kapat',
   // Side question (read-only side chat over the chat on screen)
   'side.open': 'Yan soru',
   'side.openTitle': 'Yan soru sor — ana sohbeti görür ama hiçbir şeyi değiştiremez; cevabı ana sohbetin geçmişine girmez',
@@ -2982,6 +2989,13 @@ export const en: Record<keyof typeof tr, string> = {
   'mention.chatNumber': 'Chat number: type @{no} in a message to mention this chat',
   'mention.unknown': 'No chat with this number',
   'mention.resolved': 'Chats mentioned in this message',
+  // An image in a message (the agent's show_image tool)
+  'chat.image.chip': 'image: {name}',
+  'chat.image.notFound': 'not found',
+  'chat.image.useTool': 'not shown through the image tool',
+  'chat.image.loading': 'loading image',
+  'chat.image.failed': 'could not be opened',
+  'chat.image.close': 'Close',
   // Side question (read-only side chat over the chat on screen)
   'side.open': 'Side question',
   'side.openTitle': 'Ask a side question — it sees the main chat but cannot change anything; its answers stay out of the main chat history',

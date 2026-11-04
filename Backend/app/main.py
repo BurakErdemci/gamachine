@@ -168,6 +168,7 @@ from routes import (
 )
 from routes.scene_editor_routes import create_scene_editor_router
 from routes.connector_routes import create_connector_router
+from routes.chat_files_routes import create_chat_files_router
 from routes.claude_session_routes import create_claude_session_router
 
 
@@ -424,6 +425,7 @@ app.include_router(create_lsp_router(db))
 _conversation_router = create_conversation_router(db)
 app.include_router(_conversation_router)
 app.include_router(create_profile_router(db))
+app.include_router(create_chat_files_router(db))
 app.include_router(create_usage_router(usage_service))
 app.include_router(create_mcp_router())
 app.include_router(create_scene_editor_router(db))

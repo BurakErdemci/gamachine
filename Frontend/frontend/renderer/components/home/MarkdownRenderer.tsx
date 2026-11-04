@@ -1,4 +1,4 @@
-import { Children, memo, useState } from "react";
+import { Children, isValidElement, memo, useState } from "react";
 import { Check, Copy, FileDown, Eye, EyeOff } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -7,6 +7,7 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { linkTuru, chatUrlTransform, yerelYolaCevir } from "../../lib/chatLink";
 import { useLang } from "../../lib/i18n";
 import { findMentions, mentionLabel } from "../../lib/chatMentions";
+import { ChatFileImage } from "./ChatFileImage";
 
 /**
  * `@<id>` in plain text as a chip. A known chat shows its title, the number
@@ -118,6 +119,10 @@ const CodeBlock = ({ match, codeString, workspacePath, onExportToUnity, onOpenFi
   );
 };
 
+// Module-level so a paragraph can tell it holds one: the image is a <figure>, which
+// React refuses inside a <p>.
+const MarkdownImage = ({ src, alt }: any) => <ChatFileImage src={typeof src === "string" ? src : undefined} alt={alt} />;
+
 const MarkdownRendererInner = ({
   content,
   workspacePath,
@@ -207,10 +212,14 @@ const MarkdownRendererInner = ({
             </div>
           );
         },
+        img: MarkdownImage,
+        p({ children, node: _node, ...props }: any) {
+          const body = mentionTitles ? withMentionChips(children, mentionTitles, t("mention.unknown")) : children;
+          return Children.toArray(children).some((c) => isValidElement(c) && c.type === MarkdownImage)
+            ? <div {...props}>{body}</div>
+            : <p {...props}>{body}</p>;
+        },
         ...(mentionTitles ? {
-          p({ children, node: _node, ...props }: any) {
-            return <p {...props}>{withMentionChips(children, mentionTitles, t("mention.unknown"))}</p>;
-          },
           li({ children, node: _node, ...props }: any) {
             return <li {...props}>{withMentionChips(children, mentionTitles, t("mention.unknown"))}</li>;
           },

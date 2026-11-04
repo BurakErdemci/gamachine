@@ -47,11 +47,15 @@ STATUS_UNDELIVERED = "undelivered"
 
 TOOL_LIST = "list_chats"
 TOOL_SEND = "send_chat_message"
+# Not a mail tool: it rides the same mail-only server, so Claude chats get it
+# without the whole unityai server.
+TOOL_SHOW_IMAGE = "show_image"
 # Server name of the Claude SDK entry; Claude calls its tools mcp__<server>__<tool>.
 CLAUDE_SERVER_NAME = "gamachineMail"
 CLAUDE_TOOL_NAMES = frozenset({
     f"mcp__{CLAUDE_SERVER_NAME}__{TOOL_LIST}",
     f"mcp__{CLAUDE_SERVER_NAME}__{TOOL_SEND}",
+    f"mcp__{CLAUDE_SERVER_NAME}__{TOOL_SHOW_IMAGE}",
 })
 
 _TITLE_CAP = 80
@@ -279,7 +283,7 @@ def mail_server_argv() -> List[str]:
 def claude_server_entry(conversation_id: Any) -> Optional[Dict[str, Any]]:
     """The Claude SDK `mcp_servers` entry of one chat, or None without a chat.
 
-    Only the two mail tools: the whole unityai server would also hand Claude
+    Only the two mail tools and show_image: the whole unityai server would also hand Claude
     its shell and file tools past the SDK's own approval. Built from values
     that do not change between turns of a chat, because the session is rebuilt
     whenever its `mcp_servers` differ from the cached one. No token: the

@@ -1,7 +1,7 @@
 ---
 title: How do list_chats and send_chat_message let me leave a note in another chat?
 keywords: sohbet, not, mesaj, posta, dal, mention, @, başka sohbet, mailbox, chat, note, message, branch, send
-covers: list_chats, send_chat_message
+covers: list_chats, send_chat_message, show_image
 ---
 list_chats and send_chat_message let one chat's agent leave a note for another chat or branch of the same user.
 
@@ -12,5 +12,6 @@ list_chats and send_chat_message let one chat's agent leave a note for another c
 - A note never becomes a user message: it arrives as a system note from another chat's AI, and the user's instructions win.
 - Limits: reply chains stop at depth 2; one pair of chats may exchange 5 notes per 10 minutes.
 - The sender of a note cannot see your chat; a reply reaches it only through send_chat_message.
+- show_image(path, caption): shows an image file (png, jpg, gif, webp; at most 20 MB) to the user in this chat; Gamachine keeps a copy with the chat. Use it instead of writing a file path or uploading the file anywhere. Not allowed in read-only runs.
 
-Sources: Backend/app/agentic/mailbox.py, Backend/app/tools/tool_registry.py, Backend/app/unity_ai_mcp/tools/mailbox_tools.py.
+Sources: Backend/app/agentic/mailbox.py, Backend/app/tools/tool_registry.py, Backend/app/unity_ai_mcp/tools/mailbox_tools.py, Backend/app/unity_ai_mcp/tools/show_tools.py.

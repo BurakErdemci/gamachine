@@ -39,6 +39,7 @@ from unity_ai_mcp.approval_bridge import BACKEND_URL, _get_headers
 from unity_ai_mcp.tools.file_tools import register_file_tools
 from unity_ai_mcp.tools.bash_tool import register_bash_tool
 from unity_ai_mcp.tools.mailbox_tools import register_mailbox_tools
+from unity_ai_mcp.tools.show_tools import register_show_tools
 
 _workspace_path: str = ""
 
@@ -106,6 +107,7 @@ def create_server(workspace: str = "") -> MCPServer:
     register_file_tools(mcp, get_workspace)
     register_bash_tool(mcp, get_workspace)
     register_mailbox_tools(mcp)
+    register_show_tools(mcp)
     register_harness_tools(mcp)
 
     return mcp

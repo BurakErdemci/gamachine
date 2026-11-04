@@ -10,6 +10,7 @@ providers cannot drift apart.
 from typing import Callable
 
 MAIL_TOOLS = ("list_chats", "send_chat_message")
+SHOW_TOOL = "show_image"
 
 TOOLS_MISSING_HINT = (
     "If the unityai tools are not in your tool list, tell the user the Gamachine\n"
@@ -31,4 +32,6 @@ def mail_and_fallback(name: Callable[[str], str]) -> str:
     """The mail line plus the missing-tools sentence, in the CLI's naming."""
     return ("- Notes to other Gamachine chats: "
             + ", ".join(name(t) for t in MAIL_TOOLS) + "\n"
+            + "- Show the user an image file in this chat (not a path in your text): "
+            + name(SHOW_TOOL) + "\n"
             + TOOLS_MISSING_HINT)

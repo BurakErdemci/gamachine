@@ -266,7 +266,9 @@ _APP_SYSTEM_APPEND = (
     "kaldığın yerden devam edersin. Bu yüzden kendini 'bekleme moduna' alma, bekleme "
     "döngüsü kurma ya da görev bitti mi diye tekrar tekrar yoklama. Kullanıcının "
     "abonelik kotasını korumak için: küçük/orta işleri subagent açmadan doğrudan kendin "
-    "yap; subagent'ları yalnızca gerçekten paralellik gerektiren büyük işlerde kullan."
+    "yap; subagent'ları yalnızca gerçekten paralellik gerektiren büyük işlerde kullan. "
+    "Kullanıcıya bir görüntü göstermek için show_image aracını kullan (dosya yolunu "
+    "metne yazma, başka bir yere yükleme)."
 )
 
 # Metin/thinking delta'ları bu boyuta ulaşınca SSE'ye basılır (event spam azaltma).

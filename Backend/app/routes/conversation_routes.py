@@ -16,6 +16,7 @@ from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 import action_risk
+import chat_files
 from ai_providers import AIProviderManager
 from auth_utils import require_conversation_owner, require_user, get_current_user, _check_token
 from error_i18n import localize_sse, translate_detail
@@ -1541,6 +1542,13 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
                     return
                 desktop_channel.offer(remote_q, frame)
 
+            def frame_owned(frame: dict) -> bool:
+                try:
+                    return db.get_conversation_owner(frame["conversation_id"]) == user_id
+                except Exception:
+                    logger.warning("[wake] owner lookup failed; %s frame dropped", frame.get("type"))
+                    return False
+
             def ring_listener(conv_id: int, event: dict) -> None:
                 # Called from the ring's _push, possibly off this loop's thread
                 # (the TEXT flush timer).
@@ -1564,6 +1572,9 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
                     while pending_remote is not None or not remote_q.empty():
                         frame = pending_remote if pending_remote is not None else remote_q.get_nowait()
                         pending_remote = None
+                        # CHANNEL is shared by every stream: a chat's image goes only to its owner's.
+                        if frame.get("type") == chat_files.FRAME_TYPE and not frame_owned(frame):
+                            continue
                         last_frame = time()
                         yield "data: " + json.dumps(frame) + "\n\n"
                     # AI chat titles ride this stream too: it is the one

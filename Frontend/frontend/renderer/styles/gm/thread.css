@@ -1118,3 +1118,31 @@
 /* the chamfered primary would clip an outside ring: draw both rings inside, as on the stage */
 .confirm .btn:focus-visible { outline: 2px solid var(--focus); outline-offset: -3px; }
 .confirm .btn-primary:focus-visible { outline-color: var(--btn-focus); }
+
+/* an image the agent showed (show_image): inline in the message column, click opens it large */
+.chat-img { margin: 8px 0; max-width: 100%; }
+.chat-img button {
+  display: block; max-width: 100%; margin: 0; padding: 0; border: 0; background: none;
+  font: inherit; color: inherit; cursor: zoom-in;
+}
+.chat-img button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--radius-lg); }
+.chat-img img {
+  display: block; max-width: 100%; max-height: 320px; object-fit: contain;
+  border-radius: var(--radius-lg); box-shadow: inset 0 0 0 var(--line-w) var(--paper-line);
+}
+.chat-img figcaption { margin-top: 4px; font-size: var(--fs-small); color: var(--ink-dim); }
+.chat-img-ph {
+  display: block; width: 100%; max-width: 320px; height: 120px;
+  border-radius: var(--radius-lg); background: var(--paper-sunk); box-shadow: inset 0 0 0 var(--line-w) var(--paper-line);
+}
+.chat-img-chip { font-family: var(--font-mono); font-size: .9em; padding: 1px 5px; background: var(--paper-sunk); color: var(--ink); }
+.chat-img-lightbox {
+  position: fixed; inset: 0; z-index: 9000; display: flex; align-items: center; justify-content: center; padding: 24px;
+  background: color-mix(in srgb, var(--shell-bg) 88%, transparent); cursor: zoom-out;
+}
+.chat-img-lightbox img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: var(--radius-lg); cursor: default; }
+.chat-img-close {
+  position: absolute; top: 12px; right: 16px; width: 32px; height: 32px; padding: 0; border: 0; border-radius: var(--radius-md);
+  background: var(--shell-bg-2); color: var(--shell-text); font-size: 22px; line-height: 1; cursor: pointer;
+}
+.chat-img-close:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }

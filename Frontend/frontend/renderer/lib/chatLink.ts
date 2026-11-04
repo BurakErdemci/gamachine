@@ -57,6 +57,9 @@ const SURUCU_YOLU = /^[a-zA-Z]:(%5[cC]|%2[fF]|[\\/])/;
 const UNC_YOLU = /^(\\\\|%5[cC]%5[cC])/;
 
 export function chatUrlTransform(url: string): string {
+  // `gamachine-file:<id>`: an image the agent showed through its show_image tool;
+  // ChatFileImage fetches it by id. Any other custom scheme still goes to the default.
+  if (/^gamachine-file:[A-Za-z0-9-]{8,64}$/.test(url)) return url;
   // `C:\...`, `C:/...`, `C:%5C...`, `\\sunucu\pay` — hepsi yerel yol, URL değil.
   if (SURUCU_YOLU.test(url) || UNC_YOLU.test(url)) return url;
   // `file:` de yerel: `linkTuru` onu yerel-dosya sayıyor, dolayısıyla burada

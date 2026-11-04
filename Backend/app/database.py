@@ -11,6 +11,7 @@ import bcrypt
 from typing import Callable, List, Dict, Any, Optional, Tuple
 from cryptography.fernet import Fernet, InvalidToken
 
+import chat_files
 from providers.agy_model_ids import normalize_model
 
 logger = logging.getLogger(__name__)
@@ -357,6 +358,19 @@ class DatabaseManager:
                 detail TEXT)''')
             cursor.execute(
                 'CREATE INDEX IF NOT EXISTS idx_activity_kind_at ON activity_events (kind, at)')
+            # Images an agent showed in a chat (chat_files.py); the bytes live in
+            # <data dir>/chat_files/<conversation_id>/. No FOREIGN KEY, like the
+            # mailbox: `_delete_rows` removes the rows, the callers the folders.
+            cursor.execute('''CREATE TABLE IF NOT EXISTS chat_files (
+                id TEXT PRIMARY KEY,
+                conversation_id INTEGER NOT NULL,
+                name TEXT,
+                caption TEXT,
+                mime TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                created REAL NOT NULL)''')
+            cursor.execute(
+                'CREATE INDEX IF NOT EXISTS idx_chat_files_conv ON chat_files (conversation_id)')
             conn.commit()
 
     def _migrate_ai_configs_table(self, conn: sqlite3.Connection):
@@ -719,9 +733,11 @@ class DatabaseManager:
             # yani yanlış geçmiş gösterme riski YOK — bu yalnız çöp temizliği.
             conn.execute('DELETE FROM cli_sessions WHERE conversation_id = ?', (conv_id,))
             conn.execute('DELETE FROM mailbox WHERE from_conv = ? OR to_conv = ?', (conv_id, conv_id))
+            conn.execute('DELETE FROM chat_files WHERE conversation_id = ?', (conv_id,))
             conn.execute('DELETE FROM conversations WHERE id = ?', (conv_id,))
-            self._delete_side_rows_of(conn, [conv_id])
+            side_ids = self._delete_side_rows_of(conn, [conv_id])
             conn.commit()
+        chat_files.remove_folders(self.db_path, [conv_id] + side_ids)
 
     @staticmethod
     def _delete_side_rows_of(conn: sqlite3.Connection, main_ids: List[int]) -> List[int]:
@@ -745,6 +761,7 @@ class DatabaseManager:
         conn.execute(
             f'DELETE FROM mailbox WHERE from_conv IN ({marks}) OR to_conv IN ({marks})',
             list(ids) + list(ids))
+        conn.execute(f'DELETE FROM chat_files WHERE conversation_id IN ({marks})', ids)
         conn.execute(f'DELETE FROM conversations WHERE id IN ({marks})', ids)
 
     def delete_conversation_family(self, conv_id: int) -> List[int]:
@@ -774,7 +791,8 @@ class DatabaseManager:
             self._delete_rows(conn, ids)
             side_ids = self._delete_side_rows_of(conn, ids)
             conn.commit()
-            return ids, side_ids
+        chat_files.remove_folders(self.db_path, ids + side_ids)
+        return ids, side_ids
 
     # ===================== SIDE CHATS =====================
     def create_side_chat(self, main_id: int, user_id: int) -> Optional[int]:
@@ -826,7 +844,8 @@ class DatabaseManager:
                 return False
             self._delete_rows(conn, [side_id])
             conn.commit()
-            return True
+        chat_files.remove_folders(self.db_path, [side_id])
+        return True
 
     def sweep_side_chats(self, older_than_s: float, busy_ids=()) -> List[int]:
         """Delete side chats idle for at least `older_than_s` seconds; returns their ids.
@@ -848,7 +867,8 @@ class DatabaseManager:
             ids = [r[0] for r in rows if r[0] not in busy]
             self._delete_rows(conn, ids)
             conn.commit()
-            return ids
+        chat_files.remove_folders(self.db_path, ids)
+        return ids
 
     # ===================== APPROVAL LEDGER =====================
     _LEDGER_COLS = ("at", "card_id", "conversation_id", "kind", "tool", "params_hash",

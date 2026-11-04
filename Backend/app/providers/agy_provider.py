@@ -51,7 +51,8 @@ def step_gate_matchers(mode: Optional[str] = None) -> tuple:
 # to tell the user when it is missing instead of blaming a policy.
 AGY_UNITYAI_MCP_HINT = (
     "- unityai: Gamachine's own MCP server. Chat mail lives ONLY here:\n"
-    "  list_chats, send_chat_message (it also carries the file/terminal tools;\n"
+    "  list_chats, send_chat_message, and show_image (show an image file to the user\n"
+    "  in this chat). It also carries the file/terminal tools;\n"
     "  for those keep using the unityai CLI below). Call them with call_mcp_tool,\n"
     "  server \"unityai\" — NEVER server \"unityMCP\" (that is the Unity editor, it\n"
     "  has no mail tools). If the unityai server is not available, tell the user\n"

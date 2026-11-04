@@ -193,6 +193,28 @@ TOOL_DEFINITIONS = [
         }
     },
     {
+        "name": "show_image",
+        "description": (
+            "Bir görüntü dosyasını kullanıcıya bu sohbetin içinde gösterir (oyun ekran görüntüsü, "
+            "ürettiğin efekt vb.). png, jpg, gif ya da webp, en fazla 20 MB. Kullanıcıya görüntü "
+            "göstermek için dosya yolunu metne yazmak ya da başka bir yere yüklemek yerine bunu kullan."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Görüntü dosyasının tam (mutlak) yolu"
+                },
+                "caption": {
+                    "type": "string",
+                    "description": "Görüntünün altında görünecek kısa açıklama (isteğe bağlı)"
+                }
+            },
+            "required": ["path"]
+        }
+    },
+    {
         "name": "harness_search",
         "description": (
             "Gamachine'in kendi araçları, özellikleri, ayarları ve sınırları hakkındaki kısa notlarda arar "
@@ -260,7 +282,7 @@ _TOOL_FUNCTIONS: Dict[str, Callable] = {
 }
 
 # Hangi tool'lar conversation_id parametresi alıyor
-_TOOLS_NEEDING_CONV_ID = {"list_chats", "send_chat_message"}
+_TOOLS_NEEDING_CONV_ID = {"list_chats", "send_chat_message", "show_image"}
 
 
 async def _list_chats(conversation_id=None) -> Dict[str, Any]:
@@ -280,6 +302,17 @@ async def _send_chat_message(to_chat_id=None, message=None, conversation_id=None
     result = await service.send_and_wait(conversation_id, to_chat_id, message)
     text = mailbox.describe_send_result(result)
     if result.get("status") in (mailbox.STATUS_QUEUED, mailbox.STATUS_DELIVERED):
+        return {"success": True, "content": text}
+    return {"success": False, "error": text}
+
+
+async def _show_image(path=None, caption="", conversation_id=None) -> Dict[str, Any]:
+    from unity_ai_mcp.tools import show_tools
+    # The injected id is the runner's own chat, never a model argument.
+    if type(conversation_id) is not int:
+        return {"success": False, "error": show_tools._NO_CHAT}
+    text = await show_tools.post_show_image(conversation_id, str(path or ""), str(caption or ""))
+    if text == show_tools.SHOWN:
         return {"success": True, "content": text}
     return {"success": False, "error": text}
 
@@ -308,6 +341,7 @@ async def _harness_status() -> Dict[str, Any]:
 _ASYNC_TOOL_FUNCTIONS: Dict[str, Callable] = {
     "list_chats": _list_chats,
     "send_chat_message": _send_chat_message,
+    "show_image": _show_image,
     "harness_status": _harness_status,
 }
 

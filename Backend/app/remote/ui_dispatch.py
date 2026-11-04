@@ -91,6 +91,9 @@ _ALLOW: List[Tuple[Tuple[str, ...], str]] = [
     (("POST",), r"/conversations"),
     (("GET",), rf"/conversations/{_ID}"),
     (("GET",), rf"/conversations/{_ID}/(messages|model|context-usage)"),
+    # An image an agent showed in a chat (chat_files.py); the browser asks for it
+    # with ?max_bytes so it fits one reply frame. The POST is the agent tool's.
+    (("GET",), rf"/chat-files/{_ID}"),
     (("GET",), rf"/session-report/{_ID}/{_ID}"),
     (("PUT", "DELETE"), rf"/conversations/{_ID}"),
     (("POST", "DELETE"), rf"/conversations/{_ID}/side"),
@@ -262,7 +265,8 @@ def ipc_event_allowed(channel: Any) -> bool:
 # are for the desktop renderer alone: a browser acting on `remote_message` or
 # `remote_ipc` would send the phone's text again or run the IPC a second time.
 BROWSER_FRAME_TYPES = frozenset({"title", desktop_channel.CARD_CLOSED_TYPE, desktop_channel.MODE_CHANGED_TYPE,
-                                 desktop_channel.MODEL_CHANGED_TYPE, desktop_channel.TURN_LIVE_TYPE})
+                                 desktop_channel.MODEL_CHANGED_TYPE, desktop_channel.TURN_LIVE_TYPE,
+                                 "chat_file"})
 
 # The desktop channel queues that belong to a remote session's copy of
 # /wake-stream-all (the route marks them).

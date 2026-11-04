@@ -674,9 +674,14 @@ export function eventLine(ev) {
   return { text: String(ev.kind || t('event.unknown')), error: false };
 }
 
+// A markdown image (an agent's show_image, or a path it wrote) is a chip on the phone:
+// the page shows plain text only and the picture itself stays on the desktop.
+const MARKDOWN_IMAGE = /!\[([^\]\n]*)\]\([^)\n]*\)/g;
+
 export function messageText(m) {
   if (typeof m.text !== 'string') return m.truncated ? t('chat.messageTooLong') : '';
-  return m.truncated ? t('chat.messageShortened', { text: m.text }) : m.text;
+  const text = m.text.replace(MARKDOWN_IMAGE, (_, alt) => '[🖼 ' + (alt.trim() || 'görüntü') + ']');
+  return m.truncated ? t('chat.messageShortened', { text }) : text;
 }
 
 // The buttons a card gets, each with the exact answer_card payload the bridge

@@ -1312,15 +1312,15 @@ def test_a_read_only_runner_may_list_but_not_send():
     assert result["success"] is False
 
 
-def test_the_mail_server_exposes_only_the_two_mail_tools_and_unityai_has_them_too():
+def test_the_mail_server_exposes_only_the_mail_tools_and_show_image_and_unityai_has_them_too():
     from unity_ai_mcp.mail_server import create_server as mail_server
     from unity_ai_mcp.server import create_server as unityai_server
 
     async def names(server):
         return sorted(t.name for t in await server.list_tools())
 
-    assert asyncio.run(names(mail_server())) == ["list_chats", "send_chat_message"]
-    assert {"list_chats", "send_chat_message"} <= set(asyncio.run(names(unityai_server("."))))
+    assert asyncio.run(names(mail_server())) == ["list_chats", "send_chat_message", "show_image"]
+    assert {"list_chats", "send_chat_message", "show_image"} <= set(asyncio.run(names(unityai_server("."))))
 
 
 def test_the_frozen_build_can_start_the_mail_server():
