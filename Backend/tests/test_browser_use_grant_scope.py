@@ -708,7 +708,9 @@ def test_a_wake_request_with_an_expired_ticket_leaves_the_halt(live):
     asyncio.run(live.router.stop_chat(1))
     live.db.add_message.side_effect = RuntimeError("stop here")
     with patch("routes.conversation_routes._check_chat_rate_limit"):
-        live.client.post("/chat-stream", json={"conversation_id": 1, "message": "hi", "user_id": 1,
-                                               "origin": "wake"}, headers={"X-Session-Token": ""})
-    assert live.db.add_message.called
+        resp = live.client.post("/chat-stream", json={"conversation_id": 1, "message": "hi", "user_id": 1,
+                                                      "origin": "wake"}, headers={"X-Session-Token": ""})
+    # An unticketed wake starts no turn and stores nothing (wake_stale, 4 Nov 2026); the halt stays.
+    assert "wake_stale" in resp.text
+    assert not live.db.add_message.called
     assert halted_ids(live) == [1]
