@@ -166,16 +166,23 @@ def _expire_ticket(conv_id: int) -> None:
         e.event.set()
 
 
-def issue_ticket(conv_id: int, notices: Optional[List[str]] = None) -> None:
-    """Mark that the backend has issued one wake frame for this conversation."""
-    if not conv_id:
-        return
+def expire_due_tickets() -> None:
+    """Expire every ticket past its TTL, returning its task notices. The wake
+    stream calls this each tick: a chat whose only state is a declined ticket
+    has no pending notice to be visited by (audit B8, 4 Nov 2026)."""
     now = monotonic()
     for ticket_conv, issued_at in list(_WAKE_TICKETS.items()):
         if now - issued_at >= WAKE_TICKET_TTL:
             _expire_ticket(ticket_conv)
+
+
+def issue_ticket(conv_id: int, notices: Optional[List[str]] = None) -> None:
+    """Mark that the backend has issued one wake frame for this conversation."""
+    if not conv_id:
+        return
+    expire_due_tickets()
     if conv_id not in _WAKE_TICKETS:
-        _WAKE_TICKETS[conv_id] = now
+        _WAKE_TICKETS[conv_id] = monotonic()
         _TICKET_NOTICES[conv_id] = list(notices or [])
 
 
@@ -201,11 +208,20 @@ def ticket_outstanding(conv_id: int) -> bool:
 
 
 def consume_ticket(conv_id: int) -> bool:
-    """Consume a fresh wake ticket once; expired or missing tickets are invalid."""
-    issued_at = _WAKE_TICKETS.pop(conv_id, None)
+    """Consume a fresh wake ticket once; expired or missing tickets are invalid.
+
+    A late claim of an expired ticket nothing swept yet is unticketed: its task
+    notices go back to the queue like any other expiry, instead of being taken
+    by the claiming turn and lost (audit B6, 4 Nov 2026).
+    """
+    issued_at = _WAKE_TICKETS.get(conv_id)
     if issued_at is None:
         return False
-    return monotonic() - issued_at < WAKE_TICKET_TTL
+    if monotonic() - issued_at >= WAKE_TICKET_TTL:
+        _expire_ticket(conv_id)
+        return False
+    _WAKE_TICKETS.pop(conv_id, None)
+    return True
 
 
 def pending(conv_id: int) -> int:

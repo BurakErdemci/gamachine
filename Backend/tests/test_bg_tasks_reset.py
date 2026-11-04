@@ -20,7 +20,7 @@ import providers.claude_sdk_session as cs
 from agentic import agent_runner as ar
 from agentic import mailbox, turn_events, wake_queue
 from schemas import ChatRequest
-from test_bg_tasks_frames import MINE, _db, _live, _open, _post, _route, _started, runner  # noqa: F401  (runner is a fixture)
+from test_bg_tasks_frames import MINE, _db, _live, _notified, _open, _post, _route, _started, runner  # noqa: F401  (runner is a fixture)
 
 CONV = 9301
 NOTICE = ("[Sistem] Oturum yenilendi (model/ayar değişikliği); şu arka plan işleri kesildi: "
@@ -204,3 +204,97 @@ def test_expiry_found_by_the_sweep_of_another_chats_ticket_returns_the_notices()
     with patch.object(wake_queue, "WAKE_TICKET_TTL", 0.0):
         wake_queue.issue_ticket(CONV + 1, ["tasks_done|other"])
     assert wake_queue.drain(CONV) == ["tasks_done|audit"]
+
+
+def test_a_late_claim_of_an_expired_unswept_ticket_keeps_its_task_notices():
+    """Nothing swept the expired ticket (the SSE dropped); the renderer then
+    claims the old frame. The route treats it as unticketed and its task
+    notices stay queued for the next wake (audit B6, 4 Nov 2026)."""
+    wake_queue.enqueue(CONV, "tasks_done|audit")
+    wake_queue.issue_ticket(CONV, wake_queue.drain(CONV))
+    with patch.object(wake_queue, "WAKE_TICKET_TTL", 0.0):
+        assert wake_queue.consume_ticket(CONV) is False
+    assert wake_queue.take_ticket_notices(CONV) == []
+    assert wake_queue.drain(CONV) == ["tasks_done|audit"]
+
+
+# ── A close inside the 20 s done-grace (audit B7, 4 Nov 2026) ─────────────
+# The finished tasks' results are real; the grace timer died with the session
+# and nothing woke the chat. The wake is queued at the close instead.
+def test_a_model_change_during_the_grace_queues_the_finished_tasks_wake():
+    async def run():
+        sess = _live(CONV)
+        sess.model = "claude-opus-5"
+        await sess._on_message(_started("a", "audit"))
+        await sess._on_message(_notified("a"))
+        assert sess._drain_state == "grace"
+        cs.get_session(CONV, model="claude-sonnet-5")
+        await asyncio.sleep(0.1)
+        return wake_queue.drain(CONV)
+
+    assert asyncio.run(run()) == ["tasks_done|audit"]
+
+
+def test_a_close_during_the_grace_queues_the_wake_once():
+    async def run():
+        sess = _live(CONV)
+        await sess._on_message(_started("a", "audit"))
+        await sess._on_message(_notified("a"))
+        await cs.close_session(CONV)       # compact, chat reset ...
+        await sess.close()                 # a second close adds nothing
+        return wake_queue.drain(CONV)
+
+    assert asyncio.run(run()) == ["tasks_done|audit"]
+
+
+def test_an_idle_stream_re_offers_a_declined_wake_after_its_ticket_expires():
+    """The first frame drained the chat; with nothing else happening, only the
+    ticket remains. The stream itself must expire it and offer the wake again
+    (audit B8, 4 Nov 2026)."""
+    async def run():
+        wake_queue.enqueue(MINE, "tasks_done|idle audit")
+        with patch.object(wake_queue, "WAKE_TICKET_TTL", 0.1), \
+                patch("routes.conversation_routes.WAKE_ALL_POLL_S", 0.01):
+            frames, close = await _open(_route())
+            try:
+                for _ in range(60):
+                    if len([f for f in frames if f.get("type") == "wake"]) >= 2:
+                        break
+                    await asyncio.sleep(0.05)
+            finally:
+                await close()
+        return [f["notices"] for f in frames if f.get("type") == "wake"]
+
+    wakes = asyncio.run(run())
+    assert wakes[:2] == [["tasks_done|idle audit"], ["tasks_done|idle audit"]]
+
+
+# ── A close awaited while a replacement starts (audit B9, 4 Nov 2026) ─────
+# close_session took the session out of the cache before close() recorded the
+# killed tasks; the next turn read no notice, and the old object's late empty
+# snapshot cleared the replacement's live task row.
+def test_a_slow_close_neither_hides_the_notice_nor_clears_the_replacements_row():
+    async def run():
+        entered, release = asyncio.Event(), asyncio.Event()
+        seen = []
+        cs.add_bg_tasks_listener(lambda cid, tasks: seen.append((cid, [t["desc"] for t in tasks])))
+        old = _live(CONV)
+        await old._on_message(_started("o", "old audit"))
+
+        async def slow_exit(*a):
+            entered.set()
+            await release.wait()
+        old._client.__aexit__ = slow_exit
+        closer = asyncio.create_task(cs.close_session(CONV))
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        new = cs.get_session(CONV)
+        notice = cs.take_reset_notice(CONV)        # the next turn's read
+        await new._on_message(_started("n", "new build"))
+        release.set()
+        await asyncio.wait_for(closer, timeout=1)
+        return notice, seen[-1], [t["desc"] for t in new.bg_tasks()]
+
+    notice, last, live = asyncio.run(run())
+    assert "old audit" in notice
+    assert live == ["new build"]
+    assert last == (CONV, ["new build"])

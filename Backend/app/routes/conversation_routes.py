@@ -1608,6 +1608,10 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
                             continue
                         last_frame = time()
                         yield "data: " + json.dumps({"type": "title", **item}) + "\n\n"
+                    if not remote_copy:
+                        # A declined frame's ticket is the chat's only state:
+                        # its expiry puts the notices back for this same tick.
+                        wake_queue.expire_due_tickets()
                     for conv_id in ([] if remote_copy else wake_queue.pending_conversations()):
                         if not _mail_target_ok(conv_id, user_id):
                             continue

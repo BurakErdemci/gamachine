@@ -713,3 +713,27 @@ def test_a_new_turn_ends_the_previous_stops_window():
         return wake_queue.drain(sess.conversation_id), sess.take_stop_notice()
 
     assert asyncio.run(run()) == (["tasks_done|tests"], "")
+
+
+def test_an_unprompted_turn_between_two_stop_kills_keeps_the_stops_window():
+    """A Stop killed two tasks; the first kill's notice starts the CLI's own
+    turn before the second arrives (audit B5, 4 Nov 2026). The second is still
+    the Stop's casualty: no tasks_done wake, both names in the notice."""
+    async def run():
+        sess = _live_session()
+        sess.close = AsyncMock()
+        with patch.object(cs, "_TASKS_DONE_GRACE_S", GRACE), patch.object(cs, "_DB_SAVE_CB", MagicMock()):
+            await sess._on_message(_started("a", "dev server", "local_bash"))
+            await sess._on_message(_started("b", "watcher", "local_bash"))
+            await _stopped_turn(sess)
+            await sess._on_message(_notified("a", "stopped"))
+            await sess._on_message(_stream_event({"type": "message_start"}))
+            await sess._on_message(_notified("b", "stopped"))
+            await sess._on_message(_assistant("ok"))
+            await sess._on_message(_result("ok"))
+            await asyncio.sleep(GRACE * 4)
+        return wake_queue.drain(sess.conversation_id), sess.take_stop_notice()
+
+    wakes, notice = asyncio.run(run())
+    assert wakes == []
+    assert "dev server" in notice and "watcher" in notice

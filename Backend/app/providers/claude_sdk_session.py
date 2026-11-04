@@ -983,6 +983,9 @@ class ClaudeSDKSession:
         # the CLI's unprompted turn) or "after_turn" (a turn was running: apply
         # the grace once it ends).
         self._drain_state: Optional[str] = None
+        # Out of the cache: its row was cleared once at retirement, and a later
+        # publish would overwrite a replacement session's row.
+        self._retired = False
         # Tasks a Stop ended; the next turn's message tells the model.
         self._stop_killed: List[str] = []
         # The last Stop of the current turn and the tasks running when it was
@@ -1110,13 +1113,26 @@ class ClaudeSDKSession:
 
     def _drop_tasks_for_close(self) -> None:
         """The CLI takes its background tasks with it: keep their names for the
-        next turn's notice and clear the row."""
+        next turn's notice and clear the row. Tasks that already finished and
+        wait for the wake-once rule wake the chat now: the grace timer dies with
+        the session (audit B7, 4 Nov 2026)."""
+        if self._done_tasks:
+            self._drain_state = None
+            self._queue_wake("tasks_done")
         if not self._active_tasks:
             return
         _RESET_KILLED.setdefault(self.conversation_id, []).extend(self._active_tasks.values())
         self._active_tasks.clear()
         self._task_meta.clear()
         self._tasks_changed()
+
+    def _retire(self) -> None:
+        """Leaving the cache: record and clear its tasks now, synchronously,
+        then publish nothing more. close() is awaited after this, and a
+        replacement session may start and run tasks meanwhile (audit B9,
+        4 Nov 2026)."""
+        self._drop_tasks_for_close()
+        self._retired = True
 
     # ── can_use_tool: native onay + AskUserQuestion köprüsü ──────────────
     async def _can_use_tool(self, tool_name: str, input_data: dict, context):
@@ -1373,6 +1389,8 @@ class ClaudeSDKSession:
         return out
 
     def _tasks_changed(self) -> None:
+        if self._retired:
+            return
         self.bg_tasks_version += 1
         snapshot = self.bg_tasks()
         for fn in list(_BG_TASK_LISTENERS):
@@ -1455,8 +1473,13 @@ class ClaudeSDKSession:
         self._absorbed_result_at = 0.0
         self._turn_started_at = time.time()
         self._cancel_requested = False
-        self._cancel_at = 0.0
-        self._cancel_tasks = set()
+        if not unprompted:
+            # A Stop's window ends when the next user or wake turn starts. The
+            # CLI's own turn can start between two kill notices of the same Stop
+            # (audit B5, 4 Nov 2026): wiping it there counted the second
+            # casualty as a finish and woke the chat.
+            self._cancel_at = 0.0
+            self._cancel_tasks = set()
         self._usage_event = None
         self._cancel_grace()
         if unprompted:
@@ -2006,9 +2029,9 @@ def _identity_mismatch(sess: "ClaudeSDKSession", kwargs: dict) -> Optional[str]:
 
 def _discard(conversation_id: int, sess: "ClaudeSDKSession") -> None:
     """Session'ı cache'ten düşür ve artıklarını arka planda kapat."""
-    _SESSIONS.pop(conversation_id, None)
     # Now, not when the background close gets to it: the next turn may start first.
-    sess._drop_tasks_for_close()
+    sess._retire()
+    _SESSIONS.pop(conversation_id, None)
     try:
         asyncio.create_task(sess.close())
     except RuntimeError:
@@ -2066,9 +2089,12 @@ def session_busy(conversation_id: int) -> bool:
 
 
 async def close_session(conversation_id: int):
-    sess = _SESSIONS.pop(conversation_id, None)
-    if sess is not None:
-        await sess.close()
+    sess = _SESSIONS.get(conversation_id)
+    if sess is None:
+        return
+    sess._retire()
+    _SESSIONS.pop(conversation_id, None)
+    await sess.close()
 
 
 async def close_all_sessions():
