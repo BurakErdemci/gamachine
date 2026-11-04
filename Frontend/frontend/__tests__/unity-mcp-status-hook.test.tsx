@@ -63,7 +63,19 @@ afterEach(() => {
 })
 
 describe('Unity instance projects and connection wait', () => {
-  it.each(['off', 'blocked', 'starting', 'connected', 'unknown', 'poll failure'])('clears compile fields on %s', async status => {
+  it('keeps the reason code on blocked but clears the compile lines', async () => {
+    // `blocked` carries a code of its own (supervisor_gave_up); the compile output belongs to `running` only.
+    const diagnostic = { reason_code: 'supervisor_gave_up', reason_lines: ['raw diagnostic'] }
+    mockedAxios.get.mockResolvedValue({ data: { status: 'running', ...diagnostic } })
+    const { result } = mountHook()
+    await waitFor(() => expect(result.current.unityMcpReasonLines).toEqual(diagnostic.reason_lines))
+    mockedAxios.get.mockResolvedValue({ data: { status: 'blocked', ...diagnostic } })
+    await act(async () => { await result.current.refreshUnityMcpStatus() })
+    expect(result.current.unityMcpReasonCode).toBe('supervisor_gave_up')
+    expect(result.current.unityMcpReasonLines).toEqual([])
+  })
+
+  it.each(['off', 'starting', 'connected', 'unknown', 'poll failure'])('clears compile fields on %s', async status => {
     const diagnostic = { reason_code: 'bridge_compile_failed', reason_lines: ['raw diagnostic'] }
     mockedAxios.get.mockResolvedValue({ data: { status: 'running', ...diagnostic } })
     const { result } = mountHook()
