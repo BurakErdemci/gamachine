@@ -166,10 +166,10 @@ describe('slow decoder (starvation)', () => {
     expect(sentArgs().every(a => a.frame!.startsWith('data:image/jpeg'))).toBe(true)
   })
 
-  it('leaves at most one unresolved decode when the decoder stalls (20 frames, 500 ms apart)', async () => {
+  it('leaves at most one unresolved decode while the decoder stalls (9 frames, 500 ms apart, inside the 5 s encode timeout)', async () => {
     const decode = vi.fn(() => new Promise(() => {}))
     vi.stubGlobal('createImageBitmap', decode)
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 9; i++) {
       emit({ active: true, seq: i, frame: PNG(10) })
       await vi.advanceTimersByTimeAsync(500)
     }
@@ -193,7 +193,8 @@ describe('slow decoder (starvation)', () => {
     await vi.advanceTimersByTimeAsync(50)
     emit({ active: true, seq: 2, frame: null })
     await vi.advanceTimersByTimeAsync(400)
-    expect(sentArgs().map(a => a.seq)).toEqual([2, 1])
+    // The finished encode carries the newest event's state (seq 2), only its frame is the encoded one.
+    expect(sentArgs().map(a => [a.seq, a.frame === null])).toEqual([[2, true], [2, false]])
   })
 
   it('counts the channel envelope toward the 400_000 byte cap', async () => {
@@ -203,5 +204,75 @@ describe('slow decoder (starvation)', () => {
     await flushAsync()
     expect(JSON.stringify(post.mock.calls[0][1]).length).toBeLessThanOrEqual(400_000)
     expect(sentArgs()[0].frame!.length).toBeLessThan(399_943)
+  })
+})
+
+describe('second audit round', () => {
+  const slowDecoder = (ms: number) => vi.stubGlobal('createImageBitmap', vi.fn(
+    () => new Promise(resolve => setTimeout(() => resolve({ width: 2560, height: 1440, close: vi.fn() }), ms))))
+
+  it('R5: a finished encode keeps the newest state (haltError, conversation), not the older one', async () => {
+    slowDecoder(200)
+    emit({ active: true, conversationId: 1, haltError: true, frame: PNG(10) })
+    await vi.advanceTimersByTimeAsync(50)
+    emit({ active: true, conversationId: 2, haltError: false, frame: null })
+    await vi.advanceTimersByTimeAsync(400)
+    const last = post.mock.calls[post.mock.calls.length - 1][1].args[0]
+    expect(last.frame.startsWith('data:image/jpeg')).toBe(true)
+    expect(last.conversationId).toBe(2)
+    expect(last.haltError).toBe(false)
+  })
+
+  it('R5: the frame is dropped when the newest event is active:false', async () => {
+    slowDecoder(200)
+    emit({ active: true, seq: 1, frame: PNG(10) })
+    await vi.advanceTimersByTimeAsync(50)
+    emit({ active: false, seq: 2, frame: null })
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(sentArgs().map(a => a.seq)).toEqual([2])
+  })
+
+  it('R6: a wall-clock step backwards does not freeze the frames', async () => {
+    emit({ active: true, seq: 1, frame: PNG(10) })
+    await flushAsync()
+    expect(post).toHaveBeenCalledTimes(1)
+    vi.setSystemTime(1_000_000 - 3_600_000)
+    emit({ active: true, seq: 2, frame: PNG(10) })
+    await vi.advanceTimersByTimeAsync(700)
+    await flushAsync()
+    expect(sentArgs().map(a => a.seq)).toEqual([1, 2])
+  })
+
+  it('R7: an encode that never settles times out at 5 s and the next frame goes', async () => {
+    const decode = vi.fn()
+      .mockImplementationOnce(() => new Promise(() => {}))
+      .mockImplementation(async () => ({ width: 2560, height: 1440, close: vi.fn() }))
+    vi.stubGlobal('createImageBitmap', decode)
+    emit({ active: true, seq: 1, frame: PNG(10) })
+    await vi.advanceTimersByTimeAsync(100)
+    emit({ active: true, seq: 2, frame: PNG(10) })
+    await vi.advanceTimersByTimeAsync(4000)
+    expect(post).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1500)
+    await flushAsync()
+    expect(sentArgs().map(a => a.seq)).toEqual([2])
+    expect(sentArgs()[0].frame).not.toBeNull()
+  })
+})
+
+describe('R10 subscription generations', () => {
+  it('a retired subscription late subscribed:false reply does not end the newer one', async () => {
+    let answer!: (v: unknown) => void
+    post.mockImplementationOnce(() => new Promise(resolve => { answer = resolve }))
+    ipc.listeners.get('computer-use-live')!({ active: true, frame: null })
+    expect(post).toHaveBeenCalledTimes(1)
+    resetRemoteSubscriptionsForTests()
+    handleRemoteIpcFrame({ type: 'remote_ipc_subscribe', channel: 'computer-use-live' }, API, 'tok')
+    answer({ data: { subscribed: false } })
+    await flushAsync()
+    expect(ipc.listeners.has('computer-use-live')).toBe(true)
+    post.mockResolvedValue({ data: { subscribed: true } })
+    emit({ active: true, seq: 9, frame: null })
+    expect(sentArgs().some(a => a.seq === 9)).toBe(true)
   })
 })

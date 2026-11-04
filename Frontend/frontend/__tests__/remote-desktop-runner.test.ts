@@ -57,7 +57,7 @@ describe('allow-list mirror', () => {
     }
     expect(remoteIpcAllowed('browser-live', [{ op: 'halt' }])).toBe(true)
     // Turning the agent browser on/off and its settings work remotely (owner decision, 4 Nov 2026).
-    for (const op of ['status', 'halt', 'answer-card', 'settings', 'enable', 'disable', 'cards-off', 'cards-on', 'sites', 'history', 'clear-browsing-data']) {
+    for (const op of ['status', 'halt', 'answer-card', 'settings', 'enable', 'disable', 'cards-off', 'cards-on', 'sites', 'history', 'clear-browsing-data', 'site-remove', 'history-remove', 'history-clear']) {
       expect(remoteIpcAllowed('browser-live', [{ op, conversationId: 3 }])).toBe(true)
     }
     for (const op of ['open', 'navigate', 'back', 'forward', 'reload', 'take-over', 'release', 'close', 'set-bounds', 'visible']) {
@@ -101,6 +101,38 @@ describe('running a call', () => {
   it('leaves other wake frames alone', () => {
     expect(handleRemoteIpcFrame({ type: 'remote_message' }, API, 'tok')).toBe(false)
     expect(handleRemoteIpcFrame({ type: 'wake' }, API, 'tok')).toBe(false)
+  })
+})
+
+describe('remote browsing-data replies', () => {
+  const entries = (n: number, favicon: string) => Array.from({ length: n }, (_, i) => ({ url: `https://e.test/${i}`, title: `t${i}`, favicon }))
+  const posted = () => post.mock.calls[0][1] as { ok: boolean; result: any }
+
+  it('R8: history over the reply cap loses big favicons, then its oldest rows, and says truncated', async () => {
+    const big = `data:image/png;base64,${'A'.repeat(3000)}`
+    ipc.invoke.mockResolvedValue({ entries: entries(500, big) })
+    await runRemoteIpc({ requestId: RID, channel: 'browser-live', args: [{ op: 'history' }] }, API, 'tok')
+    const r = posted().result
+    expect(r.entries.every((e: any) => e.favicon === '')).toBe(true)
+    expect(JSON.stringify(posted()).length).toBeLessThan(600_000)
+    expect(r.truncated).toBeUndefined()
+    // Small favicons stay; rows that still do not fit are cut from the end (oldest) with truncated:true.
+    post.mockClear()
+    const mid = `data:image/png;base64,${'B'.repeat(1900)}`
+    ipc.invoke.mockResolvedValue({ entries: entries(500, mid) })
+    await runRemoteIpc({ requestId: RID, channel: 'browser-live', args: [{ op: 'history' }] }, API, 'tok')
+    const t = posted().result
+    expect(t.truncated).toBe(true)
+    expect(t.entries.length).toBeLessThan(500)
+    expect(t.entries[0].url).toBe('https://e.test/0')
+    expect(t.entries[0].favicon).toBe(mid)
+    expect(JSON.stringify(posted()).length).toBeLessThanOrEqual(600_000)
+  })
+
+  it('R8: a reply that fits and other ops go untouched', async () => {
+    ipc.invoke.mockResolvedValue({ sites: [{ site: 'a.test', cookies: 2 }] })
+    await runRemoteIpc({ requestId: RID, channel: 'browser-live', args: [{ op: 'sites' }] }, API, 'tok')
+    expect(posted().result).toEqual({ sites: [{ site: 'a.test', cookies: 2 }] })
   })
 })
 

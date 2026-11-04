@@ -172,10 +172,11 @@ IPC_ALLOW = frozenset({
 # dialogs on the PC. On/off and settings cross (owner decision 4 Nov 2026).
 IPC_OPS = {
     # settings/enable/disable/cards-off/cards-on: read and switch the agent browser, as in its settings page.
-    # sites/history/clear-browsing-data: the same page's browsing-data controls (owner decision 4 Nov 2026).
+    # sites/history/clear-browsing-data and the removals site-remove/history-remove/history-clear: the same page's browsing-data controls (owner decision 4 Nov 2026).
     "browser-live": frozenset({"status", "halt", "answer-card",
                                "settings", "enable", "disable", "cards-off", "cards-on",
-                               "sites", "history", "clear-browsing-data"}),
+                               "sites", "history", "clear-browsing-data",
+                               "site-remove", "history-remove", "history-clear"}),
     "computer-use-live": frozenset({"status", "halt", "halted"}),
     # status: settings page state; enable/disable/cards-off/cards-on: the switches; remove-grant: revoke an
     # app; restart: restart the driver runtime (installs nothing). request-accessibility and
