@@ -249,7 +249,7 @@ export interface InstallRelease {
   modules: InstallModule[];
 }
 export type CatalogResult =
-  | { ok: true; cli: CliState; releases: InstallRelease[] }
+  | { ok: true; cli: CliState; releases: InstallRelease[]; requestedFound?: boolean }
   | { ok: false; cli: CliState; code: 'offline' | 'catalogFailed' };
 export type PlanErrorCode = 'invalidArguments' | 'unknownVersion' | 'unknownModule' | 'cliMissing';
 export type PlanResult =
@@ -292,11 +292,14 @@ const isCli = (c: any): c is CliState =>
   c?.available === true || (c?.available === false && (c.reason === 'noHub' || c.reason === 'openHubOnce'));
 
 /** null = no desktop bridge, or an answer that does not have the contract's shape. */
-export async function loadInstallCatalog(): Promise<CatalogResult | null> {
-  const res = await call('hub-install-catalog');
+export async function loadInstallCatalog(requested?: string): Promise<CatalogResult | null> {
+  const res = await call('hub-install-catalog', requested);
   if (!res || !isCli(res.cli)) return null;
   if (res.ok === true && Array.isArray(res.releases)) {
-    return { ok: true, cli: res.cli, releases: res.releases.filter((r: any) => r && typeof r.version === 'string' && Array.isArray(r.modules)) };
+    return {
+      ok: true, cli: res.cli, releases: res.releases.filter((r: any) => r && typeof r.version === 'string' && Array.isArray(r.modules)),
+      ...(typeof res.requestedFound === 'boolean' ? { requestedFound: res.requestedFound } : {}),
+    };
   }
   if (res.ok === false && (res.code === 'offline' || res.code === 'catalogFailed')) return { ok: false, cli: res.cli, code: res.code };
   return null;

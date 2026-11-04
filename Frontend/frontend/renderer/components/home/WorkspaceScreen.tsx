@@ -242,6 +242,8 @@ export const WorkspaceScreen = ({
     const last = it === items[0];
     const path = it.hostPath ?? it.backendPath;
     const key = it.backendPath;
+    // Only a finished editor listing can say so: while it loads (or failed) the launch item stays.
+    const noEditor = !!it.unityVersion && Array.isArray(hub.editors) && !hub.editors.some(e => e.version === it.unityVersion);
     return (
       <li key={key} className={`wl-proj${last ? ' is-last' : ''}${missing ? ' is-missing' : ''}`}
         data-slot={String(n + 1).padStart(2, '0')} data-key={key} data-testid="welcome-card">
@@ -266,7 +268,10 @@ export const WorkspaceScreen = ({
                 <span className="wl-when"><Ic className="ic ic-sm"><circle cx="10" cy="10" r="7" /><path d="M10 6v4l2.5 2" /></Ic>{relativeWhen(it.lastAccessed, lang)}</span>
               )}
               {it.unityVersion
-                ? <span className="wl-ver"><span lang="en">Unity</span> <span className="num">{it.unityVersion}</span></span>
+                ? <span className={`wl-ver${noEditor ? ' wl-ver-missing' : ''}`}>
+                    <span lang="en">Unity</span> <span className="num">{it.unityVersion}</span>
+                    {noEditor && <span className="wl-ver-flag"> · {t('welcome.versionMissing')}</span>}
+                  </span>
                 : <span className="wl-ver wl-ver-none">{t('welcome.versionUnknown')}</span>}
             </>
           )}
@@ -290,7 +295,12 @@ export const WorkspaceScreen = ({
         )}
         {menuFor === key && (
           <div className="wl-menu" role="menu">
-            {it.status === 'ok' && it.hostPath && (
+            {it.status === 'ok' && noEditor && (
+              <button type="button" role="menuitem" onClick={() => { setMenuFor(null); hub.openInstallVersion(it.unityVersion!); }}>
+                {t('hub.installVersion', { version: it.unityVersion! })}
+              </button>
+            )}
+            {it.status === 'ok' && it.hostPath && !noEditor && (
               <button type="button" role="menuitem" onClick={() => { setMenuFor(null); void hub.launch(it.hostPath!, it.unityVersion ?? undefined); }}>
                 {it.unityVersion ? t('hub.launchWith', { version: it.unityVersion }) : t('hub.launchUnity')}
               </button>

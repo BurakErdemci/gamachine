@@ -49,6 +49,8 @@ export function useHub({ recent, onSelectWorkspace, showToast, onCreated }: HubD
   const install = useSyncExternalStore(subscribeInstall, getInstall, getInstall);
   // The install flow is open: undefined = closed, '' = a new version, a version = adding modules to it.
   const [installFor, setInstallFor] = useState<string | undefined>(undefined);
+  // A version the flow should preselect as a new install (a project's editor that is not installed).
+  const [installWant, setInstallWant] = useState('');
   const versionRef = useRef('');
   const alive = useRef(true);
   // Set again on every run: StrictMode runs the cleanup once before the real mount.
@@ -151,8 +153,13 @@ export function useHub({ recent, onSelectWorkspace, showToast, onCreated }: HubD
 
   const template = templates?.find(x => x.id === templateId);
 
-  const openInstall = (addTo = '') => { if (install.state !== 'installing') clearInstall(); setInstallFor(addTo); };
-  const closeInstall = () => { clearInstall(); setInstallFor(undefined); };
+  const openInstall = (addTo = '') => { if (install.state !== 'installing') clearInstall(); setInstallWant(''); setInstallFor(addTo); };
+  /** The install flow for one specific version, shown on the editors view. */
+  const openInstallVersion = (v: string) => {
+    if (install.state !== 'installing') clearInstall();
+    setInstallWant(v); setInstallFor(''); setView('editors');
+  };
+  const closeInstall = () => { clearInstall(); setInstallFor(undefined); setInstallWant(''); };
   /** The new-project form with a just-installed version already chosen. */
   const newWithVersion = (v: string) => { closeInstall(); setVersion(v); setView('new'); };
   // A run under way or just ended keeps the flow on screen even after a remount.
@@ -162,7 +169,7 @@ export function useHub({ recent, onSelectWorkspace, showToast, onCreated }: HubD
     view, setView, editors, refreshEditors, templates, template, templateId, setTemplateId,
     name, setName, nameTouched, setNameTouched, tried, problem, parent, pickParent, version, setVersion,
     canCreate, create, cancel, retryTemplates: () => void loadTemplates(versionRef.current), run, back, another, openCreated, launch, usage, recentCount: recent.length,
-    install, installShown, installFor: installFor ?? '', openInstall, closeInstall, newWithVersion,
+    install, installShown, installFor: installFor ?? '', installWant, openInstall, openInstallVersion, closeInstall, newWithVersion,
     startInstall: (target: InstallTarget) => void runInstall(target), cancelInstall: () => void cancelInstallRun(),
   };
 }

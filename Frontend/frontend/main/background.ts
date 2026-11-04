@@ -463,7 +463,7 @@ const installDeps = (): InstallDeps => ({
   findHub: () => findUnityHub(process.platform, process.env, os.homedir(), fs.existsSync),
 })
 
-handleSecure('hub-install-catalog', () => loadCatalog(installDeps()))
+handleSecure('hub-install-catalog', (_event, arg: any) => loadCatalog(installDeps(), typeof arg === 'string' ? arg : undefined))
 
 handleSecure('hub-install-plan', (_event, arg: any) =>
   planInstall({ version: arg?.version, modules: arg?.modules }, installDeps()))

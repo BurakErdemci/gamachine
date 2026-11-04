@@ -17,6 +17,9 @@ export interface InstallWords {
   done: TKey;
 }
 
+/** Where Unity keeps every release, for a version its release API does not list. */
+const UNITY_ARCHIVE_URL = 'https://unity.com/releases/editor/archive';
+
 interface Props {
   h: Hub;
   words: InstallWords;
@@ -71,6 +74,8 @@ const Picker = ({ h, words, onGetUnity }: Omit<Props, 'className'>) => {
   const [plan, setPlan] = useState<PlanResult | null | undefined>(undefined);
   const [ticked, setTicked] = useState<Set<string>>(new Set());
   const [hubOpened, setHubOpened] = useState<boolean | undefined>(undefined);
+  // The version a project card asked for was not in Unity's answer.
+  const [wantMissing, setWantMissing] = useState(false);
   const alive = useRef(true);
   const planSeq = useRef(0);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
@@ -88,13 +93,20 @@ const Picker = ({ h, words, onGetUnity }: Omit<Props, 'className'>) => {
 
   const load = useCallback(async () => {
     setCatalog(undefined);
-    const res = await loadInstallCatalog();
+    setWantMissing(false);
+    const res = await loadInstallCatalog(h.installWant || undefined);
     if (!alive.current) return;
     setCatalog(res);
+    // A project's missing editor is preselected as a new install; one Unity does not list gets a plain message.
+    if (h.installWant && res?.ok) {
+      const wanted = res.releases.find(r => r.version === h.installWant);
+      setWantMissing(!wanted);
+      if (wanted && !wanted.installed) { choose(wanted, res.releases); return; }
+    }
     // "Add modules" on an editor row skips the version step.
     const target = h.installFor && res?.ok ? res.releases.find(r => r.version === h.installFor) : undefined;
     if (target && res?.ok) choose(target, res.releases);
-  }, [h.installFor, choose]);
+  }, [h.installFor, h.installWant, choose]);
   useEffect(() => { void load(); }, [load]);
 
   // Every change of the selection asks main again; only the answer for the latest one is kept.
@@ -173,6 +185,13 @@ const Picker = ({ h, words, onGetUnity }: Omit<Props, 'className'>) => {
     return (
       <>
         {head('version')}
+        {wantMissing && (
+          <div className="hub-wait" role="status" data-testid="hub-install-want-missing">
+            <span>{t('hub.install.versionMissing', { version: h.installWant })}</span>{' '}
+            <button type="button" className="set-link" onClick={() => window.open(UNITY_ARCHIVE_URL, '_blank')}
+              data-testid="hub-install-archive">{t('hub.install.openArchive')}</button>
+          </div>
+        )}
         {!rec && <p className="hub-wait" role="status">{t('hub.install.noReleases')}</p>}
         {rec && (
           <div className={`hub-inst-card${rec.installed ? ' is-installed' : ''}`} data-testid="hub-install-recommended">

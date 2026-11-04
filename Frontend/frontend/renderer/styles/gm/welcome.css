@@ -120,6 +120,8 @@
 .wl-ver { font-size: var(--fs-meta); color: var(--ink-dim); padding: 1px 7px; border: var(--line-w) solid var(--paper-line); border-radius: var(--radius-sm); }
 .wl-ver .num { font-family: var(--font-mono); }
 .wl-ver-none { color: var(--ink-faint); border-style: dashed; }
+.wl-ver-missing { border-style: dashed; }
+.wl-ver-flag { color: var(--ink-faint); }
 .wl-proj-foot { grid-column: 1 / -1; align-self: end; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; min-height: 29px; margin-top: 12px; padding-top: 10px; border-top: var(--line-w) solid var(--paper-line); font-size: var(--fs-meta); color: var(--ink-faint); }
 .wl-proj-more { position: absolute; top: 8px; right: 8px; width: 30px; height: 30px; display: grid; place-items: center; border-radius: var(--radius-md); color: var(--ink-faint); }
 .wl-proj-more:hover, .wl-proj-more[aria-expanded="true"] { background: var(--paper-sunk); color: var(--ink); }

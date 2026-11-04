@@ -34,7 +34,7 @@ export interface InstallRelease {
   modules: InstallModule[]
 }
 export type CatalogResult =
-  | { ok: true; cli: CliState; releases: InstallRelease[] }
+  | { ok: true; cli: CliState; releases: InstallRelease[]; requestedFound?: boolean }
   | { ok: false; cli: CliState; code: 'offline' | 'catalogFailed' }
 
 export type PlanResult =
@@ -267,7 +267,11 @@ async function getReleases(url: string, deps: InstallDeps): Promise<any[]> {
   }
 }
 
-export async function loadCatalog(deps: InstallDeps): Promise<CatalogResult> {
+// Only a well-formed Unity version may reach the release API's query string.
+const UNITY_VERSION = /^\d{1,4}\.\d{1,3}\.\d{1,3}[abfp]\d{1,3}$/
+
+/** `requested` (a project's version) is fetched by exact lookup when it is not among the newest lists. */
+export async function loadCatalog(deps: InstallDeps, requested?: string): Promise<CatalogResult> {
   const cli = cliState(deps)
   const platform = deps.platform === 'win32' ? 'WINDOWS' : deps.platform === 'darwin' ? 'MAC_OS' : null
   if (!platform) return { ok: false, cli, code: 'catalogFailed' }
@@ -282,7 +286,9 @@ export async function loadCatalog(deps: InstallDeps): Promise<CatalogResult> {
       if (release && !releases.has(release.version)) releases.set(release.version, release)
     }
     // "Add modules" must work for an installed editor that fell out of the newest-10 lists.
+    const want = typeof requested === 'string' && UNITY_VERSION.test(requested) ? requested : undefined
     const missing = deps.editors().map(e => e.version).filter(v => !releases.has(v)).slice(0, 5)
+    if (want && !releases.has(want) && !missing.includes(want)) missing.push(want)
     const extra = await Promise.all(missing.map(v =>
       getReleases(`${RELEASE_API}?version=${encodeURIComponent(v)}&${target}`, deps).catch(() => [] as any[])))
     for (const raw of extra.flat()) {
@@ -291,7 +297,7 @@ export async function loadCatalog(deps: InstallDeps): Promise<CatalogResult> {
     }
     const list = [...releases.values()].sort((a, b) => Date.parse(b.releaseDate) - Date.parse(a.releaseDate))
     lastCatalog = list
-    return { ok: true, cli, releases: list }
+    return { ok: true, cli, releases: list, ...(want ? { requestedFound: releases.has(want) } : {}) }
   } catch (err) {
     if (err instanceof CatalogError) return { ok: false, cli, code: err.code }
     throw err
