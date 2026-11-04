@@ -22,8 +22,10 @@ vi.mock('axios', () => {
   return { default: { post, get }, post, get }
 })
 
+import { EventEmitter } from 'events'
 import axios from 'axios'
 import { handleRemoteIpcFrame, resetRemoteSubscriptionsForTests } from '../renderer/lib/remote/desktopRunner'
+import { ComputerLive, type ComputerLiveDeps } from '../main/helpers/computer-use-live'
 
 const post = (axios as unknown as { post: ReturnType<typeof vi.fn> }).post
 const API = 'http://127.0.0.1:8000'
@@ -274,5 +276,77 @@ describe('R10 subscription generations', () => {
     post.mockResolvedValue({ data: { subscribed: true } })
     emit({ active: true, seq: 9, frame: null })
     expect(sentArgs().some(a => a.seq === 9)).toBe(true)
+  })
+})
+
+// main/helpers/computer-use-live.ts: a paired browser's Screen tab keeps its own visibility flag.
+describe('main: remote panel visibility', () => {
+  function liveFixture() {
+    const at = Date.now()
+    const activity = {
+      active: true, conversation_id: 7, started_at: at - 5000,
+      last: { tool: 'computer_click', bundle_id: 'com.apple.TextEdit', app_name: 'TextEdit', pid: 4242, window_id: 55, at, decision: 'allow' },
+      target: { bundle_id: 'com.apple.TextEdit', app_name: 'TextEdit', pid: 4242, window_id: 55 },
+    }
+    const spawn = vi.fn(() => {
+      const child: any = new EventEmitter()
+      child.stdout = new EventEmitter()
+      child.stderr = new EventEmitter()
+      child.stdin = Object.assign(new EventEmitter(), {
+        write: vi.fn((line: string) => {
+          const msg = JSON.parse(line)
+          if (msg.id === undefined) return true
+          const result = msg.method === 'initialize'
+            ? { protocolVersion: '2024-11-05', capabilities: {} }
+            : { content: [{ type: 'image', data: 'iVBORw0KGgo=', mimeType: 'image/png' }] }
+          queueMicrotask(() => child.stdout.emit('data', Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result }) + '\n')))
+          return true
+        }),
+      })
+      child.kill = vi.fn(() => { queueMicrotask(() => child.emit('exit', null, 'SIGTERM')); return true })
+      return child
+    })
+    const main = { isDestroyed: () => false, webContents: { send: vi.fn() } }
+    const deps: ComputerLiveDeps = {
+      host: { running: true, socketPath: '/private/cua/d-1.sock', driverPath: () => '/app/cua/cua-driver', invoke: vi.fn(async () => ({ halted: true })) },
+      http: { request: vi.fn(async () => ({ data: activity })) } as any,
+      baseUrl: () => 'http://127.0.0.1:9', appToken: 'app-token', platform: 'darwin', userData: '/user', spawn: spawn as any,
+      windows: () => [main], newIndicator: vi.fn() as any, loadIndicator: vi.fn(), preload: '/app/preload.js',
+      workAreas: () => ({ primary: { x: 0, y: 0, width: 1440, height: 900 }, all: [{ x: 0, y: 0, width: 1440, height: 900 }] }),
+      shortcut: { register: vi.fn(() => true), unregister: vi.fn() },
+      fs: { readFileSync: vi.fn(() => { throw new Error('ENOENT') }), writeFileSync: vi.fn() },
+      // The main window is on screen, so no floating indicator opens: only the flags drive capture.
+      focusMain: vi.fn(), mainVisible: () => true, now: () => Date.now(), setTimeout, clearTimeout, log: vi.fn(),
+    }
+    const live = new ComputerLive(deps)
+    const frames = () => main.webContents.send.mock.calls.filter(([, p]: any) => typeof p?.frame === 'string').length
+    return { live, frames, spawn }
+  }
+
+  it('captures while only a browser watches, keeps capturing past the desktop panel closing, stops when the browser is gone', async () => {
+    const f = liveFixture()
+    await f.live.tick()
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(f.frames()).toBe(0)
+
+    expect(await f.live.invoke({ op: 'remote-panel-visible', visible: true })).toEqual({ remoteVisible: true })
+    await vi.advanceTimersByTimeAsync(1500)
+    const watching = f.frames()
+    expect(watching).toBeGreaterThan(0)
+
+    // The desktop panel's own flag is a different one: it closing does not stop the phone's frames.
+    await f.live.invoke({ op: 'panel-visible', visible: false })
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(f.frames()).toBeGreaterThan(watching)
+
+    // The desktop runner sends this when the last remote subscription ends.
+    await f.live.invoke({ op: 'remote-panel-visible', visible: false })
+    await vi.advanceTimersByTimeAsync(600)
+    const stopped = f.frames()
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(f.frames()).toBe(stopped)
+    expect(await f.live.invoke({ op: 'remote-panel-visible', visible: 'yes' })).toHaveProperty('error')
+    expect(f.live.status()).not.toHaveProperty('remoteVisible')
+    f.live.shutdown()
   })
 })

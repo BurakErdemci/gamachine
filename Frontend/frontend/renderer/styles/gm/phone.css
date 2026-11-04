@@ -1,0 +1,221 @@
+/* ======================= PHONE LAYOUT OF THE WEB REMOTE (components/phone/, lib/mobile.ts) =======================
+   Drawn only when home.tsx puts data-phone on .app: the relay-served page below 768 px. Every rule here is under
+   .app[data-phone], so the desktop app and the wide web remote never match one, and the base and per-theme files keep
+   their own rules untouched. Theme tokens only; the per-theme blocks at the end fix what a theme's own layout does
+   to a 360 px screen. Touch targets are at least 44 px, body text 15 px, the composer's textarea 16 px (iOS zooms
+   into a smaller field on focus). */
+
+.app[data-phone] {
+  display: flex; flex-direction: column;
+  grid-template-columns: none; grid-template-rows: none;
+  height: 100vh; height: 100dvh;
+  background: var(--paper-bg); color: var(--ink);
+  --fs-body: 15px;
+}
+.app[data-phone] > .phone-shell {
+  flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column;
+  padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-area-inset-right, 0px);
+}
+.app[data-phone][data-screen="ayarlar"] > .phone-shell { display: none; }
+
+/* Settings (the list's gear): the same screen, one column, the page rail as a scrolling strip on top. */
+.app[data-phone] > .settings {
+  flex: 1; min-height: 0;
+  grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr);
+  padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.app[data-phone] .set-rail {
+  flex-direction: row; align-items: center; gap: 4px; overflow-x: auto; padding: 6px 8px;
+  border-right: 0; border-bottom: var(--line-w) solid var(--shell-line);
+}
+.app[data-phone] .set-nav-i { min-height: 44px; flex: none; }
+.app[data-phone] .set-main { padding: 0 16px 48px; }
+
+/* ---------- shared pieces ---------- */
+.app[data-phone] .phone-icon-btn {
+  flex: none; display: inline-grid; place-items: center; min-width: 44px; min-height: 44px; padding: 0;
+  background: transparent; color: inherit; border: 0; border-radius: var(--radius-md);
+  font-size: 22px; line-height: 1; cursor: pointer;
+}
+.app[data-phone] :is(button, [role="tab"]):focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+
+/* The connection line: the same state RemoteGate's banner shows elsewhere, with the last-seen time. */
+.app[data-phone] .phone-conn {
+  margin: 0; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px;
+  font-size: var(--fs-small); color: var(--shell-text-dim);
+}
+.app[data-phone] .phone-conn[data-state="ready"] .phone-conn-t { color: var(--ok); }
+.app[data-phone] .phone-conn:not([data-state="ready"]) .phone-conn-t { color: var(--accent); font-weight: 600; }
+.app[data-phone] .phone-conn-stale { font-size: var(--fs-meta); }
+/* Inside a chat the line only shows while the PC is away, as its own band under the top bar. */
+.app[data-phone] .phone-chat > .phone-conn {
+  padding: 6px 16px; background: var(--paper-sunk); border-bottom: var(--line-w) solid var(--paper-line);
+  color: var(--ink-dim);
+}
+/* What is on screen stays while the PC is away, dimmed a little so it does not read as live. */
+.app[data-phone] .phone-shell[data-stale] .phone-rows { opacity: .72; }
+
+/* ---------- the chat list ---------- */
+.app[data-phone] .phone-list { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+.app[data-phone] .phone-list-head {
+  flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: calc(6px + env(safe-area-inset-top, 0px)) 8px 6px 16px;
+  border-bottom: var(--line-w) solid var(--shell-line);
+}
+.app[data-phone] .phone-list-tools { flex: none; display: flex; align-items: center; gap: 2px; min-width: 0; }
+.app[data-phone] .phone-project {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 44px; max-width: 46vw; padding: 0 10px;
+  background: transparent; color: var(--shell-text); border: var(--line-w) solid var(--shell-line);
+  border-radius: var(--radius-md); font: inherit; font-size: var(--fs-small); cursor: pointer;
+}
+.app[data-phone] .phone-project-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.app[data-phone] .phone-awaiting {
+  flex: none; display: block; width: 100%; min-height: 44px; padding: 10px 16px; text-align: left;
+  background: var(--accent); color: var(--accent-ink); border: 0; font: inherit; font-weight: 600; cursor: pointer;
+}
+.app[data-phone] .phone-list-scroll {
+  flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  padding-bottom: calc(88px + env(safe-area-inset-bottom, 0px));
+}
+.app[data-phone] .phone-rows { list-style: none; margin: 0; padding: 4px 0; }
+.app[data-phone] .phone-row {
+  width: 100%; min-height: 56px; display: flex; align-items: center; gap: 12px; padding: 8px 16px; text-align: left;
+  background: transparent; color: var(--ink); border: 0; border-bottom: var(--line-w) solid var(--paper-line);
+  font: inherit; font-size: var(--fs-body); cursor: pointer;
+}
+.app[data-phone] .phone-row[data-active] { background: var(--paper-sunk); }
+.app[data-phone] .phone-row > .status { flex: none; }
+.app[data-phone] .phone-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.app[data-phone] .phone-row-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.app[data-phone] .phone-row-meta { display: flex; gap: 8px; font-size: var(--fs-small); color: var(--ink-dim); }
+.app[data-phone] .phone-row-time { flex: none; font-size: var(--fs-small); color: var(--ink-faint); }
+.app[data-phone] .phone-row .badge { position: static; flex: none; }
+.app[data-phone] .phone-empty { margin: 32px 16px; color: var(--ink-dim); text-align: center; }
+.app[data-phone] .phone-fab {
+  position: absolute; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); z-index: 2;
+  min-height: 52px; padding: 0 22px;
+  background: var(--btn-bg); color: var(--btn-text); border: 0; border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card); font: inherit; font-weight: 600; cursor: pointer;
+}
+.app[data-phone] .phone-fab:active { background: var(--btn-hover); }
+
+/* ---------- one chat ---------- */
+.app[data-phone] .phone-chat { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.app[data-phone] .phone-chat-bar {
+  flex: none; display: flex; align-items: center; gap: 6px;
+  padding: env(safe-area-inset-top, 0px) 4px 0; min-height: 52px;
+  border-bottom: var(--line-w) solid var(--shell-line);
+}
+.app[data-phone] .phone-back { font-size: 30px; }
+.app[data-phone] .phone-chat-title {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--font-title); font-size: var(--fs-body); font-weight: 600;
+}
+.app[data-phone] .phone-tabs { flex: none; display: flex; border-bottom: var(--line-w) solid var(--shell-line); }
+.app[data-phone] .phone-tab {
+  flex: 1; min-height: 44px; background: transparent; color: var(--shell-text-dim); border: 0;
+  border-bottom: 2px solid transparent; font: inherit; font-size: var(--fs-small); cursor: pointer;
+  font-family: var(--font-label); font-weight: var(--label-weight); text-transform: var(--label-case); letter-spacing: var(--label-track);
+}
+.app[data-phone] .phone-tab[aria-selected="true"] { color: var(--shell-text); border-bottom-color: var(--accent); }
+.app[data-phone] .phone-thread { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+.app[data-phone] .phone-thread > .thread-wrap { flex: 1; min-height: 0; }
+.app[data-phone] .thread-col { padding: 12px 14px 16px; }
+/* The empty new chat: no mascot column on a phone. */
+.app[data-phone] .empty-figure, .app[data-phone] .empty-mascot { display: none; }
+
+/* The composer stays at the bottom of the chat column; the keyboard's height (lib/mobile.ts
+   useVisualViewportInset, set as --phone-kb) pads it up, the safe area pads it while there is none. */
+.app[data-phone] .phone-composer.composer-wrap {
+  flex: none; max-width: none; margin: 0;
+  padding: 6px 10px max(var(--phone-kb, 0px), env(safe-area-inset-bottom, 0px));
+  background: var(--paper-bg); border-top: var(--line-w) solid var(--paper-line);
+}
+.app[data-phone] .composer textarea { font-size: 16px; }
+.app[data-phone] .composer :is(.send, .icon-btn) { min-width: 44px; min-height: 44px; }
+.app[data-phone] .composer-pop { max-height: 45vh; overflow-y: auto; }
+.app[data-phone] .phone-memory { margin: 4px 4px 2px; font-size: var(--fs-meta); color: var(--ink-faint); }
+
+/* Approve and reject: full-height buttons with clear air between them, so a thumb cannot hit the wrong one. */
+.app[data-phone] .approval-actions { gap: 16px; }
+.app[data-phone] .approval-actions .btn { min-height: 44px; padding-left: 18px; padding-right: 18px; }
+.app[data-phone] .approval-actions .btn-primary { margin-right: auto; }
+
+/* ---------- the Ekran tab ---------- */
+.app[data-phone] .phone-screen { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 12px calc(16px + env(safe-area-inset-bottom, 0px)); }
+.app[data-phone] .phone-screen-status { margin: 0 0 8px; font-size: var(--fs-small); color: var(--ink-dim); }
+.app[data-phone] .phone-screen-note { margin: 24px 0 4px; font-weight: 600; }
+.app[data-phone] .phone-screen-hint { margin: 0; color: var(--ink-dim); font-size: var(--fs-small); }
+.app[data-phone] .cul-screen { max-height: none; }
+.app[data-phone] .cul-screen[data-zoomable] { touch-action: none; }
+.app[data-phone] .cul-screen[data-zoomed] .cul-frame { cursor: grab; }
+.app[data-phone] .cul-stop { min-height: 44px; }
+
+/* ---------- the "⋯" sheet ---------- */
+.app[data-phone] .phone-sheet-layer { position: fixed; inset: 0; z-index: 260; display: flex; flex-direction: column; justify-content: flex-end; }
+.app[data-phone] .phone-sheet-scrim {
+  position: absolute; inset: 0; border: 0; padding: 0; cursor: default;
+  background: color-mix(in srgb, var(--shell-bg) 55%, transparent);
+}
+.app[data-phone] .phone-sheet {
+  position: relative; max-height: 80dvh; display: flex; flex-direction: column; overflow: hidden;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  background: var(--paper-raised); color: var(--ink);
+  border-top: var(--line-w) solid var(--paper-line-strong); border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  box-shadow: var(--shadow-card);
+}
+.app[data-phone] .phone-sheet-head {
+  flex: none; display: flex; align-items: center; gap: 4px; padding: 4px 4px 4px 12px;
+  border-bottom: var(--line-w) solid var(--paper-line);
+}
+.app[data-phone] .phone-sheet-title {
+  flex: 1; font-family: var(--font-label); font-weight: var(--label-weight);
+  text-transform: var(--label-case); letter-spacing: var(--label-track); font-size: var(--fs-small);
+}
+.app[data-phone] :is(.phone-sheet-back, .phone-sheet-x) {
+  min-width: 44px; min-height: 44px; background: transparent; color: var(--ink-dim); border: 0; font-size: 24px; cursor: pointer;
+}
+.app[data-phone] .phone-sheet-list { overflow-y: auto; padding: 4px 0; }
+.app[data-phone] .phone-sheet-row {
+  width: 100%; min-height: 52px; display: flex; align-items: center; gap: 10px; padding: 8px 16px; text-align: left;
+  background: transparent; color: var(--ink); border: 0; font: inherit; font-size: var(--fs-body); cursor: pointer;
+}
+.app[data-phone] .phone-sheet-row:disabled { opacity: .45; cursor: not-allowed; }
+.app[data-phone] .phone-sheet-row-t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.app[data-phone] .phone-sheet-row-d { font-size: var(--fs-small); color: var(--ink-dim); }
+.app[data-phone] .phone-sheet-row-v { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-dim); font-size: var(--fs-small); }
+.app[data-phone] :is(.phone-sheet-chev, .phone-sheet-check) { flex: none; color: var(--ink-faint); font-size: 18px; }
+.app[data-phone] .phone-sheet-check { color: var(--accent); }
+.app[data-phone] .phone-sheet-row.is-stop .phone-sheet-row-t { color: var(--toast-err); }
+.app[data-phone] .phone-sheet-note { margin: 16px; color: var(--ink-dim); }
+.app[data-phone] .phone-sheet-confirm { padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+.app[data-phone] .phone-sheet-confirm p { margin: 0; }
+.app[data-phone] .phone-sheet-confirm-acts { display: flex; justify-content: space-between; gap: 16px; }
+.app[data-phone] .phone-sheet-confirm-acts .btn { min-height: 44px; }
+
+/* ======================= per theme ======================= */
+
+/* Arena: chamfered pieces like its cards; the FAB and the waiting bar read as game buttons. */
+[data-theme="arena"] .app[data-phone] .phone-fab { border-radius: 0; clip-path: var(--clip-sm); }
+[data-theme="arena"] .app[data-phone] .phone-sheet { border-radius: 0; clip-path: var(--clip-md); }
+[data-theme="arena"] .app[data-phone] .phone-awaiting { text-transform: var(--label-case); letter-spacing: var(--label-track); }
+
+/* Sade: soft and flat; the FAB is a pill. */
+[data-theme="sade"] .app[data-phone] .phone-fab { border-radius: 999px; box-shadow: none; }
+[data-theme="sade"] .app[data-phone] .phone-row { border-bottom-color: transparent; }
+
+/* Pafta: the drawing sheet's ruled frame on the bars; the tabs are boxed cells. */
+[data-theme="pafta"] .app[data-phone] .phone-chat-bar,
+[data-theme="pafta"] .app[data-phone] .phone-list-head { border-bottom-width: 2px; }
+[data-theme="pafta"] .app[data-phone] .phone-tab + .phone-tab { border-left: var(--line-w) solid var(--shell-line); }
+[data-theme="pafta"] .app[data-phone] .phone-fab { border-radius: 0; }
+
+/* Atölye: the work-order tag's 50 px stub (theme-atolye.thread.css) narrows so a card keeps its text width. */
+[data-theme="atolye"] .app[data-phone] .approval { padding-left: 38px; }
+[data-theme="atolye"] .app[data-phone] .approval > .approval-corner { width: 26px; }
+[data-theme="atolye"] .app[data-phone] .approval[data-state="pending"] .approval-kicker { width: 26px; line-height: 26px; }
+[data-theme="atolye"] .app[data-phone] .approval-corner::before { left: 4px; }
+
+/* Özel: the user's mono/label fonts carry the bars; nothing here may fight its own tokens. */
+[data-theme="ozel"] .app[data-phone] .phone-chat-title { font-family: var(--font-label); }
+[data-theme="ozel"] .app[data-phone] .phone-fab { border-radius: var(--radius-md); }

@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import type { RemoteSession, RemoteView } from '../../lib/remote/bootstrap'
 import { useLang, type TKey } from '../../lib/i18n'
+import { usePhoneShellShown } from '../../lib/mobile'
 import { ToastContainer, useToast } from '../ui/Toast'
 
 function useRemoteView(session: RemoteSession): RemoteView {
@@ -96,6 +97,9 @@ export function RemoteGate({ session, children }: { session: RemoteSession; chil
   const { t } = useLang()
   const { toasts, showToast, dismissToast } = useToast()
   const told = useRef(new Set<string>())
+  // At phone width the shell's own connection line (components/phone/PhoneShell.tsx) says this, with
+  // the last-seen time; a fixed bar would cover its top bar.
+  const phoneShell = usePhoneShellShown()
 
   useEffect(() => {
     void session.start()
@@ -115,7 +119,7 @@ export function RemoteGate({ session, children }: { session: RemoteSession; chil
   if (view.screen !== 'app') return <RemotePairing session={session} view={view} />
   return (
     <>
-      {view.connection !== 'ready' && (
+      {view.connection !== 'ready' && !phoneShell && (
         <div className="gm-remote-banner" role="status">
           {view.connection === 'offline'
             ? t('remoteWeb.offline')

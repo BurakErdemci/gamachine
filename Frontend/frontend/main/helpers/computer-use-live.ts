@@ -197,6 +197,10 @@ export class ComputerLive {
   private haltError = false
   private readonly haltInFlight = new Map<number, Promise<unknown>>()
   private panelVisible = false
+  // A paired browser's Screen tab is on screen (op 'remote-panel-visible', renderer/lib/remote/desktopRunner.ts).
+  // Apart from panelVisible so the desktop panel closing never stops the phone's frames, nor the other way round;
+  // the desktop renderer clears it when the last remote subscription of the live channel ends.
+  private remoteVisible = false
   private indicator: IndicatorWindow | null = null
   private shortcutOn = false
   private proxy: Proxy | null = null
@@ -348,6 +352,11 @@ export class ComputerLive {
         this.panelVisible = visible
         this.updateCapture()
         return { panelVisible: visible }
+      case 'remote-panel-visible':
+        if (typeof visible !== 'boolean') break
+        this.remoteVisible = visible
+        this.updateCapture()
+        return { remoteVisible: visible }
       case 'halt':
         return this.halt()
       case 'halted':
@@ -528,8 +537,8 @@ export class ComputerLive {
 
   private wantsFrames() {
     return this.live && this.deps.host.running && !!this.deps.host.socketPath && !!this.target?.pid
-      // Either the Computer tab or the floating preview needs live frames.
-      && (this.panelVisible || this.indicatorOpen())
+      // The Computer tab, a paired browser's Screen tab or the floating preview needs live frames.
+      && (this.panelVisible || this.remoteVisible || this.indicatorOpen())
   }
 
   private updateCapture() {

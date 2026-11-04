@@ -148,13 +148,102 @@ async function haltFromRenderer(): Promise<boolean> {
   }
 }
 
+const MAX_ZOOM = 4;
+const TAP_ZOOM = 2.5;
+const DOUBLE_TAP_MS = 300;
+// A finger that moved further than this between down and up was a drag, not a tap.
+const TAP_SLOP = 10;
+
+type Pt = { x: number; y: number };
+const pointOf = (e: React.PointerEvent): Pt => ({ x: Number(e.clientX) || 0, y: Number(e.clientY) || 0 });
+const gap = (a: Pt, b: Pt) => Math.hypot(a.x - b.x, a.y - b.y);
+
+/**
+ * Pinch and double-tap zoom for the frame (the phone's Screen tab): a CSS transform on the picture,
+ * never an input to the desktop. Two fingers scale between 1x and MAX_ZOOM, one finger pans a zoomed
+ * picture, a double tap toggles between 1x and TAP_ZOOM.
+ */
+function useFrameZoom(enabled: boolean) {
+  const [view, setView] = useState({ scale: 1, x: 0, y: 0 });
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  const pointers = useRef(new Map<number, Pt>());
+  const pinch = useRef<{ dist: number; scale: number } | null>(null);
+  const drag = useRef<{ start: Pt; x: number; y: number; moved: boolean } | null>(null);
+  const lastTap = useRef(0);
+
+  const down = (e: React.PointerEvent) => {
+    pointers.current.set(e.pointerId, pointOf(e));
+    const pts = [...pointers.current.values()];
+    if (pts.length === 2) {
+      pinch.current = { dist: Math.max(1, gap(pts[0], pts[1])), scale: viewRef.current.scale };
+      drag.current = null;
+    } else if (pts.length === 1) {
+      drag.current = { start: pts[0], x: viewRef.current.x, y: viewRef.current.y, moved: false };
+    }
+  };
+  const move = (e: React.PointerEvent) => {
+    if (!pointers.current.has(e.pointerId)) return;
+    pointers.current.set(e.pointerId, pointOf(e));
+    const pts = [...pointers.current.values()];
+    if (pinch.current && pts.length >= 2) {
+      const scale = Math.min(MAX_ZOOM, Math.max(1, pinch.current.scale * gap(pts[0], pts[1]) / pinch.current.dist));
+      setView(v => (scale === 1 ? { scale: 1, x: 0, y: 0 } : { ...v, scale }));
+      return;
+    }
+    const d = drag.current;
+    if (!d) return;
+    const p = pointOf(e);
+    if (gap(p, d.start) > TAP_SLOP) d.moved = true;
+    if (viewRef.current.scale > 1) setView(v => ({ ...v, x: d.x + p.x - d.start.x, y: d.y + p.y - d.start.y }));
+  };
+  const up = (e: React.PointerEvent) => {
+    if (!pointers.current.delete(e.pointerId)) return;
+    if (pointers.current.size < 2) pinch.current = null;
+    const d = drag.current;
+    if (pointers.current.size > 0 || !d) return;
+    drag.current = null;
+    if (d.moved) { lastTap.current = 0; return; }
+    const now = Date.now();
+    if (now - lastTap.current <= DOUBLE_TAP_MS) {
+      lastTap.current = 0;
+      setView(v => (v.scale > 1 ? { scale: 1, x: 0, y: 0 } : { scale: TAP_ZOOM, x: 0, y: 0 }));
+    } else {
+      lastTap.current = now;
+    }
+  };
+  const cancel = (e: React.PointerEvent) => {
+    pointers.current.delete(e.pointerId);
+    if (pointers.current.size < 2) pinch.current = null;
+    if (pointers.current.size === 0) drag.current = null;
+  };
+
+  if (!enabled) return null;
+  return {
+    zoomed: view.scale > 1,
+    screen: {
+      onPointerDown: down, onPointerMove: move, onPointerUp: up, onPointerCancel: cancel,
+      // The page must not scroll or zoom itself under the fingers.
+      style: { touchAction: 'none' } as React.CSSProperties,
+    },
+    frame: { transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`, transformOrigin: 'center center' } as React.CSSProperties,
+  };
+}
+
 const STOP_ICON = <svg className="cul-stop-ic" viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="2" width="8" height="8" rx="1" /></svg>;
 
-/** The right panel's "Bilgisayar" tab: the driven window, live, and a Stop button. */
-export function ComputerLivePanel({ visible }: { visible: boolean }) {
+/**
+ * The right panel's "Bilgisayar" tab: the driven window, live, and a Stop button. `zoomable` (the
+ * phone's Screen tab) adds pinch and double-tap zoom; `onFrame` hears each new picture shown.
+ */
+export function ComputerLivePanel({ visible, zoomable = false, onFrame }: { visible: boolean; zoomable?: boolean; onFrame?: () => void }) {
   const { t } = useLang();
   const { state, frame } = useComputerLive({ frames: true });
   const now = useNow(state.active);
+  const zoom = useFrameZoom(zoomable);
+  const onFrameRef = useRef(onFrame);
+  onFrameRef.current = onFrame;
+  useEffect(() => { if (frame) onFrameRef.current?.(); }, [frame]);
   const [stopping, setStopping] = useState(false);
   const [stopFailed, setStopFailed] = useState(false);
 
@@ -213,9 +302,9 @@ export function ComputerLivePanel({ visible }: { visible: boolean }) {
           {STOP_ICON}<span>{t(stopping ? 'cu.live.stopping' : 'cu.live.stop')}</span>
         </button>
       </header>
-      <div className="cul-screen">
+      <div className="cul-screen" {...(zoom ? { ...zoom.screen, 'data-zoomable': '', 'data-zoomed': zoom.zoomed || undefined } : {})}>
         {frame
-          ? <img className="cul-frame" src={frame} alt={t('cu.live.frameAlt', { app })} draggable={false} />
+          ? <img className="cul-frame" src={frame} alt={t('cu.live.frameAlt', { app })} draggable={false} style={zoom?.frame} />
           : <span className="cul-waiting">{t('cu.live.waiting')}</span>}
       </div>
       {state.last && (

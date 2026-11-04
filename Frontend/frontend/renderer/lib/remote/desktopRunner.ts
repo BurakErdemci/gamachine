@@ -23,7 +23,9 @@ const OPS: Record<string, Set<string>> = {
   // The settings ops are the agent browser's on/off, card switches and browsing data: sites, history, their removal and clear (owner decision 4 Nov 2026).
   'browser-live': new Set(['status', 'halt', 'answer-card', 'settings', 'enable', 'disable', 'cards-off', 'cards-on',
     'sites', 'history', 'clear-browsing-data', 'site-remove', 'history-remove', 'history-clear']),
-  'computer-use-live': new Set(['status', 'halt', 'halted']),
+  // `remote-panel-visible` is what a browser's `panel-visible` becomes (remoteIpcCall); the raw op stays out,
+  // so a browser never moves the desktop panel's own flag.
+  'computer-use-live': new Set(['status', 'halt', 'halted', 'remote-panel-visible']),
   // Computer use's switches, app grants and driver restart; the ops that open native dialogs on the PC stay out.
   'computer-use': new Set(['status', 'enable', 'disable', 'cards-off', 'cards-on', 'remove-grant', 'restart']),
 };
@@ -37,6 +39,26 @@ export function remoteIpcAllowed(channel: string, args: unknown[]): boolean {
   if (!ops) return true;
   const first = args[0] as Record<string, unknown> | undefined;
   return !!first && typeof first === 'object' && typeof first.op === 'string' && ops.has(first.op);
+}
+
+const LIVE = 'computer-use-live';
+
+/**
+ * The call as main should get it: a browser's Screen tab reports `panel-visible`, which main keeps
+ * apart from the desktop panel's (`remote-panel-visible`, its own flag, cleared when the last remote
+ * subscription ends). Every other call is unchanged.
+ */
+export function remoteIpcCall(channel: string, args: unknown[]): unknown[] {
+  const first = args[0] as Record<string, unknown> | undefined;
+  if (channel !== LIVE || !first || typeof first !== 'object' || first.op !== 'panel-visible') return args;
+  return [{ op: 'remote-panel-visible', visible: first.visible }, ...args.slice(1)];
+}
+
+/** No browser watches the live view any more: main must not keep capturing for one. */
+function clearRemoteVisible(): void {
+  try {
+    void Promise.resolve(desktopIpc()?.invoke?.(LIVE, { op: 'remote-panel-visible', visible: false })).catch(() => {});
+  } catch { /* the desktop bridge is gone */ }
 }
 
 export function remoteEventAllowed(channel: string): boolean {
@@ -95,13 +117,14 @@ export function fitBrowsingReply(result: unknown): unknown {
 export async function runRemoteIpc(call: RemoteIpcCall, api: string, token: string): Promise<void> {
   let answer: { ok: boolean; result?: unknown; error?: string };
   const ipc = desktopIpc();
-  if (!remoteIpcAllowed(call.channel, call.args)) {
+  const args = remoteIpcCall(call.channel, call.args);
+  if (!remoteIpcAllowed(call.channel, args)) {
     answer = { ok: false, error: 'remote_unavailable' };
   } else if (!ipc) {
     answer = { ok: false, error: 'desktop_not_ready' };
   } else {
     try {
-      const result = await ipc.invoke(call.channel, ...call.args) ?? null;
+      const result = await ipc.invoke(call.channel, ...args) ?? null;
       const op = (call.args[0] as Record<string, unknown>)?.op;
       answer = { ok: true, result: call.channel === 'browser-live' && (op === 'history' || op === 'sites') ? fitBrowsingReply(result) : result };
     } catch (err) {
@@ -124,6 +147,7 @@ function unsubscribe(channel: string): void {
   const off = subscriptions.get(channel);
   subscriptions.delete(channel);
   off?.();
+  if (off && channel === LIVE) clearRemoteVisible();
 }
 
 /** The phone sees the agent's page only, as in `status`: the panel's other tabs (their addresses, titles, icons) stay on the desktop. */
@@ -305,6 +329,8 @@ export async function restoreRemoteSubscriptions(api: string, token: string): Pr
     const res = await axios.get(`${api}/remote/ui-ipc-subscriptions`, { headers: { 'X-Session-Token': token } });
     const channels = res?.data?.channels;
     if (!Array.isArray(channels)) return;
+    // A reload lost the listener that would have cleared it; no browser still watching means none is.
+    if (!channels.includes(LIVE)) clearRemoteVisible();
     for (const channel of channels) {
       if (typeof channel === 'string') subscribeRemoteEvents(channel, api, token);
     }

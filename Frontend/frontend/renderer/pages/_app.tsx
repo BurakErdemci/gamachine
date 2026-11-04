@@ -1,5 +1,6 @@
 import React from 'react'
 import type { AppProps } from 'next/app'
+import Head from 'next/head'
 
 import '../styles/gm/fonts.css'
 import '../styles/gm/tokens.css'
@@ -31,6 +32,10 @@ import '../styles/gm/toast.css'
 import '../styles/gm/computer-live.css'
 import '../styles/gm/browser-panel.css'
 import '../styles/gm/remote.css'
+// The web remote's phone layout, after every base and per-theme file but Özel's (which stays last, see
+// below): all of it is under .app[data-phone], which outranks Özel's own selectors, and its Özel block
+// carries the extra [data-theme="ozel"].
+import '../styles/gm/phone.css'
 // Last on purpose: Özel's rules (all under [data-theme="ozel"]) override base rules from every file
 // above, the way each Sade override follows its base rule inside the same file.
 import '../styles/gm/theme-ozel.shell.css'
@@ -42,6 +47,10 @@ import { ConfirmDialogHost } from '../components/ui/ConfirmDialog'
 import { ErrorBoundary } from '../components/ui/ErrorBoundary'
 import { AppearanceProvider } from '../lib/appearance'
 import { withRemoteMode } from '../lib/remote/bootstrap'
+
+// Only the REMOTE_WEB=1 export sets the base path (next.config.js): the desktop document keeps Next's
+// own viewport tag. On a phone, viewport-fit=cover lets the safe-area insets (phone.css) take effect.
+const REMOTE_BUILD = !!process.env.NEXT_PUBLIC_BASE_PATH
 
 function MyApp({ Component, pageProps, router }: AppProps) {
   // The computer-use indicator is its own tiny always-on-top window: the intro, copy and
@@ -58,6 +67,11 @@ function MyApp({ Component, pageProps, router }: AppProps) {
   }
   return (
     <AppearanceProvider>
+      {REMOTE_BUILD && (
+        <Head>
+          <meta name="viewport" key="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+        </Head>
+      )}
       {/* Sayfa ağacındaki bir render hatası eskiden TÜM pencereyi boşaltıyordu
           ve uygulamayı kapatıp açmak gerekiyordu. */}
       <ErrorBoundary>

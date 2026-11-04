@@ -85,6 +85,17 @@ describe('running a call', () => {
       { headers: { 'X-Session-Token': 'tok' } })
   })
 
+  it("turns a browser's panel-visible into main's remote-panel-visible, never the desktop panel's op", async () => {
+    ipc.invoke.mockResolvedValue({ remoteVisible: true })
+    await runRemoteIpc({ requestId: RID, channel: 'computer-use-live', args: [{ op: 'panel-visible', visible: true }] }, API, 'tok')
+    expect(ipc.invoke).toHaveBeenCalledTimes(1)
+    expect(ipc.invoke).toHaveBeenCalledWith('computer-use-live', { op: 'remote-panel-visible', visible: true })
+    expect(post.mock.calls[0][1]).toEqual({ ok: true, result: { remoteVisible: true } })
+    // The raw op itself stays off the list, so nothing reaches main as the desktop panel's flag.
+    expect(remoteIpcAllowed('computer-use-live', [{ op: 'panel-visible', visible: true }])).toBe(false)
+    expect(remoteIpcAllowed('computer-use-live', [{ op: 'remote-panel-visible', visible: true }])).toBe(true)
+  })
+
   it('posts the error of a failing call', async () => {
     ipc.invoke.mockRejectedValue(new Error('outside workspace'))
     await runRemoteIpc({ requestId: RID, channel: 'write-file', args: ['/etc/x', 'y'] }, API, 'tok')
@@ -157,6 +168,27 @@ describe('subscriptions', () => {
     // A later subscribe listens again.
     handleRemoteIpcFrame({ type: 'remote_ipc_subscribe', channel: 'terminal-data-t1' }, API, 'tok')
     expect(ipc.on).toHaveBeenCalledTimes(2)
+  })
+
+  it('clears the remote visibility in main when the last browser stops watching the live view', async () => {
+    handleRemoteIpcFrame({ type: 'remote_ipc_subscribe', channel: 'computer-use-live' }, API, 'tok')
+    post.mockResolvedValueOnce({ data: { subscribed: true } })
+    ipc.listeners.get('computer-use-live')!({ active: true, frame: null })
+    await flush()
+    expect(ipc.invoke).not.toHaveBeenCalled()
+
+    post.mockResolvedValueOnce({ data: { subscribed: false } })
+    ipc.listeners.get('computer-use-live')!({ active: true, frame: null })
+    await flush()
+    expect(ipc.listeners.has('computer-use-live')).toBe(false)
+    expect(ipc.invoke).toHaveBeenCalledWith('computer-use-live', { op: 'remote-panel-visible', visible: false })
+
+    // A reload that finds no browser still on the channel clears it too.
+    ipc.invoke.mockClear()
+    get.mockResolvedValue({ data: { channels: ['terminal-data-t1'] } })
+    handleRemoteIpcFrame({ type: 'remote_ipc_resync' }, API, 'tok')
+    await flush()
+    expect(ipc.invoke).toHaveBeenCalledWith('computer-use-live', { op: 'remote-panel-visible', visible: false })
   })
 
   it('listens again to the channels browsers still want after a reload', async () => {

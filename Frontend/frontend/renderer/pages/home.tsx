@@ -92,6 +92,8 @@ import { browserRunningIn, useBrowserActiveChats, useComputerRunning } from '../
 import { LivePane } from '../components/home/LivePane';
 import { useBrowserFull } from '../lib/browserFull';
 import { stripBidi } from '../lib/modelText';
+import { usePhoneLayout, usePhoneRoute } from '../lib/mobile';
+import { PhoneShell } from '../components/phone/PhoneShell';
 
 // The guide's prepare-action arguments (REHBER-KAYITLARI.md section 4) in this app's own ids.
 const GUIDE_SETTINGS: Record<Parameters<PrepareHandlers['settings']>[0], SettingsPage> = {
@@ -370,6 +372,10 @@ export default function Home() {
   });
   useRemoteUi({ api: API, token: auth.user?.sessionToken, lang, theme: useAppearance().appearance.theme });
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  // The web remote at phone width draws PhoneShell instead of the sidebar / top bar / workspace frame
+  // (lib/mobile.ts); the desktop app is never a remote page, so for it `phone` stays false.
+  const phone = usePhoneLayout();
+  const phoneRoute = usePhoneRoute();
   // The right column is the workspace (Sahne / Dosyalar / Kod / Önizleme + the terminal drawer)
   // since the v4 column swap; the chat is the main stage and is never hidden. Width modes
   // dar / yarim / odak replace P2's drag handle (lib/workspacePanel.ts).
@@ -841,7 +847,7 @@ export default function Home() {
   // A request waits in this chat (the title block's approval cell).
   const cardWaiting = !!(chat.pendingCommand || chat.pendingQuestion || fs.pendingDelete || fs.pendingGenFiles || chat.pendingFix || mcp.activeGate);
   // A waiting card (or the unknown-source tray, also inside the chat) keeps the floating chat open in full screen.
-  const browserFull = useBrowserFull(ws.open && ws.tab === 'canli' && liveView === 'tarayici' && !ai.showSettings && !profileOpen && !guide.guideOpen, chat.activeConvId,
+  const browserFull = useBrowserFull(!phone && ws.open && ws.tab === 'canli' && liveView === 'tarayici' && !ai.showSettings && !profileOpen && !guide.guideOpen, chat.activeConvId,
     cardWaiting || mcp.unknownGates.length > 0);
   const sceneFrameVisible = !!fs.workspacePath && !backendError && !ai.showSettings;
   const sceneEditor = useSceneEditor({ api: API, token: auth.user?.sessionToken, editorOn,
@@ -976,6 +982,160 @@ export default function Home() {
     chat.setChatInput(prev => questDraft(prev, prompt));
   };
 
+  // Pieces the desktop frame and the phone shell (components/phone/PhoneShell.tsx) both draw.
+  const settingsScreen = (
+    <SettingsScreen
+      open={ai.showSettings} page={settingsPage} onPageChange={setSettingsPage}
+      aiConfig={ai.aiConfig} availableModels={ai.availableModels} providersWithKeys={ai.providersWithKeys}
+      providersWithKeysLoaded={ai.providersWithKeysLoaded}
+      onClose={closeSettings} onLogout={handleLogout} onDeleteKey={ai.deleteApiKey}
+      defaultModel={ai.defaultConfig} onSaveDefaultModel={ai.saveDefaultModel}
+      onSaveApiKey={ai.saveApiKey} onUseCustomModel={ai.applyCustomModel}
+      unityMcpStatus={ai.unityMcpStatus} unityMcpToggling={ai.unityMcpToggling} onToggleUnityMcp={ai.toggleUnityMcp}
+      unityProjectName={unityProjectName}
+      lang={lang} onLangChange={setLang}
+      approvalMode={chat.generationMode} onApprovalModeChange={(m) => chat.setGenerationMode(m, 'settings')}
+      autoTitles={autoTitles.autoTitles} autoTitlesSaving={autoTitles.autoTitlesSaving}
+      onToggleAutoTitles={autoTitles.toggleAutoTitles}
+      dictationAutoLang={dictation.autoLanguageCpu} dictationAutoLangSaving={dictation.autoLanguageCpuSaving}
+      onToggleDictationAutoLang={dictation.toggleAutoLanguageCpu}
+      onRemoteStatus={remote.setStatus}
+      usage={usage.data} user={auth.user} API={API} http={axios} showToast={showToast as any}
+      userName={me.name} onSaveName={me.saveName}
+      onOpenProfile={openProfile} onProfileReset={() => { void profileStats.afterReset(); }}
+      onOpenGuide={() => guide.openGuide()} onReplayTour={() => guide.openTour(1)} tourSteps={guide.coreSteps}
+    />
+  );
+  // The chat's props as one object, and the panel itself passed in: the desktop stage keeps its
+  // <ChatPanel> and <McpUnknownTray> inline, and each <ChatPanel> names the workspace-check prop
+  // as its own attribute (approval-delivery.test.ts reads both from this file).
+  const unknownTrayProps: React.ComponentProps<typeof McpUnknownTray> = {
+    gates: mcp.unknownGates,
+    apiBase: API,
+    sessionToken: auth.user?.sessionToken ?? '',
+    showToast: showToast as any,
+    phonePaired,
+  };
+  const chatPanelProps: Omit<React.ComponentProps<typeof ChatPanel>, 'mcpWorkspaceCheckPending'> = {
+    messages: chat.messages, activeConvId: chat.activeConvId, conversations: chat.conversations, user: auth.user, loading: chat.loading, lang,
+    thinkingLevel, workspacePath: fs.workspacePath, handleExportToUnity: fs.handleExportToUnity,
+    pendingGenFiles: fs.pendingGenFiles, setPendingGenFiles: fs.setPendingGenFiles, pendingFix: chat.pendingFix, setPendingFix: chat.setPendingFix, openedFilePath: fs.openedFilePath,
+    setCode: fs.setCode, setOriginalCode: fs.setOriginalCode, refreshFileTree: fs.refreshFileTree, openFile: openInPanel, sendMessage: handleSendMessage,
+    messagesEndRef: chatEndRef, ipc, showToast: showToast as any, diffFile, setDiffFile,
+    pendingDelete: fs.pendingDelete, setPendingDelete: fs.setPendingDelete, pendingCommand: chat.pendingCommand, setPendingCommand: chat.setPendingCommand, onApproveCommand: chat.approveCommand, pendingQuestion: chat.pendingQuestion, setPendingQuestion: chat.setPendingQuestion, onAnswerQuestion: chat.answerQuestion, deleteFile: fs.deleteFile, setIsTerminalOpen,
+    activity: chat.activity,
+    apiBase: API,
+    mcpGate: mcp.activeGate, mcpWorkspaceMismatch: mcp.gateWorkspaceMismatch,
+    mcpOpenWorkspacePath: mcp.openWorkspacePath, onMcpResolved: mcp.resolveActiveGate,
+    phonePaired,
+  };
+  const threadWrap = (panel: React.ReactNode) => (
+    <div className="thread-wrap">
+      {chatEmpty ? (
+        <EmptyChat userName={me.name} projectName={projectName} onPick={pickQuest} approvalMode={chat.generationMode} onImportSession={isClaudeSub ? () => setImportOpen(true) : undefined} />
+      ) : (
+        <div className="thread custom-scrollbar" onScroll={chatScroll.onScroll}>
+          {panel}
+        </div>
+      )}
+      {hasUnreadBelow && !chatEmpty && (
+        <button
+          type="button"
+          onClick={() => { chatScroll.scrollToBottom(); setHasUnreadBelow(false); }}
+          className="new-below"
+        >
+          <ArrowDown size={13} aria-hidden="true" />
+          {t('chat.newBelow')}
+        </button>
+      )}
+      {/* Over the chat, outside ChatPanel: nothing it shows is part of
+          the main chat until the user adds it to the message box. */}
+      {side.isOpen && (
+        <SideChatPanel
+          messages={side.messages}
+          loading={side.loading}
+          onAsk={askSideQuestion}
+          onStop={side.stop}
+          onClose={side.close}
+          onAddToMain={addSideAnswerToMain}
+        />
+      )}
+    </div>
+  );
+  const composer = (
+    <AnimatedChatInput
+      value={chat.chatInput} setValue={chat.setChatInput} onSendMessage={handleSendMessage} isLoading={chat.loading}
+      api={API}
+      placeholder={t('chat.placeholder')}
+      shortPlaceholder={t('chat.placeholderShort')}
+      disabled={sohbetKilitli}
+      disabledPlaceholder={t('gate.placeholder')}
+      slashCommands={slashCommands}
+      skills={skills}
+      commandMeta={commandMeta}
+      galleryProvider={slashProvider}
+      chats={chat.conversations}
+      currentChatId={chat.activeConvId}
+      pickersRef={composerPickers}
+      onStop={chat.stopMessage}
+      queue={{
+        items: chat.queue, paused: chat.queuePaused,
+        onEdit: chat.editQueued, onDelete: chat.deleteQueued,
+        onSendNow: (id) => { void chat.sendQueuedNow(id); }, onResume: () => { chat.resumeQueue(); },
+      }}
+      onCommand={(cmd) => {
+        if (cmd === '/compact') { chat.compactConversation(); return true; }
+        // "/rehber telefon": the guide opens searching "telefon"; nothing is sent.
+        const guideQuery = parseGuideCommand(cmd);
+        if (guideQuery != null) { guide.openGuide(guideQuery); return true; }
+        return false;
+      }}
+    />
+  );
+
+  if (phone) {
+    return (
+      <LangContext.Provider value={langCtxValue}>
+      <div className="app" data-phone="" data-model={modelFamily(ai.aiConfig?.model_name, ai.effectiveProvider)}
+        // Settings stay reachable (the list's gear) and take the whole screen, as on the desktop.
+        data-screen={ai.showSettings ? 'ayarlar' : undefined}>
+        <Head>
+          <title>{displayName(me.name) ? `Gamachine | ${displayName(me.name)}` : 'Gamachine'}</title>
+          <style>{globalStyles}</style>
+        </Head>
+        {settingsScreen}
+        <PhoneShell
+          route={phoneRoute}
+          conversations={chat.conversations} activeConvId={chat.activeConvId} convStatus={chat.convStatus}
+          unknownGates={mcp.unknownGates.length}
+          projectName={projectName}
+          onSwitchProject={fs.closeWorkspace}
+          onOpenSettings={() => openSettings('genel')}
+          selectConversation={chat.selectConversation}
+          createNewConversation={() => chat.createNewConversation()}
+          chat={{
+            thread: threadWrap(<ChatPanel {...chatPanelProps} mcpWorkspaceCheckPending={mcp.gateWorkspaceCheckPending} />), tray: <McpUnknownTray {...unknownTrayProps} />,
+            composer, contextUsage: chat.contextUsage,
+            menu: {
+              models: ai.availableModels,
+              currentModel: { provider_type: ai.aiConfig.provider_type, model_name: ai.aiConfig.model_name },
+              onOpenModels: () => { void ai.fetchAvailableModels(); },
+              onModelChanged: () => { if (auth.user) void ai.showChatModel(auth.user.id, chat.activeConvId); },
+              effortLevels: effortCaps?.levels ?? null, thinkingLevel,
+              onEffortChanged: (level) => chooseEffort(level as ThinkingLevel),
+              mode: chat.generationMode, loading: chat.loading, isCompacting: chat.isCompacting,
+              onCompact: () => { void chat.compactConversation(); },
+              onStop: () => { void chat.stopMessage(); },
+              showToast: showToast as any,
+            },
+          }}
+        />
+        <ToastContainer toasts={toasts} onDismiss={dismissToast} />
+      </div>
+      </LangContext.Provider>
+    );
+  }
+
   return (
     <LangContext.Provider value={langCtxValue}>
     {/* The v4 frame (shell.css `.app`): sidebar | main | right panel under one top bar.
@@ -998,27 +1158,7 @@ export default function Home() {
         <style>{globalStyles}</style>
       </Head>
 
-      <SettingsScreen
-        open={ai.showSettings} page={settingsPage} onPageChange={setSettingsPage}
-        aiConfig={ai.aiConfig} availableModels={ai.availableModels} providersWithKeys={ai.providersWithKeys}
-        providersWithKeysLoaded={ai.providersWithKeysLoaded}
-        onClose={closeSettings} onLogout={handleLogout} onDeleteKey={ai.deleteApiKey}
-        defaultModel={ai.defaultConfig} onSaveDefaultModel={ai.saveDefaultModel}
-        onSaveApiKey={ai.saveApiKey} onUseCustomModel={ai.applyCustomModel}
-        unityMcpStatus={ai.unityMcpStatus} unityMcpToggling={ai.unityMcpToggling} onToggleUnityMcp={ai.toggleUnityMcp}
-        unityProjectName={unityProjectName}
-        lang={lang} onLangChange={setLang}
-        approvalMode={chat.generationMode} onApprovalModeChange={(m) => chat.setGenerationMode(m, 'settings')}
-        autoTitles={autoTitles.autoTitles} autoTitlesSaving={autoTitles.autoTitlesSaving}
-        onToggleAutoTitles={autoTitles.toggleAutoTitles}
-        dictationAutoLang={dictation.autoLanguageCpu} dictationAutoLangSaving={dictation.autoLanguageCpuSaving}
-        onToggleDictationAutoLang={dictation.toggleAutoLanguageCpu}
-        onRemoteStatus={remote.setStatus}
-        usage={usage.data} user={auth.user} API={API} http={axios} showToast={showToast as any}
-        userName={me.name} onSaveName={me.saveName}
-        onOpenProfile={openProfile} onProfileReset={() => { void profileStats.afterReset(); }}
-        onOpenGuide={() => guide.openGuide()} onReplayTour={() => guide.openTour(1)} tourSteps={guide.coreSteps}
-      />
+      {settingsScreen}
 
       {/* Kept mounted with the rest of the frame: the chat column is only hidden (profile.css). */}
       <ProfileView
@@ -1190,61 +1330,12 @@ export default function Home() {
 
         {/* Outside ChatPanel on purpose: these requests belong to no chat,
             so they stay here whichever chat is open. */}
-        <McpUnknownTray
-          gates={mcp.unknownGates}
-          apiBase={API}
-          sessionToken={auth.user?.sessionToken ?? ''}
-          showToast={showToast as any}
-          phonePaired={phonePaired}
-        />
+        <McpUnknownTray {...unknownTrayProps} />
 
         {/* The scroll listener sits on `.thread`, the element that actually scrolls (measured
             before the swap: ChatPanel's own root never overflows, so a handler there would
             never fire). The empty new chat takes the thread's place. */}
-        <div className="thread-wrap">
-          {chatEmpty ? (
-            <EmptyChat userName={me.name} projectName={projectName} onPick={pickQuest} approvalMode={chat.generationMode} onImportSession={isClaudeSub ? () => setImportOpen(true) : undefined} />
-          ) : (
-            <div className="thread custom-scrollbar" onScroll={chatScroll.onScroll}>
-              <ChatPanel
-                messages={chat.messages} activeConvId={chat.activeConvId} conversations={chat.conversations} user={auth.user} loading={chat.loading} lang={lang}
-                thinkingLevel={thinkingLevel} workspacePath={fs.workspacePath} handleExportToUnity={fs.handleExportToUnity}
-                pendingGenFiles={fs.pendingGenFiles} setPendingGenFiles={fs.setPendingGenFiles} pendingFix={chat.pendingFix} setPendingFix={chat.setPendingFix} openedFilePath={fs.openedFilePath}
-                setCode={fs.setCode} setOriginalCode={fs.setOriginalCode} refreshFileTree={fs.refreshFileTree} openFile={openInPanel} sendMessage={handleSendMessage}
-                messagesEndRef={chatEndRef} ipc={ipc} showToast={showToast as any} diffFile={diffFile} setDiffFile={setDiffFile}
-                pendingDelete={fs.pendingDelete} setPendingDelete={fs.setPendingDelete} pendingCommand={chat.pendingCommand} setPendingCommand={chat.setPendingCommand} onApproveCommand={chat.approveCommand} pendingQuestion={chat.pendingQuestion} setPendingQuestion={chat.setPendingQuestion} onAnswerQuestion={chat.answerQuestion} deleteFile={fs.deleteFile} setIsTerminalOpen={setIsTerminalOpen}
-                activity={chat.activity}
-                apiBase={API}
-                mcpGate={mcp.activeGate} mcpWorkspaceMismatch={mcp.gateWorkspaceMismatch}
-                mcpWorkspaceCheckPending={mcp.gateWorkspaceCheckPending}
-                mcpOpenWorkspacePath={mcp.openWorkspacePath} onMcpResolved={mcp.resolveActiveGate}
-                phonePaired={phonePaired}
-              />
-            </div>
-          )}
-          {hasUnreadBelow && !chatEmpty && (
-            <button
-              type="button"
-              onClick={() => { chatScroll.scrollToBottom(); setHasUnreadBelow(false); }}
-              className="new-below"
-            >
-              <ArrowDown size={13} aria-hidden="true" />
-              {t('chat.newBelow')}
-            </button>
-          )}
-          {/* Over the chat, outside ChatPanel: nothing it shows is part of
-              the main chat until the user adds it to the message box. */}
-          {side.isOpen && (
-            <SideChatPanel
-              messages={side.messages}
-              loading={side.loading}
-              onAsk={askSideQuestion}
-              onStop={side.stop}
-              onClose={side.close}
-              onAddToMain={addSideAnswerToMain}
-            />
-          )}
-        </div>
+        {threadWrap(<ChatPanel {...chatPanelProps} mcpWorkspaceCheckPending={mcp.gateWorkspaceCheckPending} />)}
 
         <div className="composer-wrap" data-guide="composer">
           <SessionReportPanel
@@ -1255,34 +1346,7 @@ export default function Home() {
             convId={chat.activeConvId}
             onContextText={chat.applyContextReport}
           />
-          <AnimatedChatInput
-            value={chat.chatInput} setValue={chat.setChatInput} onSendMessage={handleSendMessage} isLoading={chat.loading}
-            api={API}
-            placeholder={t('chat.placeholder')}
-            shortPlaceholder={t('chat.placeholderShort')}
-            disabled={sohbetKilitli}
-            disabledPlaceholder={t('gate.placeholder')}
-            slashCommands={slashCommands}
-            skills={skills}
-            commandMeta={commandMeta}
-            galleryProvider={slashProvider}
-            chats={chat.conversations}
-            currentChatId={chat.activeConvId}
-            pickersRef={composerPickers}
-            onStop={chat.stopMessage}
-            queue={{
-              items: chat.queue, paused: chat.queuePaused,
-              onEdit: chat.editQueued, onDelete: chat.deleteQueued,
-              onSendNow: (id) => { void chat.sendQueuedNow(id); }, onResume: () => { chat.resumeQueue(); },
-            }}
-            onCommand={(cmd) => {
-              if (cmd === '/compact') { chat.compactConversation(); return true; }
-              // "/rehber telefon": the guide opens searching "telefon"; nothing is sent.
-              const guideQuery = parseGuideCommand(cmd);
-              if (guideQuery != null) { guide.openGuide(guideQuery); return true; }
-              return false;
-            }}
-          />
+          {composer}
           {/* The status strip under the box: thinking, memory, plan usage, the Add & chat menu. */}
           <ControlPanel
             thinkingLevel={thinkingLevel} setThinkingLevel={chooseEffort}

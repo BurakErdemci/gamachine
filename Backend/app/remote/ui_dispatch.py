@@ -180,7 +180,9 @@ IPC_OPS = {
                                "settings", "enable", "disable", "cards-off", "cards-on",
                                "sites", "history", "clear-browsing-data",
                                "site-remove", "history-remove", "history-clear"}),
-    "computer-use-live": frozenset({"status", "halt", "halted"}),
+    # panel-visible: the web remote's Screen tab is on screen; the desktop renderer turns it into
+    # its own `remote-panel-visible` op, so the desktop panel's flag is never the browser's.
+    "computer-use-live": frozenset({"status", "halt", "halted", "panel-visible"}),
     # status: settings page state; enable/disable/cards-off/cards-on: the switches; remove-grant: revoke an
     # app; restart: restart the driver runtime (installs nothing). request-accessibility and
     # open-screen-settings pop native OS dialogs on the PC and stay desk-only.

@@ -7,6 +7,7 @@ import { platformKeys } from '../../lib/platformKeys';
 import type { ConvStatus } from '../../hooks/home/useChat';
 import type { UnityMCPStatus } from '../../hooks/home/useAIConfig';
 import { STATUS_DOT, familyRootId, mostUrgent, rootsOf } from '../../lib/convFamily';
+import { AwaitingChip, ChatStatusLamp } from '../phone/ChatRow';
 import { BrandLogo } from './BrandLogo';
 import { useUnityLinkPulse } from './UnityMcpToggle';
 import { confirmDialog } from '../ui/ConfirmDialog';
@@ -59,13 +60,6 @@ interface SidebarProps {
 
 /** Sidebar width from the mockup (base.css `.app` first track). */
 export const SIDEBAR_WIDTH = 240;
-
-// Lamp per chat status: the mockup's `.status-*` classes, coloured by tokens.
-const LAMP: Record<ConvStatus, string> = {
-  running: 'status-running',
-  awaiting: 'status-pending',
-  unread: 'status-ok',
-};
 
 const baseName = (p: string | null | undefined) => (p ? p.split(/[\\/]/).filter(Boolean).pop() : undefined);
 
@@ -150,17 +144,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
           className={cls}
           data-guide={status === 'running' ? 'chat-running' : undefined}
         >
-          {status ? (
-            <span
-              data-testid={`conv-status-${conv.id}`}
-              role="img"
-              title={t(STATUS_DOT[status].label)}
-              aria-label={t(STATUS_DOT[status].label)}
-              className={`status ${LAMP[status]}`}
-            />
-          ) : (
-            <span className="status status-idle" aria-hidden="true" />
-          )}
+          <ChatStatusLamp convId={conv.id} status={status} />
           {quest && !editing ? (
             <span className="chat-text">
               {title}
@@ -174,13 +158,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
               className="chat-meta chat-no"
             >#{conv.id}</span>
           )}
-          {/* The waiting chip: one signal per state, the lamp steps aside for it (CSS m5). */}
-          {status === 'awaiting' && (
-            <span className="badge" aria-hidden="true">
-              <span className="badge-n">1</span>
-              <span className="badge-bang">!</span>
-            </span>
-          )}
+          {status === 'awaiting' && <AwaitingChip />}
           {!editing && (
             <span className="chat-actions">
               <button

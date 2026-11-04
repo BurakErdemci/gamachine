@@ -101,6 +101,44 @@ describe('ComputerLivePanel', () => {
     expect(screen.queryByRole('img', { name: /TextEdit/ })).toBeNull()
   })
 
+  it('zooms only when zoomable: double tap toggles, two fingers pinch, the desktop panel stays as it was', async () => {
+    const { container, rerender } = render(<ComputerLivePanel visible />)
+    await screen.findByText(tr['cu.live.idle'])
+    push(active({ frame: FRAME }))
+    const img = await screen.findByRole('img', { name: /TextEdit/ })
+    const screenEl = container.querySelector('.cul-screen')!
+    // Desktop: no zoom wiring at all.
+    expect(screenEl.hasAttribute('data-zoomable')).toBe(false)
+    expect(img.getAttribute('style')).toBeNull()
+
+    const onFrame = vi.fn()
+    rerender(<ComputerLivePanel visible zoomable onFrame={onFrame} />)
+    expect(screenEl.hasAttribute('data-zoomable')).toBe(true)
+    expect((screenEl as HTMLElement).style.touchAction).toBe('none')
+    const tap = (id: number) => {
+      fireEvent.pointerDown(screenEl, { pointerId: id, clientX: 50, clientY: 50 })
+      fireEvent.pointerUp(screenEl, { pointerId: id, clientX: 50, clientY: 50 })
+    }
+    tap(1); tap(2)
+    expect(img.style.transform).toContain('scale(2.5)')
+    expect(screenEl.hasAttribute('data-zoomed')).toBe(true)
+    tap(3); tap(4)
+    expect(img.style.transform).toContain('scale(1)')
+
+    // Pinch: fingers 100 px apart move to 300 px apart -> 3x.
+    fireEvent.pointerDown(screenEl, { pointerId: 5, clientX: 100, clientY: 100 })
+    fireEvent.pointerDown(screenEl, { pointerId: 6, clientX: 200, clientY: 100 })
+    fireEvent.pointerMove(screenEl, { pointerId: 6, clientX: 400, clientY: 100 })
+    expect(img.style.transform).toContain('scale(3)')
+    fireEvent.pointerUp(screenEl, { pointerId: 6, clientX: 400, clientY: 100 })
+    fireEvent.pointerUp(screenEl, { pointerId: 5, clientX: 100, clientY: 100 })
+
+    push(active({ frame: `${FRAME}AA` }))
+    await waitFor(() => expect(onFrame).toHaveBeenCalled())
+    // Zooming is a picture transform only: nothing new went to the desktop.
+    expect(invoke.mock.calls.every(([channel, req]) => channel !== 'computer-use-live' || ['status', 'panel-visible'].includes(req?.op))).toBe(true)
+  })
+
   const identityChanges = [
     { name: 'conversation', over: { conversationId: 8 } },
     ...[

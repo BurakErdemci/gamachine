@@ -233,7 +233,10 @@ def test_ipc_lists():
         assert not d.ipc_allowed("computer-use", [{"op": op}]), op
     assert not d.ipc_allowed("computer-use", [])
     assert not d.ipc_allowed("computer-use-live", [{"op": "enable"}])
-    assert not d.ipc_allowed("computer-use-live", [{"op": "panel-visible", "visible": True}])
+    # The web remote's Screen tab reports its visibility; the desktop renderer makes it main's
+    # remote-only flag, which a browser cannot name itself.
+    assert d.ipc_allowed("computer-use-live", [{"op": "panel-visible", "visible": True}])
+    assert not d.ipc_allowed("computer-use-live", [{"op": "remote-panel-visible", "visible": True}])
     assert not d.ipc_allowed("browser-live", [])
     assert d.ipc_allowed("computer-use-live", [{"op": "status"}])
     assert not d.ipc_allowed("computer-use-live", [{"op": "open-panel"}])
