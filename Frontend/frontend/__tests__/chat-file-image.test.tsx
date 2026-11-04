@@ -16,6 +16,7 @@ vi.mock('axios', () => {
 })
 
 import axios from 'axios'
+import { resetChatImagesForTests } from '../renderer/components/home/ChatFileImage'
 import { MarkdownRenderer } from '../renderer/components/home/MarkdownRenderer'
 import { useChat } from '../renderer/hooks/home/useChat'
 import { chatUrlTransform } from '../renderer/lib/chatLink'
@@ -31,6 +32,7 @@ let revoked: string[]
 let backend: string
 
 beforeEach(() => {
+  resetChatImagesForTests()
   created = []
   revoked = []
   backend = API
@@ -68,24 +70,56 @@ describe('the stored image', () => {
     expect(mockedAxios.get.mock.calls[0][0]).toBe(`remote://backend/chat-files/${ID}?max_bytes=480000`)
   })
 
-  it('fetches once per id however many bubbles show it, and revokes when the last one leaves', async () => {
+  it('fetches once per id however many bubbles show it, and keeps the image when they leave', async () => {
     const first = show(fileMd('a') + '\n\n' + fileMd('b'))
     const second = show(fileMd('c'))
     await flush()
     expect(mockedAxios.get).toHaveBeenCalledTimes(1)
     expect(created).toEqual(['blob:mock-1'])
     first.unmount()
-    expect(revoked).toEqual([])
     second.unmount()
-    expect(revoked).toEqual(['blob:mock-1'])
+    expect(revoked).toEqual([])
   })
 
-  it('revokes a URL that arrives after its bubble has gone', async () => {
+  it('a remounted bubble shows the image at once, with no empty box and no new fetch (the jumping chat, 4 Nov 2026)', async () => {
+    const view = show(fileMd())
+    await flush()
+    view.unmount()
+    show(fileMd())
+    expect(screen.queryByRole('status')).toBeNull()
+    expect((screen.getByRole('img') as HTMLImageElement).getAttribute('src')).toBe('blob:mock-1')
+    expect(mockedAxios.get).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps a URL that arrives after its bubble has gone, for the next bubble', async () => {
     const view = show(fileMd())
     view.unmount()
     await flush()
     expect(created.length).toBe(1)
-    expect(revoked).toEqual(created)
+    expect(revoked).toEqual([])
+    show(fileMd())
+    expect((screen.getByRole('img') as HTMLImageElement).getAttribute('src')).toBe(created[0])
+    expect(mockedAxios.get).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the same image element when the message re-renders with new handlers (no remount)', async () => {
+    const view = render(<MarkdownRenderer content={fileMd()} onOpenFile={() => {}} />)
+    await flush()
+    const img = screen.getByRole('img')
+    view.rerender(<MarkdownRenderer content={fileMd()} onOpenFile={() => {}} />)
+    await flush()
+    expect(screen.getByRole('img')).toBe(img)
+  })
+
+  it('revokes the oldest unused images once more than 64 are kept', async () => {
+    const id = (n: number) => `0a1b2c3d-1111-2222-3333-${String(n).padStart(12, '0')}`
+    for (let n = 0; n < 65; n++) {
+      const view = show(fileMd(`r${n}`, id(n)))
+      await flush()
+      view.unmount()
+    }
+    expect(created.length).toBe(65)
+    expect(revoked).toEqual([created[0]])
   })
 
   it('shows a chip, not a broken icon, when the image is gone or cannot be read', async () => {

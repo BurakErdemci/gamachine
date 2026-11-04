@@ -18,10 +18,32 @@ const REMOTE_MAX_BYTES = 480000;
 const REMOTE_BASE = "remote://backend";
 
 type Loaded = { url: string } | { reason: "notFound" | "failed" };
-type Slot = { refs: number; promise: Promise<Loaded>; url?: string };
+type Slot = { refs: number; promise: Promise<Loaded> };
 
-// One fetch per id however many bubbles show it; the blob URL lives while a bubble uses it.
+// One fetch per id however many bubbles show it.
 const slots = new Map<string, Slot>();
+// Loaded images outlive the bubble that asked for them: the chat re-renders (and remounts its
+// markdown) on every stream frame, and a URL dropped with the bubble meant a new fetch and an
+// empty box on every remount, so the image never settled and the thread kept jumping (4 Nov 2026).
+// The newest READY_MAX stay; an older one is revoked only once no bubble uses it.
+const READY_MAX = 64;
+const ready = new Map<string, string>();
+
+/** Tests only: start from an empty image cache. */
+export function resetChatImagesForTests() {
+  slots.clear();
+  ready.clear();
+}
+
+function keepReady(id: string, url: string) {
+  ready.delete(id);
+  ready.set(id, url);
+  while (ready.size > READY_MAX) {
+    const [oldId, oldUrl] = ready.entries().next().value as [string, string];
+    ready.delete(oldId);
+    if (!slots.has(oldId)) URL.revokeObjectURL(oldUrl);
+  }
+}
 
 const backendBase = (): Promise<string> =>
   Promise.resolve((window as any).ipc?.invoke?.("get-backend-base-url"))
@@ -43,15 +65,11 @@ async function load(id: string): Promise<Loaded> {
 function acquire(id: string): Slot {
   let slot = slots.get(id);
   if (!slot) {
+    const cached = ready.get(id);
     const created: Slot = { refs: 0, promise: Promise.resolve({ reason: "failed" }) };
-    created.promise = load(id).then((result) => {
-      if (!("url" in result)) return result;
-      // Every bubble that asked left while the fetch was out: nobody will release this URL.
-      if (created.refs === 0) {
-        URL.revokeObjectURL(result.url);
-        return { reason: "failed" } as Loaded;
-      }
-      created.url = result.url;
+    created.promise = cached ? Promise.resolve({ url: cached }) : load(id).then((result) => {
+      // Kept even when every bubble left while the fetch was out: the remounted bubble takes it.
+      if ("url" in result) keepReady(id, result.url);
       return result;
     });
     slots.set(id, created);
@@ -64,8 +82,8 @@ function acquire(id: string): Slot {
 function release(id: string, slot: Slot) {
   slot.refs -= 1;
   if (slot.refs > 0) return;
+  // The URL stays in `ready` for the next bubble; keepReady revokes it once evicted and unused.
   if (slots.get(id) === slot) slots.delete(id);
-  if (slot.url) URL.revokeObjectURL(slot.url);
 }
 
 const Chip = ({ name, reason }: { name: string; reason: string }) => {
@@ -96,14 +114,18 @@ const Lightbox = ({ url, label, onClose }: { url: string; label: string; onClose
 
 const StoredImage = ({ id, alt }: { id: string; alt: string }) => {
   const { t } = useLang();
-  const [state, setState] = useState<Loaded | null>(null);
+  const [state, setState] = useState<Loaded | null>(() => {
+    const url = ready.get(id);
+    return url ? { url } : null;
+  });
   const [open, setOpen] = useState(false);
   const opener = useRef<HTMLButtonElement>(null);
   const name = alt || id.slice(0, 8);
 
   useEffect(() => {
     let live = true;
-    setState(null);
+    const cached = ready.get(id);
+    setState(cached ? { url: cached } : null);
     const slot = acquire(id);
     slot.promise.then((result) => { if (live) setState(result); });
     return () => { live = false; release(id, slot); };

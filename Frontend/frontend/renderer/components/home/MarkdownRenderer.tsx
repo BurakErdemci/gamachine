@@ -1,4 +1,4 @@
-import { Children, isValidElement, memo, useState } from "react";
+import { Children, isValidElement, memo, useMemo, useRef, useState } from "react";
 import { Check, Copy, FileDown, Eye, EyeOff } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -153,14 +153,10 @@ const MarkdownRendererInner = ({
     setTimeout(() => setCopiedBlock(null), 2000);
   };
 
-  return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      // ⚠️ Bu prop OLMADAN aşağıdaki override'a BOŞ DİZGE ulaşıyordu.
-      // `defaultUrlTransform` mutlak Windows yolunu (`C:\...`) güvensiz bir
-      // protokol sanıp siliyor; gerekçesi `chatLink.ts`'te ölçümüyle yazılı.
-      urlTransform={chatUrlTransform}
-      components={{
+  const live = useRef({ t, mentionTitles, onOpenFile, workspacePath, onExportToUnity, handleCopy, copiedBlock });
+  live.current = { t, mentionTitles, onOpenFile, workspacePath, onExportToUnity, handleCopy, copiedBlock };
+  const hasMentions = Boolean(mentionTitles);
+  const components = useMemo(() => ({
         /**
          * ⚠️ Bu override OLMADAN sohbetteki her yerel link uygulamayı
          * boşaltıyordu (ölçüldü 2 Ağu 2026): `href` uygulamanın kendi
@@ -190,7 +186,7 @@ const MarkdownRendererInner = ({
               data-guide={tur === 'yerel-dosya' ? 'file-chip' : undefined}
               onClick={(e) => {
                 // `preventDefault` KOŞULSUZ — üç ayrı sebeple:
-                //   1. `onOpenFile` verilmemiş olabilir (editörsüz bağlamlar,
+                //   1. `live.current.onOpenFile` verilmemiş olabilir (editörsüz bağlamlar,
                 //      örn. `SlashCommandCard`); iptali ona bağlamak
                 //      düzeltmenin kendisinde bir kenar bırakırdı.
                 //   2. `tur === 'bos'` olabilir: boş `href` MEVCUT dokümana
@@ -200,7 +196,7 @@ const MarkdownRendererInner = ({
                 e.preventDefault();
                 // `yerelYolaCevir`: href yüzde-kodlu geliyor (ölçüldü), ham
                 // hâliyle gönderilse dosya diskte bulunamazdı.
-                if (tur === 'yerel-dosya') onOpenFile?.(yerelYolaCevir(String(href)));
+                if (tur === 'yerel-dosya') live.current.onOpenFile?.(yerelYolaCevir(String(href)));
               }}
               {...props}
             >
@@ -218,14 +214,14 @@ const MarkdownRendererInner = ({
         },
         img: MarkdownImage,
         p({ children, node: _node, ...props }: any) {
-          const body = mentionTitles ? withMentionChips(children, mentionTitles, t("mention.unknown")) : children;
+          const body = live.current.mentionTitles ? withMentionChips(children, live.current.mentionTitles, live.current.t("mention.unknown")) : children;
           return Children.toArray(children).some((c) => isValidElement(c) && c.type === MarkdownImage)
             ? <div {...props}>{body}</div>
             : <p {...props}>{body}</p>;
         },
-        ...(mentionTitles ? {
+        ...(live.current.mentionTitles ? {
           li({ children, node: _node, ...props }: any) {
-            return <li {...props}>{withMentionChips(children, mentionTitles, t("mention.unknown"))}</li>;
+            return <li {...props}>{withMentionChips(children, live.current.mentionTitles, live.current.t("mention.unknown"))}</li>;
           },
         } : {}),
         // A fenced block arrives as <pre><code>; the plate is drawn by CodeBlock, so the <pre>
@@ -237,11 +233,11 @@ const MarkdownRendererInner = ({
           const classes = [].concat(codeEl?.properties?.className ?? []).join(" ");
           if (/language-\w/.test(classes)) return <div className="md-pre" {...props}>{children}</div>;
           const text = hastText(codeEl).replace(/\n$/, "");
-          const copied = copiedBlock === text;
+          const copied = live.current.copiedBlock === text;
           return (
             <div className="md-pre md-pre-plain" {...props}>
-              <button type="button" className="md-pre-copy" onClick={() => handleCopy(text)}
-                aria-label={t('code.copyAria')} title={copied ? t('md.copied') : t('md.copy')}>
+              <button type="button" className="md-pre-copy" onClick={() => live.current.handleCopy(text)}
+                aria-label={live.current.t('code.copyAria')} title={copied ? live.current.t('md.copied') : live.current.t('md.copy')}>
                 {copied ? <Check size={14} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}
               </button>
               {children}
@@ -256,11 +252,11 @@ const MarkdownRendererInner = ({
             <CodeBlock 
               match={match} 
               codeString={codeString} 
-              workspacePath={workspacePath} 
-              onExportToUnity={onExportToUnity}
-              onOpenFile={onOpenFile}
-              handleCopy={handleCopy}
-              copiedBlock={copiedBlock}
+              workspacePath={live.current.workspacePath}
+              onExportToUnity={live.current.onExportToUnity}
+              onOpenFile={live.current.onOpenFile}
+              handleCopy={live.current.handleCopy}
+              copiedBlock={live.current.copiedBlock}
               {...props}
             />
           ) : (
@@ -269,7 +265,20 @@ const MarkdownRendererInner = ({
             </code>
           );
         },
-      }}
+  }), [hasMentions]);
+
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      // ⚠️ Bu prop OLMADAN aşağıdaki override'a BOŞ DİZGE ulaşıyordu.
+      // `defaultUrlTransform` mutlak Windows yolunu (`C:\...`) güvensiz bir
+      // protokol sanıp siliyor; gerekçesi `chatLink.ts`'te ölçümüyle yazılı.
+      urlTransform={chatUrlTransform}
+      // One identity for the overrides: functions created inline on every render are new component
+      // types to React, so each stream frame unmounted and remounted every paragraph, code block and
+      // image under them (the chat image never settled and the thread jumped, 4 Nov 2026). They read
+      // the live props from `live`.
+      components={components}
     >
       {content}
     </ReactMarkdown>
