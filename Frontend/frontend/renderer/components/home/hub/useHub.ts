@@ -77,19 +77,38 @@ export function useHub({ recent, onSelectWorkspace, showToast, onCreated }: HubD
 
   // Only the newest refresh may answer: an install finishing while the first listing is out must not be overwritten by it.
   const editorsSeq = useRef(0);
-  const refreshEditors = useCallback(async () => {
+  const reloadEditors = useCallback(async (silent: boolean) => {
     const seq = ++editorsSeq.current;
-    setEditors(undefined);
+    if (!silent) setEditors(undefined);
     const list = await listEditors();
     if (!alive.current || seq !== editorsSeq.current) return;
+    // A silent re-read keeps what the screen shows when the call fails or nothing changed.
+    if (silent && !list) return;
     setEditors(list);
     const keep = list?.some(e => e.version === versionRef.current) ? versionRef.current : list?.[0]?.version ?? '';
+    const changed = keep !== versionRef.current;
     versionRef.current = keep;
     setVersionState(keep);
-    void loadTemplates(keep);
+    if (!silent || changed) void loadTemplates(keep);
   }, [loadTemplates]);
+  const refreshEditors = useCallback(() => reloadEditors(false), [reloadEditors]);
+  /** Re-reads the installed editors without blanking the list (an editor may have been installed outside the app). */
+  const syncEditors = useCallback(() => reloadEditors(true), [reloadEditors]);
 
   useEffect(() => { void refreshEditors(); }, [refreshEditors]);
+
+  // Coming back to the window re-reads the editors (at most once per 5 s); there is no polling timer.
+  useEffect(() => {
+    let last = Date.now();
+    const back = () => {
+      if (document.visibilityState === 'hidden' || Date.now() - last < 5000) return;
+      last = Date.now();
+      void syncEditors();
+    };
+    window.addEventListener('focus', back);
+    document.addEventListener('visibilitychange', back);
+    return () => { window.removeEventListener('focus', back); document.removeEventListener('visibilitychange', back); };
+  }, [syncEditors]);
 
   // Once per finished install, across remounts: the new editor or modules show up in the list.
   useEffect(() => {
@@ -159,6 +178,8 @@ export function useHub({ recent, onSelectWorkspace, showToast, onCreated }: HubD
     if (install.state !== 'installing') clearInstall();
     setInstallWant(v); setInstallFor(''); setView('editors');
   };
+  /** The card's version was applied (or not found): a remount must not apply it again. */
+  const consumeInstallWant = useCallback(() => setInstallWant(''), []);
   const closeInstall = () => { clearInstall(); setInstallFor(undefined); setInstallWant(''); };
   /** The new-project form with a just-installed version already chosen. */
   const newWithVersion = (v: string) => { closeInstall(); setVersion(v); setView('new'); };
@@ -166,10 +187,10 @@ export function useHub({ recent, onSelectWorkspace, showToast, onCreated }: HubD
   const installShown = installFor !== undefined || install.state !== 'idle';
 
   return {
-    view, setView, editors, refreshEditors, templates, template, templateId, setTemplateId,
+    view, setView, editors, refreshEditors, syncEditors, templates, template, templateId, setTemplateId,
     name, setName, nameTouched, setNameTouched, tried, problem, parent, pickParent, version, setVersion,
     canCreate, create, cancel, retryTemplates: () => void loadTemplates(versionRef.current), run, back, another, openCreated, launch, usage, recentCount: recent.length,
-    install, installShown, installFor: installFor ?? '', installWant, openInstall, openInstallVersion, closeInstall, newWithVersion,
+    install, installShown, installFor: installFor ?? '', installWant, consumeInstallWant, openInstall, openInstallVersion, closeInstall, newWithVersion,
     startInstall: (target: InstallTarget) => void runInstall(target), cancelInstall: () => void cancelInstallRun(),
   };
 }

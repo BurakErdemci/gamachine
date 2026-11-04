@@ -75,7 +75,9 @@ const Picker = ({ h, words, onGetUnity }: Omit<Props, 'className'>) => {
   const [ticked, setTicked] = useState<Set<string>>(new Set());
   const [hubOpened, setHubOpened] = useState<boolean | undefined>(undefined);
   // The version a project card asked for was not in Unity's answer.
-  const [wantMissing, setWantMissing] = useState(false);
+  const [wantMissing, setWantMissing] = useState('');
+  // Set once the card's version was consumed: the rerun that clearing it causes must not reload.
+  const wantConsumed = useRef(false);
   const alive = useRef(true);
   const planSeq = useRef(0);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
@@ -93,21 +95,28 @@ const Picker = ({ h, words, onGetUnity }: Omit<Props, 'className'>) => {
 
   const load = useCallback(async () => {
     setCatalog(undefined);
-    setWantMissing(false);
-    const res = await loadInstallCatalog(h.installWant || undefined);
+    setWantMissing('');
+    const want = h.installWant;
+    const res = await loadInstallCatalog(want || undefined);
     if (!alive.current) return;
     setCatalog(res);
     // A project's missing editor is preselected as a new install; one Unity does not list gets a plain message.
-    if (h.installWant && res?.ok) {
-      const wanted = res.releases.find(r => r.version === h.installWant);
-      setWantMissing(!wanted);
+    // Either way the request is used up, so a remount does not apply it over the user's own pick.
+    if (want && res?.ok) {
+      const wanted = res.releases.find(r => r.version === want);
+      if (!wanted) setWantMissing(want);
+      wantConsumed.current = true;
+      h.consumeInstallWant();
       if (wanted && !wanted.installed) { choose(wanted, res.releases); return; }
     }
     // "Add modules" on an editor row skips the version step.
     const target = h.installFor && res?.ok ? res.releases.find(r => r.version === h.installFor) : undefined;
     if (target && res?.ok) choose(target, res.releases);
-  }, [h.installFor, h.installWant, choose]);
-  useEffect(() => { void load(); }, [load]);
+  }, [h.installFor, h.installWant, h.consumeInstallWant, choose]);
+  useEffect(() => {
+    if (!h.installWant && wantConsumed.current) { wantConsumed.current = false; return; }
+    void load();
+  }, [load, h.installWant]);
 
   // Every change of the selection asks main again; only the answer for the latest one is kept.
   const pickedKey = [...picked].sort().join(',');
@@ -187,12 +196,12 @@ const Picker = ({ h, words, onGetUnity }: Omit<Props, 'className'>) => {
         {head('version')}
         {wantMissing && (
           <div className="hub-wait" role="status" data-testid="hub-install-want-missing">
-            <span>{t('hub.install.versionMissing', { version: h.installWant })}</span>{' '}
+            <span>{t('hub.install.versionMissing', { version: wantMissing })}</span>{' '}
             <button type="button" className="set-link" onClick={() => window.open(UNITY_ARCHIVE_URL, '_blank')}
               data-testid="hub-install-archive">{t('hub.install.openArchive')}</button>
           </div>
         )}
-        {!rec && <p className="hub-wait" role="status">{t('hub.install.noReleases')}</p>}
+        {!rec && !wantMissing && <p className="hub-wait" role="status">{t('hub.install.noReleases')}</p>}
         {rec && (
           <div className={`hub-inst-card${rec.installed ? ' is-installed' : ''}`} data-testid="hub-install-recommended">
             <span className="hub-inst-tag">{t('hub.install.recommended')}</span>

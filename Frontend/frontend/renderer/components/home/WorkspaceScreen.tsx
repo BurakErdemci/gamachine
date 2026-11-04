@@ -289,7 +289,7 @@ export const WorkspaceScreen = ({
         {!missing && (
           <button type="button" className="wl-proj-more" aria-label={t('welcome.more', { name: it.name })}
             aria-haspopup="menu" aria-expanded={menuFor === key}
-            onClick={() => setMenuFor(menuFor === key ? null : key)}>
+            onClick={() => { if (menuFor !== key) void hub.syncEditors(); setMenuFor(menuFor === key ? null : key); }}>
             <Ic><circle cx="5" cy="10" r=".9" /><circle cx="10" cy="10" r=".9" /><circle cx="15" cy="10" r=".9" /></Ic>
           </button>
         )}

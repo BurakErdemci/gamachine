@@ -53,9 +53,14 @@ describe('loadCatalog with a requested version', () => {
     expect(cat.releases.map((r: any) => r.version)).toContain(OLD)
     expect(cat.requestedFound).toBe(true)
     expect(urls.filter(u => new URL(u).searchParams.get('version') === OLD)).toHaveLength(1)
-    // lastCatalog now holds it, so the plan step accepts it.
-    const plan: any = await planInstall({ version: OLD, modules: [] }, deps)
+    // lastCatalog now holds it, so the plan step accepts it (a CLI is present, so resolveSelection decides).
+    const withCli = { ...deps, env: { LOCALAPPDATA: 'C:/L' }, exists: (f: string) => f.endsWith('unity.exe') }
+    const plan: any = await planInstall({ version: OLD, modules: [] }, withCli)
     expect(plan.code).not.toBe('unknownVersion')
+    expect(plan.code).not.toBe('cliMissing')
+    expect(plan.ok).toBe(true)
+    const bogus: any = await planInstall({ version: '6000.0.99f9', modules: [] }, withCli)
+    expect(bogus).toEqual({ ok: false, code: 'unknownVersion' })
   })
 
   it('reports a version Unity does not return as not found, with the lists intact', async () => {
@@ -199,5 +204,84 @@ describe('project card with an editor that is not installed', () => {
     expect(note.textContent).toContain(ceviriUygula('en', 'hub.install.versionMissing', { version: OLD }))
     fireEvent.click(screen.getByTestId('hub-install-archive'))
     expect(open).toHaveBeenCalledWith('https://unity.com/releases/editor/archive', '_blank')
+  })
+})
+
+describe('editors list re-read and the card version', () => {
+  const listCalls = () => mocks.invoke.mock.calls.filter(c => c[0] === 'hub-list-editors').length
+  const nowAt = (ms: number) => vi.spyOn(Date, 'now').mockReturnValue(ms)
+
+  it('shows Launch after the editor was installed elsewhere and the window regains focus', async () => {
+    const t0 = Date.now()
+    view()
+    const old = await cardNamed('Old')
+    await waitFor(() => expect(old.querySelector('.wl-ver-missing')).not.toBeNull())
+    editors = { editors: [{ version: '6000.6.7f1', path: '/U/Unity' }, { version: OLD, path: '/U/Old' }] }
+    nowAt(t0 + 6000)
+    fireEvent.focus(window)
+    await waitFor(() => expect(old.querySelector('.wl-ver-missing')).toBeNull())
+    expect(openMenu(old).getByRole('menuitem', { name: `Launch in Unity ${OLD}` })).toBeTruthy()
+  })
+
+  it('throttles focus re-reads to one per 5 seconds', async () => {
+    const t0 = Date.now()
+    view()
+    await cardNamed('Old')
+    await waitFor(() => expect(listCalls()).toBe(1))
+    nowAt(t0 + 1000)
+    fireEvent.focus(window)
+    fireEvent(document, new Event('visibilitychange'))
+    expect(listCalls()).toBe(1)
+    nowAt(t0 + 6000)
+    fireEvent.focus(window)
+    await waitFor(() => expect(listCalls()).toBe(2))
+    nowAt(t0 + 7000)
+    fireEvent.focus(window)
+    expect(listCalls()).toBe(2)
+  })
+
+  it('re-reads the editors when the card menu opens', async () => {
+    view()
+    const old = await cardNamed('Old')
+    await waitFor(() => expect(old.querySelector('.wl-ver-missing')).not.toBeNull())
+    const before = listCalls()
+    editors = { editors: [{ version: '6000.6.7f1', path: '/U/Unity' }, { version: OLD, path: '/U/Old' }] }
+    fireEvent.click(old.querySelector('.wl-proj-more') as HTMLElement)
+    await waitFor(() => expect(listCalls()).toBe(before + 1))
+    await waitFor(() => expect(within(old.querySelector('.wl-menu') as HTMLElement).getByRole('menuitem', { name: `Launch in Unity ${OLD}` })).toBeTruthy())
+  })
+
+  it('applies the card version once: the user pick survives a tab switch', async () => {
+    const OTHER = '6000.2.4f1'
+    catalog = () => ({ ok: true, cli: { available: true }, releases: [release(OLD), release('6000.6.7f1', { recommended: true }), release(OTHER)] })
+    view()
+    const old = await cardNamed('Old')
+    await waitFor(() => expect(old.querySelector('.wl-ver-missing')).not.toBeNull())
+    fireEvent.click(openMenu(old).getByRole('menuitem', { name: `Install Unity ${OLD}` }))
+    await screen.findByTestId('hub-install-modules')
+    expect(screen.getByRole('heading', { level: 4 }).textContent).toContain(OLD)
+    fireEvent.click(screen.getByRole('button', { name: ceviriUygula('en', 'hub.install.backStep') }))
+    fireEvent.click(await screen.findByTestId(`hub-install-pick-${OTHER}`))
+    await screen.findByTestId('hub-install-modules')
+    fireEvent.click(screen.getByTestId('hub-tab-projects'))
+    fireEvent.click(screen.getByTestId('hub-tab-editors'))
+    await waitFor(() => expect(screen.queryByTestId('hub-install-modules') ?? screen.queryByTestId('hub-install-recommended')).toBeTruthy())
+    // Back at the version step (the list names every version), or still on the user's pick: never on the card's version.
+    if (screen.queryByTestId('hub-install-modules')) {
+      const flow = screen.getByTestId('hub-install').textContent || ''
+      expect(flow).not.toContain(OLD)
+      expect(flow).toContain(OTHER)
+    }
+  })
+
+  it('shows only the not-listed message when the release list is empty', async () => {
+    catalog = () => ({ ok: true, cli: { available: true }, requestedFound: false, releases: [] })
+    view()
+    const old = await cardNamed('Old')
+    await waitFor(() => expect(old.querySelector('.wl-ver-missing')).not.toBeNull())
+    fireEvent.click(openMenu(old).getByRole('menuitem', { name: `Install Unity ${OLD}` }))
+    const note = await screen.findByTestId('hub-install-want-missing')
+    expect(note.textContent).toContain(ceviriUygula('en', 'hub.install.versionMissing', { version: OLD }))
+    expect(screen.queryByText(ceviriUygula('en', 'hub.install.noReleases'))).toBeNull()
   })
 })

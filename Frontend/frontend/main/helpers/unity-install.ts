@@ -267,9 +267,6 @@ async function getReleases(url: string, deps: InstallDeps): Promise<any[]> {
   }
 }
 
-// Only a well-formed Unity version may reach the release API's query string.
-const UNITY_VERSION = /^\d{1,4}\.\d{1,3}\.\d{1,3}[abfp]\d{1,3}$/
-
 /** `requested` (a project's version) is fetched by exact lookup when it is not among the newest lists. */
 export async function loadCatalog(deps: InstallDeps, requested?: string): Promise<CatalogResult> {
   const cli = cliState(deps)
@@ -286,7 +283,7 @@ export async function loadCatalog(deps: InstallDeps, requested?: string): Promis
       if (release && !releases.has(release.version)) releases.set(release.version, release)
     }
     // "Add modules" must work for an installed editor that fell out of the newest-10 lists.
-    const want = typeof requested === 'string' && UNITY_VERSION.test(requested) ? requested : undefined
+    const want = typeof requested === 'string' && VERSION_RE.test(requested) ? requested : undefined
     const missing = deps.editors().map(e => e.version).filter(v => !releases.has(v)).slice(0, 5)
     if (want && !releases.has(want) && !missing.includes(want)) missing.push(want)
     const extra = await Promise.all(missing.map(v =>
