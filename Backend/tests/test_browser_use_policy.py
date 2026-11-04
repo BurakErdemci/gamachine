@@ -76,6 +76,17 @@ def test_the_backend_and_unity_mcp_ports_are_refused(monkeypatch):
     assert policy.navigation_refusal(f"http://127.0.0.1:{FREE}/") == ""
 
 
+def test_ollama_is_refused_on_its_default_and_its_configured_port(monkeypatch):
+    """Gamachine calls Ollama as its local model provider; its API can delete models (security review, 4 Nov 2026)."""
+    assert policy.navigation_refusal("http://127.0.0.1:11434/api/tags")
+    for value in ("127.0.0.1:11500", "http://0.0.0.0:11500", "localhost:11500"):
+        monkeypatch.setenv("OLLAMA_HOST", value)
+        assert 11500 in policy.gamachine_ports(), value
+        assert policy.navigation_refusal("http://localhost:11500/api/delete")
+    monkeypatch.setenv("OLLAMA_HOST", "0.0.0.0")
+    assert 11434 in policy.gamachine_ports()
+
+
 def test_the_browser_hosts_own_port_is_refused_when_the_caller_names_it():
     assert policy.navigation_refusal("http://127.0.0.1:41234/cmd") == ""
     assert policy.navigation_refusal("http://127.0.0.1:41234/cmd", None, (41234,))

@@ -360,7 +360,8 @@ only answers two read-only calls and keeps no pick state; nothing is ever reconc
    127.0.0.0/8, ::1, IPv4-mapped and legacy spellings) **except on a port Gamachine itself listens on**: the
    backend's, the browser host's own command port, Unity MCP's (8080), the whisper STT server's random port, and the
    other fixed listeners (6400-6499 Unity bridge and its fallback ports, 9876 Blender bridge, 8799 relay dev, 8888
-   renderer dev, 8000 default backend). Each copy of the rule keeps that list with where every port comes from
+   renderer dev, 8000 default backend, 11434 Ollama and the port in `OLLAMA_HOST`: the local model provider Gamachine
+   calls). Each copy of the rule keeps that list with where every port comes from
    (`gamachine_ports()` in `browser_use/policy.py`, `GAMACHINE_DEFAULT_PORTS` and `gamachinePorts()` in
    `browser-url-policy.ts`). The backend gateway sends its full computed list as `denied_ports` with every command, and
    pushes a new one (op `ports`, within 5 s) when a Gamachine listener starts or moves with no command in between; the

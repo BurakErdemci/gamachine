@@ -88,6 +88,7 @@ export const GAMACHINE_DEFAULT_PORTS: readonly number[] = [
   9876, // Blender connector bridge: Backend connectors/views.py BRIDGE_PORTS
   8799, // relay dev server: relay/package.json "wrangler dev --port 8799"
   8888, // nextron renderer dev server (background.ts loads it in dev, port in process.argv[2])
+  11434, // Ollama, the local model provider Gamachine calls (Backend agentic/chat_model.py); its API can delete models
 ]
 
 /**

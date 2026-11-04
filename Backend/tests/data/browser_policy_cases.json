@@ -198,6 +198,14 @@
    "allow": false
   },
   {
+   "url": "http://127.0.0.1:11434/api/tags",
+   "allow": false
+  },
+  {
+   "url": "http://localhost:11434/api/delete",
+   "allow": false
+  },
+  {
    "url": "http://127.0.0.1:8799/",
    "allow": false
   },

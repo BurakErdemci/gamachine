@@ -105,9 +105,10 @@ _GAMACHINE_DEFAULT_PORTS = frozenset({
     9876,  # Blender connector bridge: connectors/views.py BRIDGE_PORTS
     8799,  # relay dev server: relay/package.json "wrangler dev --port 8799"
     8888,  # nextron renderer dev server (Electron main loads it in dev)
+    11434,  # Ollama, the local model provider Gamachine calls (agentic/chat_model.py); its API can delete models
 })
 # Environment values that carry a port Gamachine listens on (an int, or a URL with a port).
-_GAMACHINE_PORT_ENV = ("PORT", "UNITY_MCP_HTTP_PORT", "UNITY_MCP_HTTP_URL", "UNITYAI_URL", "ANTIGRAVITY_URL")
+_GAMACHINE_PORT_ENV = ("PORT", "UNITY_MCP_HTTP_PORT", "UNITY_MCP_HTTP_URL", "UNITYAI_URL", "ANTIGRAVITY_URL", "OLLAMA_HOST")
 _DEFAULT_SCHEME_PORT = {"http": 80, "https": 443}
 _FILE_RESERVED_NAMES = frozenset({"con", "prn", "aux", "nul", "conin$", "conout$"}
                                  | {f"com{n}" for n in range(1, 10)} | {f"lpt{n}" for n in range(1, 10)})
@@ -121,7 +122,8 @@ def _port_of(value) -> int | None:
         return None
     text = value.strip()
     try:
-        port = int(text) if text.isdigit() else urlsplit(text).port
+        # OLLAMA_HOST is usually written without a scheme ("127.0.0.1:11434"): parse it as a netloc.
+        port = int(text) if text.isdigit() else urlsplit(text if "//" in text else "//" + text).port
     except ValueError:
         return None
     return port if port and 0 < port < 65536 else None
