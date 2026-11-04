@@ -119,6 +119,10 @@ const CodeBlock = ({ match, codeString, workspacePath, onExportToUnity, onOpenFi
   );
 };
 
+// The plain text of a hast node: what a copy button of a language-less block puts on the clipboard.
+const hastText = (n: any): string =>
+  !n ? "" : n.type === "text" ? String(n.value ?? "") : (n.children ?? []).map(hastText).join("");
+
 // Module-level so a paragraph can tell it holds one: the image is a <figure>, which
 // React refuses inside a <p>.
 const MarkdownImage = ({ src, alt }: any) => <ChatFileImage src={typeof src === "string" ? src : undefined} alt={alt} />;
@@ -226,8 +230,23 @@ const MarkdownRendererInner = ({
         } : {}),
         // A fenced block arrives as <pre><code>; the plate is drawn by CodeBlock, so the <pre>
         // is only a wrapper (a block without a language still gets a plain plate: `.md-pre`).
-        pre({ children, node: _node, ...props }: any) {
-          return <div className="md-pre" {...props}>{children}</div>;
+        // A block without a language gets no CodeBlock header, so it carries its own copy button;
+        // icon-only and outside `.code-copy`, so it stays on a narrow (phone) column too.
+        pre({ children, node, ...props }: any) {
+          const codeEl = node?.children?.[0];
+          const classes = [].concat(codeEl?.properties?.className ?? []).join(" ");
+          if (/language-\w/.test(classes)) return <div className="md-pre" {...props}>{children}</div>;
+          const text = hastText(codeEl).replace(/\n$/, "");
+          const copied = copiedBlock === text;
+          return (
+            <div className="md-pre md-pre-plain" {...props}>
+              <button type="button" className="md-pre-copy" onClick={() => handleCopy(text)}
+                aria-label={t('code.copyAria')} title={copied ? t('md.copied') : t('md.copy')}>
+                {copied ? <Check size={14} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}
+              </button>
+              {children}
+            </div>
+          );
         },
         code({ inline, className, children, node: _node, ...props }: any) {
           const match = /language-(\w+)/.exec(className || "");

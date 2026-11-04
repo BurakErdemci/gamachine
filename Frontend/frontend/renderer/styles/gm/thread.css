@@ -678,6 +678,14 @@
   border-radius: var(--radius-md); background: var(--code-bg); color: var(--code-text);
   border: var(--line-w) solid var(--code-line); font-size: 13px; line-height: 1.58;
 }
+/* its copy button sits in the plate's top-right corner, above the scrolling text */
+.md-pre-plain { position: relative; }
+.md-pre-plain > code { padding-right: 44px; }
+.md-pre-copy {
+  position: absolute; top: 6px; right: 6px; display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: var(--radius-sm); color: var(--code-dim); background: var(--code-bg);
+}
+.md-pre-copy:hover { color: var(--code-text); background: var(--code-line); }
 /* line numbers (react-syntax-highlighter) read like the mockup's `.ln` */
 .code-body .linenumber, .code-body .react-syntax-highlighter-line-number {
   display: inline-block; min-width: 40px !important; padding-right: 14px !important; text-align: right;
