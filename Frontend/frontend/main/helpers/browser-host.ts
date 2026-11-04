@@ -56,8 +56,12 @@ function inheritsOrigin(url: string): boolean {
 function frameOrigin(url: string): PageOrigin {
   if (/^data:/i.test(url)) return 'public'
   if (!/^blob:/i.test(url)) return pageOriginOf(url)
+  // Only a well-formed blob:http(s)://host[:port]/ speaks for the origin in it; any other spelling
+  // (a nested scheme, a space, a userinfo, a backslash) is public rather than whatever URL() makes of it.
+  const m = /^blob:(https?:\/\/[A-Za-z0-9.\-\[\]:]+)\//i.exec(url)
+  if (!m) return 'public'
   try {
-    return pageOriginOf(new URL(url.slice(5)).origin)
+    return pageOriginOf(new URL(m[1]).origin)
   } catch {
     return 'public'
   }
@@ -1457,8 +1461,9 @@ export class BrowserHost {
     else if (['http:', 'https:', 'ws:', 'wss:'].includes(parsed.protocol)) allowed = isAllowedRequest(url, origin, ctx) && !(await this.hostBlocked(parsed.hostname))
     // Inline sub-resources the page made itself (images from data:, blob: workers) carry no host.
     else return navigation || !['data:', 'blob:'].includes(parsed.protocol)
-    // A host load that began during the lookup owns the hops now; this older request does not overwrite them.
-    if (allowed && navigation && tab && tab.hopGen === hopGen) allowed = this.passHop(tab, resourceType === 'mainFrame', typeof frame === 'string' ? undefined : frame, url)
+    // A host load that began during the lookup owns the main frame's hops now; this older main-frame request does
+    // not overwrite them. A subframe's hop is its own and is always recorded (blind audit C-1, 4 Nov 2026).
+    if (allowed && navigation && tab && (resourceType !== 'mainFrame' || tab.hopGen === hopGen)) allowed = this.passHop(tab, resourceType === 'mainFrame', typeof frame === 'string' ? undefined : frame, url)
     return !allowed
   }
 

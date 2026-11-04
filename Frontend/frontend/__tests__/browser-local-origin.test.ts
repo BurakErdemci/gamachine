@@ -297,6 +297,22 @@ describe('the requesting frame decides, not the tab', () => {
     expect(await blocked(f, 'https://cdn.example/lib.js', 'script', evil)).toBe(false)
   })
 
+  it('judges an oddly spelled blob: frame under a loopback page as public', async () => {
+    const f = fixture()
+    await open(f, local)
+    const handler = f.session.webRequest.onBeforeRequest.mock.calls[0][0]
+    const ask = (frameUrl: string) => new Promise<boolean>((resolve) => handler(
+      { url: `http://127.0.0.1:${FREE}/x`, resourceType: 'xhr', webContentsId: 1, frame: { url: frameUrl, parent: { url: local } } },
+      (r: { cancel: boolean }) => resolve(r.cancel)))
+    const bs = String.fromCharCode(92)
+    for (const u of [`blob:blob:http://127.0.0.1:${FREE}/1`, `blob:filesystem:http://127.0.0.1:${FREE}/1`, `blob: http://127.0.0.1:${FREE}/1`,
+      `blob:http:${bs}${bs}127.0.0.1:${FREE}/1`, `blob:http://evil.example@127.0.0.1:${FREE}/1`, `blob:http:127.0.0.1:${FREE}/1`, `blob:http:/127.0.0.1:${FREE}/1`]) {
+      expect(await ask(u), u).toBe(true)
+    }
+    expect(await ask(`blob:http://127.0.0.1:${FREE}/1`)).toBe(false)
+    expect(await ask(`blob:HTTP://LOCALHOST:${FREE}/1`)).toBe(false)
+  })
+
   it('judges a blank frame by its parent', async () => {
     const f = fixture()
     await open(f, local)
@@ -407,6 +423,24 @@ describe('hops of one navigation', () => {
     expect(await blocked(f, `http://127.0.0.1:${FREE}/`, 'mainFrame')).toBe(false)
     f.wc.finish(`http://127.0.0.1:${FREE}/`)
     expect(await reply).toMatchObject({ ok: true })
+  })
+
+  it('still records the hop of a public subframe whose lookup finished after a host load began', async () => {
+    const f = fixture()
+    const local = `http://127.0.0.1:${FREE}/`
+    await open(f, local)
+    let release = () => {}
+    f.lookup.mockImplementationOnce(() => new Promise((resolve) => { release = () => resolve([{ address: '93.184.216.34', family: 4 }]) }))
+    const frame = { url: 'about:blank', parent: { url: local }, frameTreeNodeId: 9 }
+    const slow = f.host.requestBlocked('https://evil.example/', 'subFrame', 1, frame as never)
+    await vi.waitFor(() => expect(f.lookup).toHaveBeenCalledWith('evil.example', expect.anything()))
+    // A Back the host drives starts a host load (it bumps the tab's hop generation) during the lookup.
+    const tab = [...(f.host as any).tabs.values()][0]
+    ;(f.host as any).markHistoryNav(tab, -1)
+    release()
+    expect(await slow).toBe(false)
+    // The frame's next hop comes from the public page it went to, so its redirect to loopback is refused.
+    expect(await f.host.requestBlocked(`http://127.0.0.1:${FREE}/x`, 'subFrame', 1, frame as never)).toBe(true)
   })
 
   it('lets the agent open a free loopback port from a public page with no older request in flight', async () => {
