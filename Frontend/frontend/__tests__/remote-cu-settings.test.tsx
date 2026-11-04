@@ -82,7 +82,7 @@ describe('remote settings', () => {
   it('native dialogs on the PC and secrets stay refused', async () => {
     const ipc = (window as any).ipc
     for (const [channel, op] of [['computer-use', 'request-accessibility'], ['computer-use', 'open-screen-settings'],
-      ['computer-use-live', 'panel-visible'], ['browser-live', 'set-bounds'], ['browser-live', 'clear-browsing-data']]) {
+      ['computer-use-live', 'panel-visible'], ['browser-live', 'set-bounds'], ['browser-live', 'visible']]) {
       await expect(ipc.invoke(channel, { op })).rejects.toThrow('remote_unavailable')
     }
     for (const channel of ['app-token-get-secret', 'profile-reset', 'remote-control']) {

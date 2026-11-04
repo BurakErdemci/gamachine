@@ -57,10 +57,10 @@ describe('allow-list mirror', () => {
     }
     expect(remoteIpcAllowed('browser-live', [{ op: 'halt' }])).toBe(true)
     // Turning the agent browser on/off and its settings work remotely (owner decision, 4 Nov 2026).
-    for (const op of ['status', 'halt', 'answer-card', 'settings', 'enable', 'disable', 'cards-off', 'cards-on']) {
+    for (const op of ['status', 'halt', 'answer-card', 'settings', 'enable', 'disable', 'cards-off', 'cards-on', 'sites', 'history', 'clear-browsing-data']) {
       expect(remoteIpcAllowed('browser-live', [{ op, conversationId: 3 }])).toBe(true)
     }
-    for (const op of ['open', 'navigate', 'back', 'forward', 'reload', 'take-over', 'release', 'close', 'clear-browsing-data', 'set-bounds', 'visible']) {
+    for (const op of ['open', 'navigate', 'back', 'forward', 'reload', 'take-over', 'release', 'close', 'set-bounds', 'visible']) {
       expect(remoteIpcAllowed('browser-live', [{ op, conversationId: 3 }])).toBe(false)
     }
     expect(remoteIpcAllowed('computer-use-live', [{ op: 'open-panel' }])).toBe(false)

@@ -8,6 +8,7 @@
  */
 
 import axios from 'axios';
+import { toBase64 } from './transport';
 
 const ALLOW = new Set([
   'read-file', 'read-model-file', 'read-image-file', 'write-file',
@@ -19,8 +20,9 @@ const ALLOW = new Set([
 ]);
 const OPS: Record<string, Set<string>> = {
   // `status` answers with the agent's page only; the panel's `panel-status` (every tab) is not on this list.
-  // The settings ops are the agent browser's on/off and card switches (owner decision 4 Nov 2026).
-  'browser-live': new Set(['status', 'halt', 'answer-card', 'settings', 'enable', 'disable', 'cards-off', 'cards-on']),
+  // The settings ops are the agent browser's on/off, card switches and browsing data: sites, history, clear (owner decision 4 Nov 2026).
+  'browser-live': new Set(['status', 'halt', 'answer-card', 'settings', 'enable', 'disable', 'cards-off', 'cards-on',
+    'sites', 'history', 'clear-browsing-data']),
   'computer-use-live': new Set(['status', 'halt', 'halted']),
   // Computer use's switches, app grants and driver restart; the ops that open native dialogs on the PC stay out.
   'computer-use': new Set(['status', 'enable', 'disable', 'cards-off', 'cards-on', 'remove-grant', 'restart']),
@@ -132,13 +134,10 @@ function dataUrlToBlob(dataUrl: string): Blob | null {
 }
 
 async function blobToDataUrl(blob: Blob): Promise<string> {
-  const bytes = new Uint8Array(await blob.arrayBuffer());
-  let bin = '';
-  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  return `data:${blob.type || 'image/jpeg'};base64,${btoa(bin)}`;
+  return `data:${blob.type || 'image/jpeg'};base64,${toBase64(new Uint8Array(await blob.arrayBuffer()))}`;
 }
 
-/** The frame as a JPEG data URL that fits `LIVE_EVENT_MAX` once wrapped by `wrap`, or null when no size/quality does. */
+/** The frame as a JPEG data URL that fits `LIVE_EVENT_MAX` once `wrap` builds the whole posted body around it, or null when no size/quality does. */
 export async function downscaleLiveFrame(frame: string, wrap: (frame: string) => unknown): Promise<string | null> {
   const blob = dataUrlToBlob(frame);
   if (!blob || typeof createImageBitmap !== 'function') return null;
@@ -173,48 +172,67 @@ export async function downscaleLiveFrame(frame: string, wrap: (frame: string) =>
 }
 
 /**
- * Forwards computer-use-live events with a downscaled JPEG frame and at most one frame per
- * `LIVE_FRAME_GAP_MS`: the newest frame wins (no queue), and a state-only event (frame null) goes
- * at once and drops any older frame still waiting.
+ * Forwards computer-use-live events with a downscaled JPEG frame. Per subscription at most one encode
+ * runs; a newer frame only replaces the single waiting slot. A finished encode is sent (it is recent)
+ * unless the subscription ended, and the next waiting frame starts once `LIVE_FRAME_GAP_MS` have
+ * passed since the last send. A state-only event (frame null) goes at once, drops the waiting frame
+ * and leaves the encode running; only an `active: false` one also voids that encode's result.
  */
-function liveForwarder(send: (args: unknown[]) => void): (args: unknown[]) => void {
-  let seq = 0;
+function liveForwarder(channel: string, send: (args: unknown[]) => void): { push: (args: unknown[]) => void; stop: () => void } {
+  let alive = true;
+  let encoding = false;
+  let ended = false;
   let lastSent = -Infinity;
   let pending: unknown[] | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
 
-  const deliver = async (args: unknown[], mine: number) => {
+  const startEncode = async (args: unknown[]) => {
+    encoding = true;
+    ended = false;
     const live = (args[0] ?? {}) as Record<string, any>;
     const wrap = (frame: string | null) => [{ ...live, frame }];
-    const jpeg = typeof live.frame === 'string' ? await downscaleLiveFrame(live.frame, wrap) : null;
-    if (mine === seq) send(wrap(jpeg));
+    let jpeg: string | null = null;
+    try {
+      jpeg = await downscaleLiveFrame(live.frame, frame => ({ channel, args: wrap(frame) }));
+    } finally {
+      encoding = false;
+    }
+    if (alive && !ended) {
+      lastSent = Date.now();
+      send(wrap(jpeg));
+    }
+    schedule();
   };
-  const flush = () => {
-    timer = null;
-    if (!pending) return;
-    const args = pending;
-    pending = null;
-    lastSent = Date.now();
-    void deliver(args, seq);
-  };
-
-  return (args) => {
-    const live = args[0] as Record<string, any> | undefined;
-    seq += 1;
-    if (!live || typeof live.frame !== 'string') {
-      pending = null;
-      if (timer) { clearTimeout(timer); timer = null; }
-      send(args);
+  const schedule = () => {
+    if (!alive || encoding || !pending || timer) return;
+    const wait = lastSent + LIVE_FRAME_GAP_MS - Date.now();
+    if (wait > 0) {
+      timer = setTimeout(() => { timer = null; schedule(); }, wait);
       return;
     }
-    pending = args;
-    const wait = lastSent + LIVE_FRAME_GAP_MS - Date.now();
-    if (wait <= 0) {
+    const args = pending;
+    pending = null;
+    void startEncode(args);
+  };
+
+  return {
+    push(args) {
+      if (!alive) return;
+      const live = args[0] as Record<string, any> | undefined;
+      if (!live || typeof live.frame !== 'string') {
+        pending = null;
+        if (live?.active === false) ended = true;
+        send(args);
+        return;
+      }
+      pending = args;
+      schedule();
+    },
+    stop() {
+      alive = false;
+      pending = null;
       if (timer) { clearTimeout(timer); timer = null; }
-      flush();
-    } else if (!timer) {
-      timer = setTimeout(flush, wait);
-    }
+    },
   };
 }
 
@@ -229,12 +247,12 @@ export function subscribeRemoteEvents(channel: string, api: string, token: strin
       .then(res => { if (res?.data?.subscribed === false) unsubscribe(channel); })
       .catch(err => console.warn('[remote] forwarding an IPC event failed', err));
   };
-  const forwardLive = channel === 'computer-use-live' ? liveForwarder(send) : null;
+  const live = channel === 'computer-use-live' ? liveForwarder(channel, send) : null;
   const off = ipc.on(channel, (...args: unknown[]) => {
-    if (forwardLive) forwardLive(args);
+    if (live) live.push(args);
     else send(remoteEventArgs(channel, args));
   });
-  subscriptions.set(channel, () => { stopped = true; if (typeof off === 'function') off(); });
+  subscriptions.set(channel, () => { stopped = true; live?.stop(); if (typeof off === 'function') off(); });
 }
 
 /** Listens again to the channels browsers still want. The backend asks for it

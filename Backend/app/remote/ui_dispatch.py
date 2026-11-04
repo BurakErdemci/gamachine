@@ -121,8 +121,9 @@ _ALLOW: List[Tuple[Tuple[str, ...], str]] = [
     (("GET",), r"/computer-use/(settings|activity)"),
     (("GET",), r"/browser/settings"),
     # computer use and the agent browser: on/off, card switch, app grants (owner decision 4 Nov 2026).
-    # Their runtime routes (/computer-use/runtime, /browser/runtime) stay denied: only the desktop's own
-    # process reports its driver paths and port/token there, no settings screen calls them.
+    # Their runtime routes (/computer-use/runtime, /browser/runtime) stay denied: they are the desktop
+    # process's own endpoints (driver bridge, port/token) and no settings screen calls them. This is not
+    # a secrecy line for paths: GET /computer-use/settings and the IPC status op already return them.
     (("POST",), r"/computer-use/settings(/cards)?"),
     (("DELETE",), rf"/computer-use/grants/{_ID}"),
     (("PUT",), r"/browser/settings(/cards)?"),
@@ -171,8 +172,10 @@ IPC_ALLOW = frozenset({
 # dialogs on the PC. On/off and settings cross (owner decision 4 Nov 2026).
 IPC_OPS = {
     # settings/enable/disable/cards-off/cards-on: read and switch the agent browser, as in its settings page.
+    # sites/history/clear-browsing-data: the same page's browsing-data controls (owner decision 4 Nov 2026).
     "browser-live": frozenset({"status", "halt", "answer-card",
-                               "settings", "enable", "disable", "cards-off", "cards-on"}),
+                               "settings", "enable", "disable", "cards-off", "cards-on",
+                               "sites", "history", "clear-browsing-data"}),
     "computer-use-live": frozenset({"status", "halt", "halted"}),
     # status: settings page state; enable/disable/cards-off/cards-on: the switches; remove-grant: revoke an
     # app; restart: restart the driver runtime (installs nothing). request-accessibility and

@@ -49,8 +49,8 @@ authenticated session:
   the desktop's own session token or UI secret. Anything not listed returns 403.
 - **No secrets cross:** routes that read or write API keys, provider credentials, CLI
   installs, approval mode secrets, profile reset, remote-control pairing itself and the
-  computer-use and browser runtime reports are never on the list. Computer use and the agent
-  browser (on/off, card switch, app grants) are on it since the owner decision of 4 Nov 2026. Model/effort selection stays the
+  computer-use and browser runtime routes (the desktop process's own endpoints) are never on the list; that is not a path-secrecy line, `GET /computer-use/settings` and the IPC status op already return driver paths. Computer use and the agent
+  browser (on/off, card switch, app grants, browsing data) are on it since the owner decision of 4 Nov 2026. Model/effort selection stays the
   existing RPCs (lists only, as today).
 - **Work parity (owner decision, 29 Oct 2026):** everything the user does at the desk to
   keep the game moving works remotely: chats, cards, file tree, file read and write,

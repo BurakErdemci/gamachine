@@ -148,3 +148,60 @@ describe('throttle', () => {
     expect((post.mock.calls[0][1] as any).args[0].frame).toBe(PNG(10))
   })
 })
+
+describe('slow decoder (starvation)', () => {
+  const slowDecoder = (ms: number) => vi.stubGlobal('createImageBitmap', vi.fn(
+    () => new Promise(resolve => setTimeout(() => resolve({ width: 2560, height: 1440, close: vi.fn() }), ms))))
+
+  it('delivers frames during continuous 125 ms capture with a 200 ms decoder, sends >= 500 ms apart', async () => {
+    slowDecoder(200)
+    const sentAt: number[] = []
+    post.mockImplementation(async () => { sentAt.push(Date.now()); return { data: { subscribed: true } } })
+    for (let i = 0; i < 24; i++) {
+      emit({ active: true, seq: i, frame: PNG(10) })
+      await vi.advanceTimersByTimeAsync(125)
+    }
+    expect(sentAt.length).toBeGreaterThanOrEqual(3)
+    for (let i = 1; i < sentAt.length; i++) expect(sentAt[i] - sentAt[i - 1]).toBeGreaterThanOrEqual(500)
+    expect(sentArgs().every(a => a.frame!.startsWith('data:image/jpeg'))).toBe(true)
+  })
+
+  it('leaves at most one unresolved decode when the decoder stalls (20 frames, 500 ms apart)', async () => {
+    const decode = vi.fn(() => new Promise(() => {}))
+    vi.stubGlobal('createImageBitmap', decode)
+    for (let i = 0; i < 20; i++) {
+      emit({ active: true, seq: i, frame: PNG(10) })
+      await vi.advanceTimersByTimeAsync(500)
+    }
+    expect(decode.mock.calls.length).toBeLessThanOrEqual(1)
+  })
+
+  it('unsubscribe drops the pending frame and the in-flight result', async () => {
+    slowDecoder(200)
+    emit({ active: true, seq: 1, frame: PNG(10) })
+    await vi.advanceTimersByTimeAsync(50)
+    emit({ active: true, seq: 2, frame: PNG(10) })
+    resetRemoteSubscriptionsForTests()
+    await vi.advanceTimersByTimeAsync(2000)
+    await flushAsync()
+    expect(post).not.toHaveBeenCalled()
+  })
+
+  it('a state-only event does not cancel the encode in flight', async () => {
+    slowDecoder(200)
+    emit({ active: true, seq: 1, frame: PNG(10) })
+    await vi.advanceTimersByTimeAsync(50)
+    emit({ active: true, seq: 2, frame: null })
+    await vi.advanceTimersByTimeAsync(400)
+    expect(sentArgs().map(a => a.seq)).toEqual([2, 1])
+  })
+
+  it('counts the channel envelope toward the 400_000 byte cap', async () => {
+    // 299_940 bytes -> a 399_943 char data URL: under the cap alone, over it inside {channel, args}.
+    size = (side, quality) => (side === 1280 && quality === 0.75 ? 299_940 : 1000)
+    emit({ active: true, frame: PNG(10) })
+    await flushAsync()
+    expect(JSON.stringify(post.mock.calls[0][1]).length).toBeLessThanOrEqual(400_000)
+    expect(sentArgs()[0].frame!.length).toBeLessThan(399_943)
+  })
+})

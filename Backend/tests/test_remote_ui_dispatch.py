@@ -222,9 +222,9 @@ def test_ipc_lists():
                "remote-control", "approval-mode-set", "register-dropped-folder"):
         assert ch not in d.IPC_ALLOW
     assert d.ipc_allowed("browser-live", [{"op": "halt"}])
-    for op in ("settings", "enable", "disable", "cards-on", "cards-off"):
+    for op in ("settings", "enable", "disable", "cards-on", "cards-off", "sites", "history", "clear-browsing-data"):
         assert d.ipc_allowed("browser-live", [{"op": op}]), op
-    for op in ("set-bounds", "visible", "full", "navigate", "clear-browsing-data", "sites", "history", "close"):
+    for op in ("set-bounds", "visible", "full", "navigate", "close", "open-panel"):
         assert not d.ipc_allowed("browser-live", [{"op": op}]), op
     for op in ("status", "enable", "disable", "cards-on", "cards-off", "remove-grant", "restart"):
         assert d.ipc_allowed("computer-use", [{"op": op}]), op
