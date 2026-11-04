@@ -951,6 +951,38 @@ test('token dropped and room reset are final at once; room expired is not', asyn
   assert.equal(statuses.at(-1)[0], 'connecting');
 });
 
+test('a hello that gets only pongs is closed after 15 s and the next attempt follows the backoff', async () => {
+  const pc = N.keyPair();
+  const phone = await C.generateKeyPair();
+  const link = new Link({
+    origin: 'wss://relay.test',
+    device: { pairId: 'p', pcPub: new Uint8Array(pc.pub), deviceId: 'd', token: 't', privateKey: phone.privateKey },
+    onStatus: () => {},
+    onPush: () => {},
+    WS: FakeWS,
+    timeouts: { helloAck: 80 },
+  });
+  links.push(link);
+  assert.equal(new Link({ origin: 'wss://x', device: {}, onStatus: () => {}, onPush: () => {}, WS: FakeWS }).helloAckMs, 15_000);
+  await link.start();
+  const first = FakeWS.last;
+  await until(() => first.sent.length === 1);
+  first.deliver({ type: 'pong' });
+  await until(() => first.closed, 1000);
+  assert.equal(link.ws, null);
+  assert.equal(link.attempt, 1, 'the retry went through the backoff path');
+  await until(() => FakeWS.last !== first, 3000);
+  assert.equal(FakeWS.last.closed, false);
+});
+
+test('a hello_ack in time keeps the socket', async () => {
+  const { link, ws } = await connected({ timeouts: { helloAck: 80 } });
+  await new Promise((r) => setTimeout(r, 250));
+  assert.equal(ws.closed, false);
+  assert.equal(link.ready, true);
+  assert.equal(FakeWS.last, ws);
+});
+
 test('hello_reject passes its reason on', async () => {
   const { statuses } = await unpaired();
   FakeWS.last.deliver({ type: 'hello_reject', reason: 'unknown_device' });

@@ -3,7 +3,8 @@
 `/ws/pc/<pair_id>` with subprotocols `gamachine.v1` + `key.<room_key>` and no
 `Origin` header: the relay refuses a PC socket that carries one. Every frame
 the relay sends goes to `handler` except the ones this class consumes
-(`pong`, `tokens_ok` and the token errors, which answer `token_op`).
+(`pong`, `hb_ok`, the `unknown_type` error an old relay answers `hb` with,
+`tokens_ok` and the token errors, which answer `token_op`).
 """
 from __future__ import annotations
 
@@ -45,6 +46,9 @@ class RelayClient:
     refused_delay_s = 300.0
     ping_every_s = 25.0
     dead_after_s = 75.0
+    # An hb needs the Room code to answer (a ping is answered at the edge), so
+    # silence here means the Durable Object path is dead behind a live socket.
+    hb_dead_after_s = 35.0
     open_timeout_s = 15.0
 
     def __init__(self, ws_origin: str, pair_id: str, room_key: str,
@@ -63,6 +67,7 @@ class RelayClient:
         self.retry_at: Optional[float] = None
         self.connects = 0
         self.gave_up = False
+        self._attempt = 0
 
     # ── lifecycle ───────────────────────────────────────────────────────
     @property
@@ -148,7 +153,7 @@ class RelayClient:
         return min(self.backoff_cap_s, self.backoff_base_s * (2 ** min(attempt, 16))) * random.uniform(0.5, 1.0)
 
     async def _run(self) -> None:
-        attempt = 0
+        self._attempt = 0
         while not self._stopping:
             delay = None
             try:
@@ -165,8 +170,6 @@ class RelayClient:
                     self._ws = ws
                     self.connects += 1
                     welcomed = await self._session(ws)
-                    if welcomed:
-                        attempt = 0
                 # A clean close (1000/1001) ends the read loop without raising.
                 if not self._stopping:
                     logger.warning("[remote] relay socket closed: code=%s reason=%r welcomed=%s connects=%d",
@@ -215,11 +218,11 @@ class RelayClient:
                 # Outside the handler above: a raise here would end reconnecting
                 # for good while remote control stays on.
                 try:
-                    delay = self._backoff(attempt)
+                    delay = self._backoff(self._attempt)
                 except Exception:
                     logger.exception("[remote] backoff failed; retrying after %.0f s", self.backoff_cap_s)
                     delay = self.backoff_cap_s
-                attempt += 1
+                self._attempt += 1
             self.retry_at = time.time() + delay
             await asyncio.sleep(delay)
             self.retry_at = None
@@ -227,11 +230,15 @@ class RelayClient:
     async def _session(self, ws) -> bool:
         """Read frames until the socket closes; True if a welcome arrived."""
         welcomed = False
-        last_rx = time.monotonic()
-        pinger = asyncio.get_running_loop().create_task(self._pinger(ws, lambda: last_rx))
+        # rx: last frame of any kind; proof: last frame only the Room code
+        # sends; hb_since: when the oldest unanswered hb went out.
+        live = {"rx": time.monotonic(), "proof": time.monotonic(), "hb_since": None}
+        loop = asyncio.get_running_loop()
+        pinger = loop.create_task(self._pinger(ws, live))
+        watcher = loop.create_task(self._hb_watch(ws, live))
         try:
             async for raw in ws:
-                last_rx = time.monotonic()
+                live["rx"] = time.monotonic()
                 if not isinstance(raw, str):
                     continue
                 try:
@@ -243,8 +250,15 @@ class RelayClient:
                 mtype = msg.get("type")
                 if mtype == "pong":
                     continue
+                if mtype == "hb_ok" or (mtype == "error" and msg.get("error") == "unknown_type"):
+                    live["proof"] = time.monotonic()
+                    live["hb_since"] = None
+                    continue
                 if mtype == "welcome":
                     welcomed = True
+                    self._attempt = 0
+                    live["proof"] = time.monotonic()
+                    live["hb_since"] = None
                     self.last_error = None
                     self._connected.set()
                 if mtype == "tokens_ok" or (mtype == "error" and msg.get("error") in _TOKEN_ERRORS):
@@ -256,21 +270,40 @@ class RelayClient:
                     logger.exception("[remote] relay frame %s not handled", mtype)
         finally:
             pinger.cancel()
+            watcher.cancel()
         return welcomed
 
-    async def _pinger(self, ws, last_rx: Callable[[], float]) -> None:
+    async def _pinger(self, ws, live: dict) -> None:
         # The relay answers '{"type":"ping"}' itself (auto-response); protocol
         # pings are left off because a hibernating Durable Object is not
         # documented to answer them.
         try:
             while True:
                 await asyncio.sleep(self.ping_every_s)
-                if time.monotonic() - last_rx() > self.dead_after_s:
+                if time.monotonic() - live["rx"] > self.dead_after_s:
                     logger.warning("[remote] relay silent for %.0f s; closing the socket to reconnect (connects=%d)",
                                    self.dead_after_s, self.connects)
                     await ws.close(code=1000, reason="silent")
                     return
                 await ws.send('{"type":"ping"}')
+                if live["hb_since"] is None:
+                    live["hb_since"] = time.monotonic()
+                await ws.send('{"type":"hb"}')
+        except (asyncio.CancelledError, ConnectionClosed):
+            return
+
+    async def _hb_watch(self, ws, live: dict) -> None:
+        # Polls so a dead Room is caught hb_dead_after_s after its hb, not at
+        # the next ping tick.
+        try:
+            while True:
+                await asyncio.sleep(min(5.0, self.hb_dead_after_s / 4))
+                since = live["hb_since"]
+                if since is not None and time.monotonic() - since > self.hb_dead_after_s:
+                    logger.warning("[remote] relay room silent for %.0f s; closing the socket to reconnect (connects=%d)",
+                                   self.hb_dead_after_s, self.connects)
+                    await ws.close(code=1000, reason="room_silent")
+                    return
         except (asyncio.CancelledError, ConnectionClosed):
             return
 

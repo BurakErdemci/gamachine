@@ -131,6 +131,7 @@ PC -> relay:
 | `{type:"to", conn, data}` | send the string `data` to that phone or pairing socket. A pairing socket is closed (4002) right after its one reply |
 | `{type:"register_tokens", hashes:[...], replace?:bool}` | add token hashes; with `replace:true` the list becomes exactly `hashes` and phones on other tokens are closed (4001). Send this **before** the `pair_ok` that carries the token |
 | `{type:"drop_token", hash}` | forget one hash and close its phones (4001) |
+| `{type:"hb"}` | liveness check that needs the Room code (unlike `ping`); answered with `{type:"hb_ok"}`. The PC closes a socket whose hb gets no `hb_ok` (an old relay's `unknown_type` error counts too) within 35 s |
 | `{type:"reset_room"}` | delete everything stored for this `pair_id` and close all sockets (4006); for "turn remote control off and forget" |
 
 Relay -> phone (not from the PC): `{type:"no_room"}` on a pairing socket (see

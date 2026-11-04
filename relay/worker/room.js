@@ -40,6 +40,16 @@ const PING = '{"type":"ping"}';
 const PONG = '{"type":"pong"}';
 const OPEN = 1;
 
+// A socket can die between the readyState check and the send; losing one
+// event must not reject the handler that was routing it.
+function safeSend(ws, data) {
+  try { ws.send(data); } catch {}
+}
+
+function safeClose(ws, code, reason) {
+  try { ws.close(code, reason); } catch {}
+}
+
 export class Room {
   constructor(ctx, env) {
     this.ctx = ctx;
@@ -166,7 +176,7 @@ export class Room {
     const conn = randomId();
     const { server, response } = this.accept(['phone', 'tok:' + hash], { role: 'phone', conn, tokenHash: hash }, request);
     const pc = this.pcSocket();
-    if (pc) pc.send(JSON.stringify({ type: 'phone_open', conn, token_hash: hash }));
+    if (pc) safeSend(pc, JSON.stringify({ type: 'phone_open', conn, token_hash: hash }));
     else server.send(this.offlineFrame());
     return response;
   }
@@ -188,7 +198,7 @@ export class Room {
     const { server, response } = this.accept(['pair'], { role: 'pair', conn, ip, opened: now, requested: false }, request);
     const pc = this.pcSocket();
     if (pc) {
-      pc.send(JSON.stringify({ type: 'pair_open', conn, ip }));
+      safeSend(pc, JSON.stringify({ type: 'pair_open', conn, ip }));
       await this.schedule(now);
     } else {
       server.send(this.offlineFrame());
@@ -266,7 +276,7 @@ export class Room {
       if (a.role === 'pair') ws.close(CLOSE.pcOffline, 'pc_offline');
       return;
     }
-    pc.send(JSON.stringify({ type: 'from', conn: a.conn, data: message }));
+    safeSend(pc, JSON.stringify({ type: 'from', conn: a.conn, data: message }));
   }
 
   async onPcMessage(pc, message) {
@@ -279,14 +289,18 @@ export class Room {
     }
     const meta = this.meta;
     switch (m?.type) {
+      case 'hb':
+        // Answered here, not by the auto-response: proves the Room code runs.
+        safeSend(pc, '{"type":"hb_ok"}');
+        return;
       case 'to': {
         const target = typeof m.conn === 'string' ? this.findConn(m.conn) : null;
         if (!target || target.att.role === 'pc' || typeof m.data !== 'string') {
           pc.send(JSON.stringify({ type: 'gone', conn: m.conn ?? null }));
           return;
         }
-        target.ws.send(m.data);
-        if (target.att.role === 'pair') target.ws.close(CLOSE.pairDone, 'pair_done');
+        safeSend(target.ws, m.data);
+        if (target.att.role === 'pair') safeClose(target.ws, CLOSE.pairDone, 'pair_done');
         return;
       }
       case 'register_tokens': {
@@ -307,7 +321,7 @@ export class Room {
           if (att && !att.synced) pc.serializeAttachment({ ...att, synced: true });
           for (const s of this.sockets('phone')) {
             const a = s.deserializeAttachment();
-            if (!next.includes(a.tokenHash)) s.close(CLOSE.tokenDropped, 'token_dropped');
+            if (!next.includes(a.tokenHash)) safeClose(s, CLOSE.tokenDropped, 'token_dropped');
           }
         }
         pc.send(JSON.stringify({ type: 'tokens_ok', count: next.length }));
@@ -320,7 +334,7 @@ export class Room {
         }
         meta.tokens = meta.tokens.filter((t) => t !== m.hash);
         await this.ctx.storage.put('tokens', meta.tokens);
-        for (const s of this.sockets('tok:' + m.hash)) s.close(CLOSE.tokenDropped, 'token_dropped');
+        for (const s of this.sockets('tok:' + m.hash)) safeClose(s, CLOSE.tokenDropped, 'token_dropped');
         pc.send(JSON.stringify({ type: 'tokens_ok', count: meta.tokens.length }));
         return;
       }
@@ -364,7 +378,7 @@ export class Room {
       return;
     }
     const pc = this.pcSocket();
-    if (pc) pc.send(JSON.stringify({ type: a.role === 'pair' ? 'pair_close' : 'phone_close', conn: a.conn }));
+    if (pc) safeSend(pc, JSON.stringify({ type: a.role === 'pair' ? 'pair_close' : 'phone_close', conn: a.conn }));
   }
 
   async wipe(code, reason) {

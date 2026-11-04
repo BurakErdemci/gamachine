@@ -33,6 +33,8 @@ const PART_GAP_MS = 20_000; // an incomplete set fails when no part arrives for 
 // relay/worker/room.js LIMITS.phoneFrameMax: the relay closes a socket that sends more.
 export const PHONE_FRAME_MAX = 64 * 1024;
 const PING_EVERY_MS = 25_000;
+// A hello that gets no hello_ack by then means the Room is not answering.
+const HELLO_ACK_TIMEOUT_MS = 15_000;
 const BACKOFF_MS = [1000, 2000, 5000, 10_000, 30_000];
 
 export function wsOrigin(loc) {
@@ -154,6 +156,7 @@ export class Link {
     this.requestTimeoutMs = timeouts.request ?? REQUEST_TIMEOUT_MS;
     this.unknownTokenGraceMs = timeouts.unknownTokenGrace ?? UNKNOWN_TOKEN_GRACE_MS;
     this.partGapMs = timeouts.partGap ?? PART_GAP_MS;
+    this.helloAckMs = timeouts.helloAck ?? HELLO_ACK_TIMEOUT_MS;
     this.device = device;
     this.onStatus = onStatus;
     this.onPush = onPush;
@@ -171,6 +174,7 @@ export class Link {
     this.inbox = Promise.resolve();
     this.pingTimer = null;
     this.retryTimer = null;
+    this.helloTimer = null;
     this.lastPong = 0;
   }
 
@@ -183,6 +187,7 @@ export class Link {
   stop() {
     this.stopped = true;
     clearTimeout(this.retryTimer);
+    clearTimeout(this.helloTimer);
     if (this.ws) try { this.ws.close(); } catch {}
   }
 
@@ -261,6 +266,7 @@ export class Link {
   }
 
   dropSession() {
+    clearTimeout(this.helloTimer);
     this.channel = null;
     this.eph = null;
     for (const p of this.pending.values()) p.reject(new Error('disconnected'));
@@ -278,7 +284,13 @@ export class Link {
       ephPubRaw: eph.publicRaw,
       t: Math.floor(Date.now() / 1000),
     });
-    if (this.ws === ws) ws.send(JSON.stringify(hello));
+    if (this.ws !== ws) return;
+    ws.send(JSON.stringify(hello));
+    // Pongs come from the relay's edge, so a Room that no longer answers leaves
+    // the socket looking healthy; closing it goes through the normal backoff.
+    this.helloTimer = setTimeout(() => {
+      if (this.ws === ws) try { ws.close(); } catch {}
+    }, this.helloAckMs);
   }
 
   async handle(m) {
@@ -317,6 +329,7 @@ export class Link {
       if (this.ws !== ws || this.eph !== eph) return;
       this.channel = channel;
       this.eph = null;
+      clearTimeout(this.helloTimer);
       this.onStatus('ready');
       return;
     }

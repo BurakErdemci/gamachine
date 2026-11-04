@@ -175,6 +175,22 @@ test('frames pass through unchanged in both directions', async () => {
   assert.deepEqual(pc.last(), { type: 'error', error: 'unknown_type' });
 });
 
+test('hb is answered by the Room code with hb_ok', async () => {
+  const env = makeEnv();
+  const pc = await pcWithToken(env);
+  await msg(env, pc, '{"type":"hb"}');
+  assert.deepEqual(pc.take(), [{ type: 'hb_ok' }]);
+});
+
+test('a PC socket whose send throws does not make a phone event reject', async () => {
+  const env = makeEnv();
+  const pc = await pcWithToken(env);
+  const phone = (await phoneOpen(env)).sock;
+  pc.send = () => { throw new Error('socket closed'); };
+  await assert.doesNotReject(msg(env, phone, '{"c":1,"d":"x"}'));
+  await assert.doesNotReject(hangup(env, phone));
+});
+
 test('pc_offline carries last_seen and online/offline changes reach the phones', async () => {
   const env = makeEnv();
   const pc = await pcWithToken(env);

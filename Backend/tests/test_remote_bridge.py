@@ -927,3 +927,143 @@ async def test_reconnect_survives_a_failing_backoff(monkeypatch):
         assert not client._task.done()
     finally:
         await client.stop()
+
+
+# ── liveness ───────────────────────────────────────────────────────────────
+
+class ScriptedWs:
+    """A relay socket that yields `frames`, then (hold=True) stays open and
+    silent except for answering pings, or (exc) raises."""
+
+    def __init__(self, frames, exc=None, hold=False):
+        self.frames = list(frames)
+        self.exc = exc
+        self.hold = hold
+        self.sent = []
+        self.closed = None
+        self._wake = asyncio.Event()
+        self.close_code = None
+        self.close_reason = None
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        while True:
+            if self.frames:
+                return self.frames.pop(0)
+            if self.exc is not None:
+                raise self.exc
+            if not self.hold or self.closed is not None:
+                raise StopAsyncIteration
+            self._wake.clear()
+            await self._wake.wait()
+
+    async def send(self, text):
+        self.sent.append(text)
+        if text == '{"type":"ping"}':
+            self.frames.append('{"type":"pong"}')
+            self._wake.set()
+
+    async def close(self, code=1000, reason=""):
+        self.closed = (code, reason)
+        self.close_code, self.close_reason = code, reason
+        self._wake.set()
+
+
+WELCOME = json.dumps({"type": "welcome", "phones": [], "pairs": [], "tokens": 0})
+
+
+def fast_client(monkeypatch, sockets):
+    from remote import relay_client
+
+    queue = list(sockets)
+    monkeypatch.setattr(relay_client, "connect", lambda *a, **kw: queue.pop(0))
+    client = RelayClient("ws://127.0.0.1:1", "id", "key", lambda m: asyncio.sleep(0))
+    client.ping_every_s = 0.05
+    client.hb_dead_after_s = 0.3
+    client.dead_after_s = 60.0
+    return client
+
+
+async def test_backoff_restarts_after_an_abrupt_drop_that_followed_a_welcome(monkeypatch):
+    from websockets.exceptions import ConnectionClosed
+    from websockets.frames import Close
+
+    drop = ConnectionClosed(Close(1006, ""), None)
+    client = fast_client(monkeypatch, [ScriptedWs([WELCOME], exc=drop) for _ in range(3)])
+    calls = []
+
+    def backoff(attempt):
+        calls.append(attempt)
+        return 0.01
+
+    monkeypatch.setattr(client, "_backoff", backoff)
+    client.start()
+    try:
+        await until(lambda: len(calls) >= 3)
+    finally:
+        await client.stop()
+    assert calls[:3] == [0, 0, 0]
+
+
+async def test_a_silent_room_behind_live_pongs_is_closed(monkeypatch):
+    ws = ScriptedWs([WELCOME], hold=True)
+    client = fast_client(monkeypatch, [ws, ScriptedWs([WELCOME], hold=True)])
+    client.start()
+    try:
+        await until(lambda: ws.closed is not None, timeout=3)
+        assert ws.closed == (1000, "room_silent")
+        assert '{"type":"hb"}' in ws.sent
+        await until(lambda: client.connects >= 2, timeout=3)
+    finally:
+        await client.stop()
+
+
+@pytest.mark.parametrize("reply", ['{"type":"hb_ok"}', '{"type":"error","error":"unknown_type"}'])
+async def test_a_room_reply_to_hb_keeps_the_socket_open(monkeypatch, reply):
+    handled = []
+
+    class Answering(ScriptedWs):
+        async def send(self, text):
+            await super().send(text)
+            if text == '{"type":"hb"}':
+                self.frames.append(reply)
+                self._wake.set()
+
+    ws = Answering([WELCOME], hold=True)
+    client = fast_client(monkeypatch, [ws])
+
+    async def handler(msg):
+        handled.append(msg)
+
+    client._handler = handler
+    client.start()
+    try:
+        await asyncio.sleep(1.0)  # several hb_dead_after_s windows
+        assert ws.closed is None
+        assert ws.sent.count('{"type":"hb"}') >= 3
+    finally:
+        await client.stop()
+    assert [m["type"] for m in handled] == ["welcome"]
+
+
+async def test_unknown_type_error_does_not_answer_a_token_op(monkeypatch):
+    ws = ScriptedWs([WELCOME], hold=True)
+    client = fast_client(monkeypatch, [ws])
+    client.start()
+    try:
+        assert await client.wait_connected(2)
+        fut = client.send_token_op({"type": "drop_token", "hash": "x"})
+        ws.frames.append('{"type":"error","error":"unknown_type"}')
+        ws._wake.set()
+        await asyncio.sleep(0.1)
+        assert not fut.done()
+    finally:
+        await client.stop()
