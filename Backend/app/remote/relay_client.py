@@ -49,6 +49,9 @@ class RelayClient:
     # An hb needs the Room code to answer (a ping is answered at the edge), so
     # silence here means the Durable Object path is dead behind a live socket.
     hb_dead_after_s = 35.0
+    # A session counts as up, and the backoff starts over, only once it has lived this long after
+    # its welcome: a relay that welcomes and drops at once must not be retried at the base delay.
+    stable_after_s = 30.0
     open_timeout_s = 15.0
 
     def __init__(self, ws_origin: str, pair_id: str, room_key: str,
@@ -68,6 +71,7 @@ class RelayClient:
         self.connects = 0
         self.gave_up = False
         self._attempt = 0
+        self._welcomed_at: Optional[float] = None
 
     # ── lifecycle ───────────────────────────────────────────────────────
     @property
@@ -214,6 +218,10 @@ class RelayClient:
                 await self._dropped()
             if self._stopping:
                 break
+            if self._welcomed_at is not None:
+                if time.monotonic() - self._welcomed_at >= self.stable_after_s:
+                    self._attempt = 0
+                self._welcomed_at = None
             if delay is None:
                 # Outside the handler above: a raise here would end reconnecting
                 # for good while remote control stays on.
@@ -230,9 +238,10 @@ class RelayClient:
     async def _session(self, ws) -> bool:
         """Read frames until the socket closes; True if a welcome arrived."""
         welcomed = False
-        # rx: last frame of any kind; proof: last frame only the Room code
-        # sends; hb_since: when the oldest unanswered hb went out.
-        live = {"rx": time.monotonic(), "proof": time.monotonic(), "hb_since": None}
+        # rx: last frame of any kind; proof: last frame only the Room code sends;
+        # hb_out: an hb went out after that proof. The Room counts as dead
+        # hb_dead_after_s after its last proof, not after the next hb.
+        live = {"rx": time.monotonic(), "proof": time.monotonic(), "hb_out": False}
         loop = asyncio.get_running_loop()
         pinger = loop.create_task(self._pinger(ws, live))
         watcher = loop.create_task(self._hb_watch(ws, live))
@@ -251,14 +260,12 @@ class RelayClient:
                 if mtype == "pong":
                     continue
                 if mtype == "hb_ok" or (mtype == "error" and msg.get("error") == "unknown_type"):
-                    live["proof"] = time.monotonic()
-                    live["hb_since"] = None
+                    live["proof"], live["hb_out"] = time.monotonic(), False
                     continue
                 if mtype == "welcome":
                     welcomed = True
-                    self._attempt = 0
-                    live["proof"] = time.monotonic()
-                    live["hb_since"] = None
+                    self._welcomed_at = time.monotonic()
+                    live["proof"], live["hb_out"] = time.monotonic(), False
                     self.last_error = None
                     self._connected.set()
                 if mtype == "tokens_ok" or (mtype == "error" and msg.get("error") in _TOKEN_ERRORS):
@@ -286,22 +293,21 @@ class RelayClient:
                     await ws.close(code=1000, reason="silent")
                     return
                 await ws.send('{"type":"ping"}')
-                if live["hb_since"] is None:
-                    live["hb_since"] = time.monotonic()
                 await ws.send('{"type":"hb"}')
+                live["hb_out"] = True
         except (asyncio.CancelledError, ConnectionClosed):
             return
 
     async def _hb_watch(self, ws, live: dict) -> None:
-        # Polls so a dead Room is caught hb_dead_after_s after its hb, not at
-        # the next ping tick.
+        # Polls so a dead Room is caught hb_dead_after_s after its last proof,
+        # not at the next ping tick.
         try:
             while True:
                 await asyncio.sleep(min(5.0, self.hb_dead_after_s / 4))
-                since = live["hb_since"]
-                if since is not None and time.monotonic() - since > self.hb_dead_after_s:
+                if live["hb_out"] and time.monotonic() - live["proof"] > self.hb_dead_after_s:
                     logger.warning("[remote] relay room silent for %.0f s; closing the socket to reconnect (connects=%d)",
                                    self.hb_dead_after_s, self.connects)
+                    self.last_error = "room_silent"
                     await ws.close(code=1000, reason="room_silent")
                     return
         except (asyncio.CancelledError, ConnectionClosed):

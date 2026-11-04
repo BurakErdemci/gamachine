@@ -1005,12 +1005,78 @@ async def test_backoff_restarts_after_an_abrupt_drop_that_followed_a_welcome(mon
         return 0.01
 
     monkeypatch.setattr(client, "_backoff", backoff)
+    client.stable_after_s = 0.0
     client.start()
     try:
         await until(lambda: len(calls) >= 3)
     finally:
         await client.stop()
     assert calls[:3] == [0, 0, 0]
+
+
+async def test_a_relay_that_welcomes_and_drops_at_once_still_backs_off(monkeypatch):
+    """Blind audit C1 (4 Nov 2026): a reset on the welcome alone retried such a relay at the
+    base delay forever (about one connect a second)."""
+    from websockets.exceptions import ConnectionClosed
+    from websockets.frames import Close
+
+    drop = ConnectionClosed(Close(1006, ""), None)
+    client = fast_client(monkeypatch, [ScriptedWs([WELCOME], exc=drop) for _ in range(4)])
+    calls = []
+
+    def backoff(attempt):
+        calls.append(attempt)
+        return 0.01
+
+    monkeypatch.setattr(client, "_backoff", backoff)
+    client.stable_after_s = 60.0
+    client.start()
+    try:
+        await until(lambda: len(calls) >= 3)
+    finally:
+        await client.stop()
+    assert calls[:3] == [0, 1, 2]
+
+
+async def test_a_room_that_stops_answering_is_closed_counted_from_its_last_answer(monkeypatch):
+    """DeepSeek audit (4 Nov 2026): the deadline ran from the next hb, so a Room that died
+    right after an answer was noticed a ping interval late (~60 s instead of ~35 s)."""
+    import time as _time
+    answered = []
+
+    class AnswersOnce(ScriptedWs):
+        async def send(self, text):
+            await super().send(text)
+            if text == '{"type":"hb"}' and not answered:
+                answered.append(_time.monotonic())
+                self.frames.append('{"type":"hb_ok"}')
+                self._wake.set()
+
+    ws = AnswersOnce([WELCOME], hold=True)
+    client = fast_client(monkeypatch, [ws, ScriptedWs([], hold=True)])
+    client.ping_every_s = 0.25
+    client.hb_dead_after_s = 0.3
+    client.start()
+    try:
+        await until(lambda: ws.closed is not None, timeout=3)
+        closed_at = _time.monotonic()
+        assert ws.closed == (1000, "room_silent")
+        # Last proof + deadline + one poll (0.075 s), with slack; the old rule closed ~0.55 s after it.
+        assert closed_at - answered[0] < 0.47
+    finally:
+        await client.stop()
+
+
+async def test_a_room_silent_close_leaves_its_reason_in_the_status(monkeypatch):
+    ws = ScriptedWs([WELCOME], hold=True)
+    client = fast_client(monkeypatch, [ws, ScriptedWs([], hold=True)])
+    client.start()
+    try:
+        await until(lambda: ws.closed is not None, timeout=3)
+        await until(lambda: client.connects >= 2, timeout=3)
+        assert client.last_error == "room_silent"
+    finally:
+        await client.stop()
 
 
 async def test_a_silent_room_behind_live_pongs_is_closed(monkeypatch):
