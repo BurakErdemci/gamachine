@@ -161,7 +161,6 @@ def _embeds_ipv4(ip) -> bool:
 def _blocked_address(ip) -> bool:
     """Private, link-local (metadata), CGNAT, unspecified, multicast and reserved addresses. Loopback is
     judged by the caller, which knows the port."""
-    ip = _unmapped(ip)
     return (ip.is_private or ip.is_link_local or ip.is_unspecified or ip.is_multicast or ip.is_reserved
             or getattr(ip, "is_site_local", False) or not ip.is_global)
 
@@ -178,7 +177,9 @@ def _file_refusal(parts, roots) -> str:
     if re.search(r"%(2f|5c)", raw, re.I):
         return "The file address hides a path separator."
     path = unquote(raw)
-    if "\\" in path or any(ord(char) < 0x20 or ord(char) == 0x7f for char in path) or path.startswith("//"):
+    # A backslash anywhere (path, query, fragment) is refused, as the Electron copy does.
+    if ("\\" in path + parts.query + parts.fragment or any(ord(char) < 0x20 or ord(char) == 0x7f for char in path)
+            or path.startswith("//")):
         return "The file address is not a plain local path."
     if os.name == "nt":
         drive = re.match(r"/([A-Za-z]:)(?=/|$)", path)

@@ -840,6 +840,14 @@
   {
    "url": "file://{tmp}/sub\\page.html",
    "allow": false
+  },
+  {
+   "url": "file://{ws}/ok.html?a\\b",
+   "allow": false
+  },
+  {
+   "url": "file://{ws}/ok.html#a\\b",
+   "allow": false
   }
  ]
 }

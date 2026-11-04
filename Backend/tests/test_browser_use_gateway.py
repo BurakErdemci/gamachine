@@ -468,3 +468,92 @@ def test_a_gamachine_port_that_opens_later_is_pushed_to_the_host_without_a_comma
         await asyncio.sleep(0.05)
         assert len(posts) == 3 and gateway._ports_push["task"].done()
     asyncio.run(scenario())
+
+
+def _push_client(posts, post):
+    """A fake httpx client: records each post as (port, body) and lets `post` answer or raise."""
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"ok": True}
+
+    class Client:
+        def __init__(self, timeout):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def post(self, url, headers, json):
+            port = int(url.split(":")[2].split("/")[0])
+            posts.append((port, json))
+            await post(port, json)
+            return Response()
+    return Client
+
+
+def _whisper(monkeypatch, port):
+    server = None if port is None else types.SimpleNamespace(_port=port)
+    monkeypatch.setitem(sys.modules, "providers.stt_whisper", types.SimpleNamespace(_server=server))
+
+
+def test_a_failed_push_to_the_old_host_does_not_stop_the_pushes_to_the_new_one(monkeypatch):
+    posts = []
+    new_runtime = {"running": True, "port": 4712, "token": "cd" * 32}
+    state = {"hold": None}
+
+    async def post(port, body):
+        # The old host is gone: its push hangs until the test lets it fail.
+        if port == RUNTIME["port"] and body["op"] == "ports":
+            await state["hold"].wait()
+            raise gateway.httpx.ConnectError("gone")
+    monkeypatch.setattr(gateway.httpx, "AsyncClient", _push_client(posts, post))
+    monkeypatch.setattr(gateway, "_PORTS_PUSH_S", 0.01)
+    monkeypatch.setattr(gateway, "_ports_push", {"runtime": None, "sent": None, "task": None})
+    _whisper(monkeypatch, None)
+
+    async def scenario():
+        state["hold"] = asyncio.Event()
+        await gateway.post_cmd(RUNTIME, "snapshot", 3, {})
+        _whisper(monkeypatch, 47000)
+        for _ in range(100):
+            if any(port == RUNTIME["port"] and body["op"] == "ports" for port, body in posts):
+                break
+            await asyncio.sleep(0.005)
+        else:
+            raise AssertionError("the push to the old host never started")
+        # The app replaced the host while that push hangs; the new one takes a command.
+        await gateway.post_cmd(new_runtime, "snapshot", 3, {})
+        _whisper(monkeypatch, 47001)
+        state["hold"].set()
+        await asyncio.sleep(0.08)
+        pushed = [body for port, body in posts if port == new_runtime["port"] and body["op"] == "ports"]
+        assert pushed and 47001 in pushed[-1]["denied_ports"]
+        gateway._ports_push["task"].cancel()
+    asyncio.run(scenario())
+
+
+def test_a_command_the_host_did_not_take_leaves_its_port_list_to_the_push(monkeypatch):
+    posts = []
+
+    async def post(port, body):
+        if body["op"] == "snapshot":
+            raise gateway.httpx.ConnectError("host busy")
+    monkeypatch.setattr(gateway.httpx, "AsyncClient", _push_client(posts, post))
+    monkeypatch.setattr(gateway, "_PORTS_PUSH_S", 0.01)
+    monkeypatch.setattr(gateway, "_ports_push", {"runtime": None, "sent": None, "task": None})
+    _whisper(monkeypatch, 47000)
+
+    async def scenario():
+        with pytest.raises(gateway.httpx.ConnectError):
+            await gateway.post_cmd(RUNTIME, "snapshot", 3, {})
+        await asyncio.sleep(0.05)
+        pushed = [body for _port, body in posts if body["op"] == "ports"]
+        assert pushed and 47000 in pushed[0]["denied_ports"] and RUNTIME["port"] in pushed[0]["denied_ports"]
+        gateway._ports_push["task"].cancel()
+    asyncio.run(scenario())

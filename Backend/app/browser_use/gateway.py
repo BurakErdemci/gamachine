@@ -88,11 +88,16 @@ async def post_cmd(runtime: dict, op: str, conversation_id: int, args: dict) -> 
     # The host denies the same local ports as the policy here, including ones only this process knows
     # (the whisper server's random port); it refuses every loopback address until it has seen this list.
     denied = _denied_ports(runtime)
-    _ports_push.update(runtime={"port": runtime["port"], "token": runtime["token"]}, sent=denied)
+    target = {"port": runtime["port"], "token": runtime["token"]}
+    _ports_push["runtime"] = target
     if _ports_push["task"] is None or _ports_push["task"].done():
         _ports_push["task"] = asyncio.get_running_loop().create_task(_push_ports())
-    return await _post_host(runtime, {"op": op, "conversation_id": conversation_id, "args": args,
-                                      "denied_ports": denied})
+    reply = await _post_host(runtime, {"op": op, "conversation_id": conversation_id, "args": args,
+                                       "denied_ports": denied})
+    # Only a command the host took delivered the list; after a failed post the task sends it.
+    if _ports_push["runtime"] == target:
+        _ports_push.update(sent=denied)
+    return reply
 
 
 # A Gamachine listener can start or move with no agent command in between (the whisper server's random
@@ -113,7 +118,10 @@ async def _push_ports() -> None:
         try:
             await _post_host(runtime, {"op": "ports", "denied_ports": denied})
         except Exception:
-            return
+            # A command may have moved the task to a new runtime meanwhile: it keeps pushing to that one.
+            if _ports_push["runtime"] == runtime:
+                return
+            continue
         if _ports_push["runtime"] == runtime:
             _ports_push["sent"] = denied
 

@@ -42,9 +42,25 @@ const HOPS_MAX = 256
 /** How long the host's own load may take to start (a page's beforeunload can cancel it, and nothing then follows). */
 const HOST_NAV_START_MS = 10_000
 
-/** A document with no address of its own (about:blank or about:srcdoc, with or without a fragment, blob:, data:) speaks for its parent. */
+/** A document with no address of its own (about:blank or about:srcdoc, with or without a fragment) speaks for its parent. */
 function inheritsOrigin(url: string): boolean {
-  return url === '' || /^(about:(blank|srcdoc)(#|$)|blob:|data:)/i.test(url)
+  return url === '' || /^about:(blank|srcdoc)(#|$)/i.test(url)
+}
+
+/**
+ * The kind of page a frame's own address makes it. A blob: document is of the origin written in its address
+ * (blob:null and an unreadable one are public); a data: document is always public, even under a loopback page: owner
+ * decision, 4 Nov 2026, security over data: frames of loopback pages, the same trade-off as frameless worker requests
+ * (a public frame can navigate a frame the loopback page owns to its own data: or blob: URL).
+ */
+function frameOrigin(url: string): PageOrigin {
+  if (/^data:/i.test(url)) return 'public'
+  if (!/^blob:/i.test(url)) return pageOriginOf(url)
+  try {
+    return pageOriginOf(new URL(url.slice(5)).origin)
+  } catch {
+    return 'public'
+  }
 }
 
 /** A file: address without its fragment, the key its roots are remembered by; '' for any other address. */
@@ -986,6 +1002,8 @@ interface Tab {
    * commits; `started` once Electron reports it began. Its first hop counts as one from the page it goes to.
    */
   hostNav: { roots: readonly string[] | null; started: boolean; timer: ReturnType<typeof setTimeout> } | null
+  /** Bumped when a host load starts: a request whose lookup was still running then does not write its hop over the load's. */
+  hopGen: number
   /** Where a file: page of this tab may read from; set by the agent's navigate, null after any other host load. */
   fileRoots: readonly string[] | null
   /** The roots each file: address of this tab was opened with, so back/forward to it gets them again. */
@@ -1433,12 +1451,14 @@ export class BrowserHost {
     // Read now: a frame's address is gone once it navigates.
     const origin = this.requestOrigin(tab, resourceType, frameOf)
     const ctx = this.navContext(this.rootsFor(tab, resourceType === 'mainFrame'))
+    const hopGen = tab?.hopGen
     let allowed: boolean
     if (parsed.protocol === 'file:') allowed = isAllowedRequest(url, origin, ctx)
     else if (['http:', 'https:', 'ws:', 'wss:'].includes(parsed.protocol)) allowed = isAllowedRequest(url, origin, ctx) && !(await this.hostBlocked(parsed.hostname))
     // Inline sub-resources the page made itself (images from data:, blob: workers) carry no host.
     else return navigation || !['data:', 'blob:'].includes(parsed.protocol)
-    if (allowed && navigation && tab) allowed = this.passHop(tab, resourceType === 'mainFrame', typeof frame === 'string' ? undefined : frame, url)
+    // A host load that began during the lookup owns the hops now; this older request does not overwrite them.
+    if (allowed && navigation && tab && tab.hopGen === hopGen) allowed = this.passHop(tab, resourceType === 'mainFrame', typeof frame === 'string' ? undefined : frame, url)
     return !allowed
   }
 
@@ -1526,7 +1546,7 @@ export class BrowserHost {
     let markGone = () => {}
     const gone = new Promise<void>((resolve) => { markGone = resolve })
     const tab: Tab = { id: ++this.nextTabId, conversationId, agent, view, favicon: '', snapshotId: '', loadWaiter: null,
-      popupBlocked: null, userControl: false, lastGesture: null, userTouched: false, annotating: false, overlay: null, pick: null, notes: [], pinSeq: 0, frameSeq: 0, navGen: 0, waiting: 0, refreshing: false, refreshTimer: null, shows: null, faviconSeq: 0, target: null, hops: new Map(), hostNav: null, fileRoots: null, fileRootsByUrl: new Map(), gone, markGone, expected: [], busy: 0, lastAgentCommandAt: null, lastUserNavigationAt: null, lastUsed: 0 }
+      popupBlocked: null, userControl: false, lastGesture: null, userTouched: false, annotating: false, overlay: null, pick: null, notes: [], pinSeq: 0, frameSeq: 0, navGen: 0, waiting: 0, refreshing: false, refreshTimer: null, shows: null, faviconSeq: 0, target: null, hops: new Map(), hostNav: null, hopGen: 0, fileRoots: null, fileRootsByUrl: new Map(), gone, markGone, expected: [], busy: 0, lastAgentCommandAt: null, lastUserNavigationAt: null, lastUsed: 0 }
     this.wire(tab)
     win.contentView.addChildView(view)
     view.setBounds(this.bounds)
@@ -2707,7 +2727,7 @@ export class BrowserHost {
       for (let depth = 0; current; depth++) {
         const url = current.url
         if (typeof url !== 'string' || depth >= 16) return 'public'
-        if (!inheritsOrigin(url)) return pageOriginOf(url)
+        if (!inheritsOrigin(url)) return frameOrigin(url)
         current = current.parent as FrameLike
       }
     } catch {
@@ -2744,6 +2764,7 @@ export class BrowserHost {
   /** The host's own main-frame load of `url` begins: its first hop counts as one from the page it goes to (none for an unknown address). */
   private startHostNav(tab: Tab, url: string | undefined, roots: readonly string[] | null): void {
     this.endHostNav(tab)
+    tab.hopGen++
     tab.hops.delete(MAIN_FRAME)
     if (url) tab.hops.set(MAIN_FRAME, pageOriginOf(url))
     const timer = setTimeout(() => { if (tab.hostNav?.timer === timer && !tab.hostNav.started) this.dropHostNav(tab) }, HOST_NAV_START_MS)
@@ -2781,7 +2802,7 @@ export class BrowserHost {
     if (origin === 'public') return origin
     try {
       const frames = (wc as { mainFrame?: { framesInSubtree?: { url?: string }[] } }).mainFrame?.framesInSubtree ?? []
-      if (frames.some((frame) => frame.url && !inheritsOrigin(frame.url) && pageOriginOf(frame.url) === 'public')) return 'public'
+      if (frames.some((frame) => frame.url && !inheritsOrigin(frame.url) && frameOrigin(frame.url) === 'public')) return 'public'
     } catch { /* the frames are gone */ }
     return origin
   }

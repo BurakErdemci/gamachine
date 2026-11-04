@@ -314,19 +314,34 @@ describe('the requesting frame decides, not the tab', () => {
     expect(await ask(blank(null))).toBe(true)
   })
 
-  it('judges about:blank with a fragment, srcdoc, blob: and data: frames by their parent', async () => {
+  const askFrom = (f: Fixture) => (frame: unknown) => {
+    const handler = f.session.webRequest.onBeforeRequest.mock.calls[0][0]
+    return new Promise<boolean>((resolve) => handler({ url: `http://127.0.0.1:${FREE}/x`, resourceType: 'xhr', webContentsId: 1, frame }, (r: { cancel: boolean }) => resolve(r.cancel)))
+  }
+
+  it('judges about:blank with a fragment and srcdoc frames by their parent', async () => {
     const f = fixture()
     await open(f, local)
-    const ask = (frame: unknown) => {
-      const handler = f.session.webRequest.onBeforeRequest.mock.calls[0][0]
-      return new Promise<boolean>((resolve) => handler({ url: `http://127.0.0.1:${FREE}/x`, resourceType: 'xhr', webContentsId: 1, frame }, (r: { cancel: boolean }) => resolve(r.cancel)))
-    }
-    for (const url of ['about:blank#preview', 'about:srcdoc', 'about:srcdoc#x', `blob:${local}0b6e`, 'data:text/html,<p>x</p>']) {
+    const ask = askFrom(f)
+    for (const url of ['about:blank#preview', 'about:srcdoc', 'about:srcdoc#x']) {
       expect(await ask({ url, parent: { url: local } }), `${url} in a loopback page`).toBe(false)
       expect(await ask({ url, parent: { url: evil, parent: { url: local } } }), `${url} in a public frame`).toBe(true)
     }
     // Inherited all the way up: two blank frames under the loopback page.
     expect(await ask({ url: 'about:blank', parent: { url: 'about:blank#a', parent: { url: local } } })).toBe(false)
+  })
+
+  it('judges a blob: frame by the origin in its address and a data: frame as public, under a loopback page too', async () => {
+    const f = fixture()
+    await open(f, local)
+    const ask = askFrom(f)
+    // A public frame can navigate a frame the loopback page owns to its own blob: or data: URL.
+    for (const url of ['blob:https://public.example/0b6e', 'data:text/html,<p>x</p>', 'DATA:text/html,x', 'blob:null/0b6e', 'blob:nonsense'])
+      expect(await ask({ url, parent: { url: local } }), `${url} in a loopback page`).toBe(true)
+    expect(await ask({ url: `blob:${local}0b6e`, parent: { url: local } })).toBe(false)
+    // The origin in the address decides, not the parent.
+    expect(await ask({ url: `blob:${local}0b6e`, parent: { url: evil } })).toBe(false)
+    expect(await ask({ url: 'about:blank', parent: { url: 'blob:https://public.example/0b6e', parent: { url: local } } })).toBe(true)
   })
 
   it('refuses a subframe navigation to loopback from a public frame, and a redirect of it', async () => {
@@ -376,6 +391,32 @@ describe('hops of one navigation', () => {
     expect(redirect.preventDefault).toHaveBeenCalled()
     expect(await blocked(f, `http://127.0.0.1:${FREE}/landing`, 'mainFrame')).toBe(true)
     expect(await reply).toMatchObject({ ok: false, error: 'url_not_allowed' })
+  })
+
+  it('keeps the first hop of a host load that began while an older main-frame request was still looking up its host', async () => {
+    const f = fixture()
+    await open(f, 'https://example.com/')
+    let release = () => {}
+    f.lookup.mockImplementationOnce(() => new Promise((resolve) => { release = () => resolve([{ address: '93.184.216.34', family: 4 }]) }))
+    const slow = blocked(f, 'https://slow.example/', 'mainFrame')
+    await vi.waitFor(() => expect(f.lookup).toHaveBeenCalledWith('slow.example', expect.anything()))
+    const reply = send(f, { op: 'navigate', conversation_id: 4, args: { url: `http://127.0.0.1:${FREE}/` } })
+    await vi.waitFor(() => expect(f.wc.loadURL).toHaveBeenCalledWith(`http://127.0.0.1:${FREE}/`))
+    release()
+    expect(await slow).toBe(false)
+    expect(await blocked(f, `http://127.0.0.1:${FREE}/`, 'mainFrame')).toBe(false)
+    f.wc.finish(`http://127.0.0.1:${FREE}/`)
+    expect(await reply).toMatchObject({ ok: true })
+  })
+
+  it('lets the agent open a free loopback port from a public page with no older request in flight', async () => {
+    const f = fixture()
+    await open(f, 'https://example.com/')
+    const reply = send(f, { op: 'navigate', conversation_id: 4, args: { url: `http://127.0.0.1:${FREE}/` } })
+    await vi.waitFor(() => expect(f.wc.loadURL).toHaveBeenCalledWith(`http://127.0.0.1:${FREE}/`))
+    expect(await blocked(f, `http://127.0.0.1:${FREE}/`, 'mainFrame')).toBe(false)
+    f.wc.finish(`http://127.0.0.1:${FREE}/`)
+    expect(await reply).toMatchObject({ ok: true })
   })
 
   it('clears the hop when loading really stops', async () => {

@@ -380,7 +380,9 @@ only answers two read-only calls and keeps no pick state; nothing is ever reconc
    run against both copies. **Origin rule:** a request (frame, sub-resource, redirect, window open) to a loopback
    address is allowed only when it comes from a loopback page. A sub-resource comes from the document of its frame (a
    public child frame inside a loopback page reaches nothing local; about:blank and about:srcdoc, with or without a
-   fragment, blob: and data: frames speak for their parent, the top frame for the tab's page); a request that names no
+   fragment, speak for their parent, the top frame for the tab's page; a blob: frame is of the origin in its address,
+   blob:null public; a data: frame is always public, since a public frame can navigate a frame of the loopback page to
+   its own data: or blob: URL (owner decision, 4 Nov 2026: security over data: frames of loopback pages); a request that names no
    frame is public, so workers of a loopback page cannot reach loopback (owner decision, 4 Nov 2026: security over
    worker loopback). A navigation hop of any frame, main or sub, comes from the previous hop of the same frame, its
    first hop from the frame's document: a new iframe of a loopback page sent through a public site cannot be
