@@ -2,7 +2,6 @@
 renderer (desktop or paired browser) reads the bytes back."""
 import asyncio
 import logging
-from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Header, HTTPException, Query
@@ -24,13 +23,16 @@ def create_chat_files_router(db):
         if type(conv_id) is not int:
             raise HTTPException(status_code=422, detail="conversation_id gerekli")
         require_conversation_owner(db, x_session_token, conv_id)
+        # A side chat is read-only by design: it shows nothing to the user.
+        if db.get_side_of(conv_id) is not None:
+            raise HTTPException(status_code=403, detail="Yan sohbet salt okunur; görüntü gösterilemez.")
         record, reason = await asyncio.to_thread(
-            chat_files.add_file, db, conv_id, body.get("path"), body.get("caption"))
+            chat_files.add_file, db, conv_id, body.get("path"), body.get("caption"), True)
         if record is None:
-            raise HTTPException(status_code=400, detail=chat_files.REASONS[reason])
-        content = f"![{record['caption']}](gamachine-file:{record['id']})"
-        message_id = db.add_message(conv_id, "assistant", content)
-        created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            # The chat was deleted while the image was being stored: nothing is kept.
+            raise HTTPException(status_code=404 if reason == "gone" else 400, detail=chat_files.REASONS[reason])
+        content = chat_files.markdown(record)
+        message_id, created_at = record["message_id"], record["created_at"]
         # Owner-checked per stream in /wake-stream-all; no renderer listening is
         # fine, the row is stored and shows on the next read.
         desktop_channel.CHANNEL.publish({

@@ -216,6 +216,22 @@ describe('the chat_file frame', () => {
     expect(result.current.queue).toEqual([])
   })
 
+  it('adds the first image to a chat that is loaded and empty', async () => {
+    const { result } = hook()
+    mockedAxios.get.mockImplementation(async (url: string) =>
+      String(url).endsWith('/conversations/2/messages')
+        ? { data: [] }
+        : { data: { percent: 1, should_compact: false, message_count: 0 } })
+    await act(async () => { await result.current.selectConversation({ id: 2 } as any) })
+    await flush()
+    expect(result.current.messages).toEqual([])
+    wake(frame(2, 5))
+    await flush()
+    wake(frame(2, 5))
+    await flush()
+    expect(result.current.messages.map((m: any) => [m.id, m.content])).toEqual([[5, fileMd()]])
+  })
+
   it('leaves a chat that is not loaded here to the server read, and ignores malformed frames', async () => {
     const { result } = hook()
     await act(async () => { await result.current.selectConversation({ id: 1 } as any) })

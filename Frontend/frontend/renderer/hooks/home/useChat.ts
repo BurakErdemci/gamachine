@@ -84,6 +84,9 @@ export interface ChatAttention {
  */
 interface ConvRuntime {
   messages: Message[];
+  // The list was read from the server here, so an empty list means an empty
+  // chat and not "not read yet" (a frame that adds a message needs to know).
+  loaded: boolean;
   loading: boolean;
   // Canlı aktivite: Claude'un o an ne yaptığı (düşünüyor/araç/subagent) + token sayacı.
   // Backend status event'lerinden beslenir; done/error/stop'ta temizlenir.
@@ -137,7 +140,7 @@ interface ConvRuntime {
 }
 
 const EMPTY_RUNTIME: ConvRuntime = {
-  messages: [], loading: false, activity: null, contextUsage: null,
+  messages: [], loaded: false, loading: false, activity: null, contextUsage: null,
   pendingCommand: null, commandQueue: [], pendingQuestion: null, questionQueue: [],
   parkedCards: [], bridgeGates: [], lastCard: 0, turnEnd: null,
   unread: false, unsynced: false, clientOnly: false, queue: [], queuePaused: false,
@@ -552,7 +555,7 @@ export const useChat = (
       const res = await axios.get(`${API}/conversations/${convId}/messages`);
       // A turn that started while this request was out owns the list now: the
       // server copy has neither its placeholder nor its streamed text yet.
-      if (!rt(convId).loading) patchConv(convId, () => ({ messages: res.data, unsynced: false, clientOnly: false }));
+      if (!rt(convId).loading) patchConv(convId, () => ({ messages: res.data, loaded: true, unsynced: false, clientOnly: false }));
       await refreshContextUsage(convId);
     } catch (err) { console.error("Mesaj hatası:", err); }
   }, [API, patchConv, refreshContextUsage, rt]);
@@ -811,7 +814,7 @@ export const useChat = (
       // Opened in the meantime (the user is reading the live copy) or a new
       // turn started: the server copy would replace what is being looked at.
       if (notSyncable(rt(convId))) return;
-      patchConv(convId, () => ({ messages: res.data, unsynced: false }));
+      patchConv(convId, () => ({ messages: res.data, loaded: true, unsynced: false }));
       await refreshContextUsage(convId);
     } catch {
       // The live copy stays; opening the chat shows it.
@@ -1727,14 +1730,14 @@ export const useChat = (
                   if (!iptal && Number.isSafeInteger(fileConv) && fileConv > 0
                     && Number.isSafeInteger(shown?.id) && typeof shown?.content === 'string') {
                     patchConv(fileConv, r => {
-                      if (r.messages.length === 0 || r.messages.some(m => m.id === shown.id)) return {};
+                      if (!(r.loaded || r.messages.length > 0) || r.messages.some(m => m.id === shown.id)) return {};
                       const row: Message = {
                         id: shown.id, role: 'assistant', content: shown.content, smells: [],
                         timestamp: String(shown.created_at ?? ''),
                       };
                       // A turn in flight keeps its live bubble last (its id is a client id, not a row number).
                       const last = r.messages[r.messages.length - 1];
-                      const at = r.loading && last.id >= LIVE_ID_MIN ? r.messages.length - 1 : r.messages.length;
+                      const at = r.loading && last && last.id >= LIVE_ID_MIN ? r.messages.length - 1 : r.messages.length;
                       return { messages: [...r.messages.slice(0, at), row, ...r.messages.slice(at)] };
                     });
                   }
@@ -1808,7 +1811,7 @@ export const useChat = (
       if (res.data.status === 'success') {
         if (res.data.summary) {
           const msgRes = await axios.get(`${API}/conversations/${target}/messages`);
-          patchConv(target, () => ({ messages: msgRes.data, unsynced: false, clientOnly: false }));
+          patchConv(target, () => ({ messages: msgRes.data, loaded: true, unsynced: false, clientOnly: false }));
           // Eskiden buraya sabit `percent: 5` yazılıyordu — sıkıştırmadan sonra
           // doluluğun ne olduğu ölçülmeden, makul görünen bir sayıyla. Gösterge
           // artık tek kaynaktan tazeleniyor.

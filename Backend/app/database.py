@@ -613,6 +613,7 @@ class DatabaseManager:
         get the handoff transcript, not resume the source's CLI session.
         """
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        made_files: List[str] = []
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             # IMMEDIATE: the root check below and the insert see one snapshot,
             # so a family delete on another connection cannot land in between.
@@ -658,8 +659,15 @@ class DatabaseManager:
                     'UPDATE conversations SET copied_until = '
                     '(SELECT MAX(id) FROM messages WHERE conversation_id = ?) WHERE id = ?',
                     (new_id, new_id))
-            conn.execute('UPDATE conversations SET updated_at = ? WHERE id = ?', (now, root_id))
-            conn.commit()
+            try:
+                if fork_at is not None:
+                    # The branch's pictures are its own files, not the source's.
+                    chat_files.copy_for_branch(conn, self.db_path, source_id, new_id, made_files)
+                conn.execute('UPDATE conversations SET updated_at = ? WHERE id = ?', (now, root_id))
+                conn.commit()
+            except Exception:
+                chat_files.discard_files(made_files)
+                raise
         return {"id": new_id, "title": new_title, "parent_id": root_id, "hidden": False,
                 "created_at": now, "updated_at": now}
 
@@ -1157,18 +1165,25 @@ class DatabaseManager:
     # ===================== YENİ: MESAJLAR =====================
     def add_message(self, conversation_id: int, role: str, content: str, smells: list = None,
                     provider: Optional[str] = None, model: Optional[str] = None) -> int:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            message_id = self.insert_message_in(conn, conversation_id, role, content, smells, provider, model)[0]
+            conn.commit()
+            return message_id
+
+    def insert_message_in(self, conn: sqlite3.Connection, conversation_id: int, role: str, content: str,
+                          smells: list = None, provider: Optional[str] = None,
+                          model: Optional[str] = None) -> Tuple[int, str]:
+        """`add_message` inside the caller's transaction: (message id, timestamp)."""
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         smells_json = json.dumps(smells) if smells else "[]"
-        with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            cursor = conn.execute(
-                'INSERT INTO messages (conversation_id, role, content, smells_json, timestamp, provider, model) '
-                'VALUES (?, ?, ?, ?, ?, ?, ?)',
-                (conversation_id, role, content, smells_json, now, provider or None, model or None)
-            )
-            # Sohbetin updated_at'ini güncelle
-            self._touch(conn, conversation_id, now)
-            conn.commit()
-            return cursor.lastrowid
+        cursor = conn.execute(
+            'INSERT INTO messages (conversation_id, role, content, smells_json, timestamp, provider, model) '
+            'VALUES (?, ?, ?, ?, ?, ?, ?)',
+            (conversation_id, role, content, smells_json, now, provider or None, model or None)
+        )
+        # Sohbetin updated_at'ini güncelle
+        self._touch(conn, conversation_id, now)
+        return cursor.lastrowid, now
 
     def get_conversation_messages(self, conversation_id: int) -> List[Dict[str, Any]]:
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
@@ -1314,6 +1329,8 @@ class DatabaseManager:
                     (conv_id, 'assistant', content, '[]', now)
                 )
             conn.commit()
+        # The removed messages' pictures: their rows and files no longer count.
+        chat_files.prune_unreferenced(self.db_path, conv_id)
         return True
 
     def record_activity(self, kind, conversation_id=None, provider=None, model=None,

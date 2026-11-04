@@ -380,3 +380,137 @@ def test_a_path_that_resolves_to_a_share_is_refused(env, monkeypatch):
     monkeypatch.setattr(chat_files.os.path, "realpath",
                         lambda p: bs + bs + "server" + bs + "share" + bs + "a.png")
     assert chat_files.add_file(env.db, env.db.create_conversation(1, "A"), src, "") == (None, "bad_path")
+
+
+# ── audit fix round (4 Nov 2026) ─────────────────────────────────────────────
+
+def _post(env, chat, name="a.png", data=None, caption="c"):
+    r = env.client.post("/chat-files", headers=H, json={
+        "conversation_id": chat, "path": _write(env, name, data or _image("PNG")), "caption": caption})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_a_branch_gets_its_own_copy_of_the_pictures_and_survives_the_source(env):
+    chat = env.db.create_conversation(1, "A")
+    posted = _post(env, chat, caption="ilk")
+    branch = env.db.create_branch(chat)["id"]
+    [msg] = env.db.get_conversation_messages(branch)
+    new_id = msg["content"].split("gamachine-file:")[1].rstrip(")")
+    assert new_id != posted["id"] and msg["content"].startswith("![ilk](")
+    record = chat_files.get_file(env.db, new_id)
+    assert record["conversation_id"] == branch and record["size"] == chat_files.get_file(env.db, posted["id"])["size"]
+    assert os.path.isfile(chat_files.file_path(env.db.db_path, record))
+    # The source goes away; the branch still shows its picture.
+    env.db.delete_conversation(chat)
+    assert env.client.get(f"/chat-files/{new_id}", headers=H).status_code == 200
+    assert [r[0] for r in _rows(env, "SELECT conversation_id FROM chat_files")] == [branch]
+
+
+def test_a_truncated_or_signature_only_image_is_refused(env):
+    chat = env.db.create_conversation(1, "A")
+    whole = _noise_png(64)
+    for name, data in (("sig.png", b"\x89PNG\r\n\x1a\n"), ("cut.png", whole[:len(whole) // 2]),
+                       ("sig.jpg", b"\xff\xd8\xff\xe0" + b"0" * 20)):
+        assert chat_files.add_file(env.db, chat, _write(env, name, data), "") == (None, "not_image"), name
+    assert _rows(env, "SELECT * FROM chat_files") == []
+
+
+def _bomb_png():
+    out = io.BytesIO()
+    Image.new("1", (12000, 12000)).save(out, "PNG")
+    assert len(out.getvalue()) < 1_000_000
+    return out.getvalue()
+
+
+def test_a_decompression_bomb_is_refused_before_it_is_decoded(env, monkeypatch):
+    chat = env.db.create_conversation(1, "A")
+    bomb = _bomb_png()
+
+    def never(self, *a, **k):
+        raise AssertionError("the pixels were decoded")
+
+    monkeypatch.setattr(Image.Image, "load", never)
+    assert chat_files.add_file(env.db, chat, _write(env, "bomb.png", bomb), "") == (None, "too_many_pixels")
+    # A stored file that is a bomb (from before the check) is not re-encoded either.
+    assert chat_files._shrink(bomb, 1000) is None
+    assert _rows(env, "SELECT * FROM chat_files") == []
+
+
+def test_a_16_bit_grey_png_is_not_turned_white_by_the_re_encode():
+    out = io.BytesIO()
+    Image.new("I;16", (64, 64), 16384).save(out, "PNG")
+    shrunk = chat_files._shrink(out.getvalue(), 10_000_000)
+    with Image.open(io.BytesIO(shrunk)) as img:
+        assert abs(img.convert("L").getpixel((5, 5)) - 64) <= 3
+
+
+def test_the_re_encode_keeps_the_exif_orientation():
+    exif = Image.Exif()
+    exif[0x0112] = 6  # rotate 90 degrees clockwise to display
+    out = io.BytesIO()
+    Image.new("RGB", (40, 20), (10, 200, 10)).save(out, "JPEG", exif=exif)
+    shrunk = chat_files._shrink(out.getvalue(), 10_000_000)
+    with Image.open(io.BytesIO(shrunk)) as img:
+        assert img.size == (20, 40)
+
+
+@pytest.mark.parametrize("kept", [False, True])
+def test_compacting_frees_the_pictures_of_the_deleted_messages(env, kept):
+    chat = env.db.create_conversation(1, "A")
+    first = _post(env, chat)
+    last_text = env.db.add_message(chat, "user", "devam")
+    later = _post(env, chat, "b.png", _image("PNG", color=(1, 2, 3)))
+    env.db.compact_conversation(chat, "özet", through_id=last_text if kept else None)
+    left = [r[0] for r in _rows(env, "SELECT id FROM chat_files")]
+    folder = os.listdir(os.path.join(env.root, str(chat)))
+    if kept:
+        # Only the picture inside the compacted range goes; the later one stays.
+        assert left == [later["id"]] and len(folder) == 1
+    else:
+        assert left == [] and folder == []
+    assert first["id"] not in left
+
+
+def test_post_for_a_chat_deleted_meanwhile_keeps_nothing_and_is_404(env, monkeypatch):
+    chat = env.db.create_conversation(1, "A")
+    real = chat_files._check_decodes
+
+    def delete_then_check(data):
+        env.db.delete_conversation(chat)
+        return real(data)
+
+    monkeypatch.setattr(chat_files, "_check_decodes", delete_then_check)
+    r = env.client.post("/chat-files", headers=H, json={"conversation_id": chat, "path": _write(env, "a.png", _image("PNG"))})
+    assert r.status_code == 404
+    assert _rows(env, "SELECT * FROM chat_files") == [] and _rows(env, "SELECT * FROM messages") == []
+    assert not os.path.exists(os.path.join(env.root, str(chat)))
+
+
+def test_show_image_is_refused_in_a_read_only_run_and_in_a_side_chat(env, tool, monkeypatch):
+    chat = env.db.create_conversation(1, "A")
+    side = env.db.create_side_chat(chat, 1)
+    path = _write(env, "a.png", _image("PNG"))
+    monkeypatch.setenv("GAMACHINE_CONVERSATION_ID", str(chat))
+    monkeypatch.setenv("GAMACHINE_READ_ONLY", "1")
+    assert asyncio.run(tool(path, "")).startswith("Read-only turn")
+    assert env.db.get_conversation_messages(chat) == []
+    monkeypatch.delenv("GAMACHINE_READ_ONLY")
+    r = env.client.post("/chat-files", headers=H, json={"conversation_id": side, "path": path})
+    assert r.status_code == 403
+    assert env.db.get_conversation_messages(side) == [] and _rows(env, "SELECT * FROM chat_files") == []
+
+
+def test_a_file_swapped_after_the_check_is_refused(env, monkeypatch):
+    src = _write(env, "a.png", _image("PNG"))
+    real_stat = os.stat
+
+    def other_file(path, *a, **k):
+        info = real_stat(path, *a, **k)
+        if os.path.normcase(str(path)) == os.path.normcase(os.path.realpath(src)):
+            return types.SimpleNamespace(st_dev=info.st_dev, st_ino=info.st_ino + 1)
+        return info
+
+    monkeypatch.setattr(chat_files.os, "stat", other_file)
+    monkeypatch.setattr(chat_files.action_risk, "gamachine_secret_target", lambda p: False)
+    assert chat_files.add_file(env.db, env.db.create_conversation(1, "A"), src, "") == (None, "not_file")

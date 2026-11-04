@@ -10,6 +10,7 @@ import logging
 import httpx
 from mcp.server.mcpserver import MCPServer
 
+from spawn_env import read_only_refusal
 from unity_ai_mcp.approval_bridge import BACKEND_URL, _conversation_id_from_env, _get_headers
 from unity_ai_mcp.tools.mailbox_tools import _NO_CHAT, _detail
 
@@ -33,6 +34,8 @@ async def post_show_image(conversation_id: int, path: str, caption: str = "") ->
 
 
 async def show_image(path: str, caption: str = "") -> str:
+    if (refusal := read_only_refusal()) is not None:
+        return refusal
     conversation_id = _conversation_id_from_env()
     if conversation_id is None:
         return _NO_CHAT
