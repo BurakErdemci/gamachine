@@ -241,7 +241,7 @@ def ipc_event_allowed(channel: Any) -> bool:
 # are for the desktop renderer alone: a browser acting on `remote_message` or
 # `remote_ipc` would send the phone's text again or run the IPC a second time.
 BROWSER_FRAME_TYPES = frozenset({"title", desktop_channel.CARD_CLOSED_TYPE, desktop_channel.MODE_CHANGED_TYPE,
-                                 desktop_channel.MODEL_CHANGED_TYPE})
+                                 desktop_channel.MODEL_CHANGED_TYPE, desktop_channel.TURN_LIVE_TYPE})
 
 # The desktop channel queues that belong to a remote session's copy of
 # /wake-stream-all (the route marks them).

@@ -69,6 +69,16 @@ it any more and the renderer drops the listener:
 
     {"type": "remote_ipc_subscribe", "channel": str}
 
+Every renderer follows turns it did not start (a paired browser's, the
+desktop's, a phone-relayed one): each `/wake-stream-all` stream gets one frame
+per turn-event ring event of these kinds on a chat its user owns
+(agentic/turn_events.py). The frame carries ids only; the renderer reads the
+content through the ownership-checked `GET /conversations/{id}/turn-events`.
+It does not go through CHANNEL: the route puts it on its own stream's queue.
+
+    {"type": "turn_live", "conversation_id": int,
+     "kind": "turn_start" | "text" | "tool_call" | "turn_end", "seq": int}
+
 The command frames (`DESKTOP_ONLY_TYPES`) are for the desktop renderer alone:
 a browser's copy of `/wake-stream-all` leaves them out.
 """
@@ -88,6 +98,8 @@ EFFORT_SET_TYPE = "remote_effort"
 COMPUTER_HALTED_TYPE = "computer_halted"
 IPC_TYPE = "remote_ipc"
 IPC_SUBSCRIBE_TYPE = "remote_ipc_subscribe"
+TURN_LIVE_TYPE = "turn_live"
+TURN_LIVE_KINDS = frozenset({"turn_start", "text", "tool_call", "turn_end"})
 DESKTOP_ONLY_TYPES = frozenset({FRAME_TYPE, EFFORT_SET_TYPE, IPC_TYPE, IPC_SUBSCRIBE_TYPE})
 QUEUE_SIZE = 100
 
@@ -111,12 +123,18 @@ class DesktopChannel:
         """True when at least one renderer stream took the frame."""
         delivered = False
         for q in list(self._queues):
-            try:
-                q.put_nowait(frame)
-                delivered = True
-            except asyncio.QueueFull:
-                logger.warning("[remote] renderer stream is not reading; frame dropped for it")
+            delivered = offer(q, frame) or delivered
         return delivered
+
+
+def offer(q: asyncio.Queue, frame: dict) -> bool:
+    """Put a frame on one renderer stream's queue without waiting."""
+    try:
+        q.put_nowait(frame)
+        return True
+    except asyncio.QueueFull:
+        logger.warning("[remote] renderer stream is not reading; frame dropped for it")
+        return False
 
 
 CHANNEL = DesktopChannel()

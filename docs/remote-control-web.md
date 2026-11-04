@@ -70,6 +70,10 @@ authenticated session:
 
 Every dispatched request is logged with device id, method and path (no bodies).
 
+Every renderer follows the turns it did not start through the turn-event ring: a turn the
+browser runs on this backend shows up live on the desktop's copy of the chat from `turn_live`
+frames, without switching chats.
+
 ## Frame contract (browser ⇄ desktop, inside the existing encrypted channel)
 
 Requests use the v1 request/reply shape (`{id, type, ...}` → `{id, ok, result|error}`,
@@ -84,6 +88,18 @@ Browser → desktop frames are capped at 64 KiB, so larger bodies are uploaded i
 | `ui_upload_part` | `{upload_id, seq, data_b64, last}` (≤ 48 KiB decoded per part, ≤ 32 MiB total) | `{received}`; the finished upload is referenced once by `upload_id` |
 | `ui_ipc` | `{channel, payload}` | the main-process reply; `remote_unavailable` for channels off the allow-list |
 | `ui_ipc_subscribe` | `{channel}` | `{}`; then pushes `{type:'ui_ipc_event', channel, args}` for main → renderer events on that channel (terminal data/exit, browser-live, computer-use-live, hub progress, open-conversation) until the session ends |
+
+**`turn_live` on `/wake-stream-all`.** Each stream (the desktop renderer's and every
+paired browser's copy) gets `{type:'turn_live', conversation_id, kind, seq}` for every
+turn-event ring event of kind `turn_start`, `text`, `tool_call` or `turn_end` on a chat its
+user owns. The frame carries ids only; the renderer reads the content through
+`GET /conversations/{id}/turn-events?since=<seq>` (ownership-checked) unless it runs that
+turn itself: on `turn_start` it re-reads the messages and shows the turn as running (Stop is
+the ordinary `/chat-stop`), `text` streams into a placeholder, and `turn_end` replaces it with
+the stored messages and runs the usual turn end (queue drain). An epoch change or a gap
+re-reads the ring from the start. A browser's copy passes through the dispatcher's frame
+filter (`ui_dispatch.BROWSER_FRAME_TYPES`), which lists `turn_live`, so the browser can
+follow a turn the desktop started.
 
 HTTP allow-list rules (W1 owns the exact table): everything under the chat, conversation,
 workspace, file, scene, Unity, model-list, card and halt routes is allowed. Denied by

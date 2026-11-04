@@ -1357,6 +1357,167 @@ export const useChat = (
   const fetchMessagesRef = useRef(fetchMessages);
   fetchMessagesRef.current = fetchMessages;
 
+  // ── Following turns this renderer did not start (`turn_live` frames) ─────
+  // A paired browser's turn runs on this backend but streams to the browser
+  // only; the turn-event ring has it, and `/wake-stream-all` names each ring
+  // event. The chat then shows the turn as its own: loading, Stop (the
+  // ordinary /chat-stop works for any turn), a placeholder the text streams
+  // into, and the stored messages once it ends. Per chat: the last ring seq
+  // read, the ring's epoch, one request at a time (`busy`, `again` for a frame
+  // that came meanwhile), `start` = seq of the followed turn's turn_start
+  // (null = not following), `own` = frames of this renderer's own turn were
+  // skipped, so a turn_end with no start is that turn's.
+  type Follow = {
+    seq: number; epoch: string | null; busy: boolean; again: boolean; resync: boolean;
+    start: number | null; aiId: number; own: boolean;
+  };
+  const followsRef = useRef<Map<number, Follow>>(new Map());
+  const followOf = (convId: number) => {
+    let f = followsRef.current.get(convId);
+    if (!f) {
+      f = { seq: 0, epoch: null, busy: false, again: false, resync: false, start: null, aiId: 0, own: false };
+      followsRef.current.set(convId, f);
+    }
+    return f;
+  };
+  const getMessages = async (convId: number): Promise<Message[] | null> => {
+    try { return (await axios.get(`${API}/conversations/${convId}/messages`)).data; } catch { return null; }
+  };
+  const beginFollow = async (convId: number, startSeq: number, text: string) => {
+    const f = followOf(convId);
+    f.start = startSeq;
+    f.own = false;
+    f.aiId = nextClientMsgId();
+    // Loading first: a message typed here meanwhile waits in the queue.
+    patchConv(convId, () => ({ loading: true }));
+    // The backend stores the user's message before the turn starts.
+    const list = await getMessages(convId);
+    if (f.start !== startSeq) return;
+    const placeholder: Message = {
+      id: f.aiId, role: 'assistant', content: text, smells: [], timestamp: new Date().toISOString(),
+      thinking: null, tool_calls: [],
+    };
+    patchConv(convId, r => ({
+      messages: [...(list ?? r.messages), placeholder],
+      ...(list ? { unsynced: false, clientOnly: false } : {}),
+    }));
+  };
+  const appendFollowed = (convId: number, text: string) => {
+    const id = followOf(convId).aiId;
+    patchConv(convId, r => ({
+      messages: r.messages.map(m => (m.id === id ? { ...m, content: (m.content || '') + text } : m)),
+    }));
+  };
+  const endFollow = async (convId: number, status: string, following: boolean) => {
+    const f = followOf(convId);
+    if (!following) {
+      // This renderer's own turn ends through its own stream.
+      if (f.own) { f.own = false; return; }
+      // A turn whose following was stopped here, or one never shown: the
+      // stored truth replaces the live copy unless that copy holds more.
+      const r = rt(convId);
+      if (r.messages.length > 0 && !hasClientState(r)) await fetchMessagesRef.current(convId);
+      return;
+    }
+    const hadText = !!rt(convId).messages.find(m => m.id === f.aiId)?.content;
+    // turn_end is recorded on the provider's `done`, just before the backend
+    // stores the reply (conversation_routes chat-stream): a read that comes
+    // back without it is tried again a few times.
+    let list: Message[] | null = null;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      list = await getMessages(convId);
+      if (!list || status !== 'done' || !hadText || list[list.length - 1]?.role === 'assistant') break;
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
+    if (f.start === null && !rt(convId).loading) {
+      // Stopped here meanwhile: Stop already cleared the turn.
+      if (list) patchConv(convId, () => ({ messages: list!, unsynced: false, clientOnly: false }));
+      return;
+    }
+    f.start = null;
+    const visible = activeConvIdRef.current === convId;
+    const failed = status === 'error';
+    patchConv(convId, r => ({
+      ...(list ? { messages: list, unsynced: false, clientOnly: false } : { unsynced: !visible }),
+      loading: false, activity: null, unread: !visible,
+      // As after this chat's own turn: a user Stop records no turn end and
+      // pauses the queue; an error pauses it too.
+      ...(status === 'stopped'
+        ? { queuePaused: r.queuePaused || r.queue.length > 0 }
+        : { turnEnd: { seq: ++eventSeqRef.current, failed }, queuePaused: r.queuePaused || (failed && r.queue.length > 0) }),
+    }));
+    if (status === 'done') drainQueueRef.current(convId);
+    void refreshContextUsage(convId);
+  };
+  // One batch of ring events, oldest first. Only the chat's latest turn
+  // matters: an older one in the same batch is already in the stored list.
+  const applyFollowed = async (convId: number, events: any[], wasFollowing: boolean) => {
+    const f = followOf(convId);
+    let i = -1;
+    events.forEach((e, k) => { if (e?.kind === 'turn_start') i = k; });
+    const tail = i < 0 ? events : events.slice(i + 1);
+    const text = tail.filter(e => e?.kind === 'text').map(e => String(e.content ?? '')).join('');
+    const end = tail.find(e => e?.kind === 'turn_end');
+    if (i >= 0) {
+      const startSeq = Number(events[i].seq);
+      if (f.start === startSeq) { if (text) appendFollowed(convId, text); }
+      else await beginFollow(convId, startSeq, text);
+    } else if (f.start !== null && text) {
+      appendFollowed(convId, text);
+    }
+    if (end) await endFollow(convId, String(end.status ?? 'done'), f.start !== null || wasFollowing);
+    return i >= 0 || !!end;
+  };
+  const pullFollowed = async (convId: number) => {
+    const f = followOf(convId);
+    if (f.busy) { f.again = true; return; }
+    f.busy = true;
+    try {
+      do {
+        f.again = false;
+        const since = f.seq;
+        let data: any;
+        try {
+          data = (await axios.get(`${API}/conversations/${convId}/turn-events?since=${since}`)).data;
+        } catch { break; }
+        const reset = !!data?.gap || (f.epoch !== null && data?.epoch !== f.epoch);
+        f.epoch = data?.epoch ?? null;
+        if (reset && since > 0) {
+          // Restarted backend or a hole: read the whole ring again.
+          f.seq = 0;
+          f.resync = true;
+          f.again = true;
+          continue;
+        }
+        const resync = f.resync || reset;
+        f.resync = false;
+        const wasFollowing = f.start !== null;
+        // A resync re-derives the turn from the ring, placeholder included.
+        if (resync) f.start = null;
+        const handled = await applyFollowed(convId, Array.isArray(data?.events) ? data.events : [], resync && wasFollowing);
+        f.seq = Math.max(f.seq, Number(data?.last_seq) || 0);
+        if (resync && !handled) {
+          if (wasFollowing) await endFollow(convId, 'stopped', true);
+          else await endFollow(convId, 'done', false);
+        }
+      } while (f.again);
+    } finally {
+      f.busy = false;
+    }
+  };
+  const onTurnLive = (convId: number, seq: number) => {
+    const f = followOf(convId);
+    // This renderer runs the chat's turn itself and has its stream.
+    if (rt(convId).loading && f.start === null) {
+      f.own = true;
+      if (Number.isSafeInteger(seq)) f.seq = Math.max(f.seq, seq);
+      return;
+    }
+    void pullFollowed(convId);
+  };
+  const turnLiveRef = useRef({ frame: onTurnLive, pull: pullFollowed });
+  turnLiveRef.current = { frame: onTurnLive, pull: pullFollowed };
+
   // A message written on a phone, handed over by the backend as a
   // `remote_message` frame. It goes the way a typed message goes: into that
   // chat's queue while a turn runs, else out as a user turn addressed by id,
@@ -1459,6 +1620,9 @@ export const useChat = (
           if (res && res.ok === false) retryMs = 30000;
           const reader = res?.body?.getReader();
           if (reader) {
+            // A turn_end sent while the stream was down would leave a
+            // followed chat loading for good: read those chats' rings again.
+            for (const [id, f] of followsRef.current) if (f.start !== null) void turnLiveRef.current.pull(id);
             const decoder = new TextDecoder('utf-8');
             let buffer = '';
             while (!iptal) {
@@ -1484,6 +1648,11 @@ export const useChat = (
                 if (data?.type === 'remote_message') {
                   const remoteMsg = parseRemoteMessage(data);
                   if (remoteMsg && !iptal) void deliverRemoteRef.current(remoteMsg);
+                  continue;
+                }
+                if (data?.type === 'turn_live') {
+                  const liveId = Number(data.conversation_id);
+                  if (Number.isSafeInteger(liveId) && liveId > 0 && !iptal) turnLiveRef.current.frame(liveId, Number(data.seq));
                   continue;
                 }
                 if (data?.type === 'card_closed') {
@@ -1582,6 +1751,9 @@ export const useChat = (
     turnRef.current.delete(key);
     controllersRef.current.get(key)?.abort();
     controllersRef.current.delete(key);
+    // A followed turn (another client's) stops through the same /chat-stop.
+    const followed = followsRef.current.get(key);
+    if (followed) followed.start = null;
     // Claude SDK turunu gerçekten iptal et (bekleyen onay/soru gate'lerini çöz + interrupt)
     let stopped: Promise<void> = Promise.resolve();
     if (convId && user) {

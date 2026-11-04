@@ -1523,6 +1523,38 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
             if remote_copy:
                 ui_dispatch.mark_remote_listener(remote_q)
             pending_remote = None
+            # Turns another client started on this user's chats: ids only, the
+            # renderer reads the content through GET /turn-events, which checks
+            # ownership itself (desktop_channel.TURN_LIVE_TYPE).
+            loop = asyncio.get_running_loop()
+            owners: Dict[int, Any] = {}
+
+            def offer_turn_live(frame: dict) -> None:
+                conv_id = frame["conversation_id"]
+                if conv_id not in owners:
+                    try:
+                        owners[conv_id] = db.get_conversation_owner(conv_id)
+                    except Exception:
+                        logger.warning("[wake] owner lookup of %s failed; turn_live dropped", conv_id)
+                        return
+                if owners[conv_id] != user_id:
+                    return
+                desktop_channel.offer(remote_q, frame)
+
+            def ring_listener(conv_id: int, event: dict) -> None:
+                # Called from the ring's _push, possibly off this loop's thread
+                # (the TEXT flush timer).
+                kind = event.get("kind")
+                if kind not in desktop_channel.TURN_LIVE_KINDS:
+                    return
+                frame = {"type": desktop_channel.TURN_LIVE_TYPE, "conversation_id": conv_id,
+                         "kind": kind, "seq": event.get("seq")}
+                try:
+                    loop.call_soon_threadsafe(offer_turn_live, frame)
+                except RuntimeError:
+                    pass  # the loop is closed: the stream is gone
+
+            turn_events.RING.add_listener(ring_listener)
             try:
                 # A reloaded desktop renderer lost the event listeners browsers
                 # still want; it fetches /remote/ui-ipc-subscriptions on this.
@@ -1577,6 +1609,7 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
             except Exception:
                 logger.exception("[wake] all-chats stream error")
             finally:
+                turn_events.RING.remove_listener(ring_listener)
                 desktop_channel.CHANNEL.unlisten(remote_q)
 
         return StreamingResponse(localize_sse(gen(), x_ui_lang), media_type="text/event-stream")
