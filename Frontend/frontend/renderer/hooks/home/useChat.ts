@@ -1177,7 +1177,8 @@ export const useChat = (
                       ? data.stop_reason
                       : (data.max_reached ? 'max_iterations' : 'complete');
                     // `wake_deferred`: the backend queued this wake again (busy session); no fault to show.
-                    if (reason !== 'complete' && reason !== 'wake_deferred') {
+                    // `wake_stale`: the ticket was gone, no turn ran and the notices stay queued.
+                    if (reason !== 'complete' && reason !== 'wake_deferred' && reason !== 'wake_stale') {
                       const detail = [`stop_reason=${reason}`,
                         typeof data.iterations === 'number' ? `iterations=${data.iterations}` : null]
                         .filter(Boolean).join(' · ');

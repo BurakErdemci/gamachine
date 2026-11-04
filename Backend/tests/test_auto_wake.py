@@ -153,12 +153,13 @@ def test_wake_turn_message_is_stored_with_system_role():
     assert roller == ["system"], roller
 
 
-def test_unticketed_wake_claim_is_stored_as_user_turn():
+def test_unticketed_wake_claim_starts_no_turn_and_stores_nothing():
     db = _db()
     with patch("routes.conversation_routes._check_chat_rate_limit"):
-        _chat_stream(db, origin="wake")
-    assert db.add_message.call_args_list[0].args[1] == "user"
+        resp = _chat_stream(db, origin="wake")
+    assert db.add_message.call_args_list == []
     assert wake_queue.chain(1) == 0
+    assert resp.media_type == "text/event-stream"
 
 
 def test_wake_ticket_cannot_be_consumed_twice():

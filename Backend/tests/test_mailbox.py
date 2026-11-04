@@ -440,7 +440,8 @@ def test_an_unticketed_wake_delivers_nothing(env, auto, monkeypatch):
     _send(env.client, a, b, body="bekle")
     _wake_turn(env.client, b, message="kendi metnim")
     assert _rows(env.db, "SELECT status FROM mailbox") == [("queued",)]
-    assert "bekle" not in _FakeRunner.messages[-1]
+    # A wake with no ticket starts no turn at all, so nothing reaches the agent.
+    assert _FakeRunner.messages == []
 
 
 # A real failure inside SQLite, not a patched `add_message`: the mail path no

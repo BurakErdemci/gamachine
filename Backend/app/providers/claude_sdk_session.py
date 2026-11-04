@@ -1332,8 +1332,7 @@ class ClaudeSDKSession:
         # session açar (session_id None → DB transcript'i yeniden enjekte edilir).
         logger.warning(f"[ClaudeSDKSession:{self.conversation_id}] interrupt işlemedi → session zorla resetleniyor")
         await self._finish_turn(error="⏹ Tur durduruldu (session resetlendi).")
-        if _SESSIONS.get(self.conversation_id) is self:
-            _SESSIONS.pop(self.conversation_id, None)
+        _evict(self)
         await self.close()
 
     # ── Sürekli reader: CLI'dan gelen HER mesajı işler ───────────────────
@@ -1347,8 +1346,7 @@ class ClaudeSDKSession:
             logger.exception(f"[ClaudeSDKSession:{self.conversation_id}] reader koptu")
             self._broken = True
             await self._finish_turn(error=f"Claude session koptu: {e}")
-            if _SESSIONS.get(self.conversation_id) is self:
-                _SESSIONS.pop(self.conversation_id, None)
+            _evict(self)
             # Kendi içinden tam close çağrılmaz (kendini iptal etmesin) — subprocess
             # zaten ölmüş; artıkları arka plan task'ı temizler (close, current_task
             # kontrolü sayesinde reader'ı kendi kendine iptal ettirmez).
@@ -2027,11 +2025,19 @@ def _identity_mismatch(sess: "ClaudeSDKSession", kwargs: dict) -> Optional[str]:
     return None
 
 
+def _evict(sess: "ClaudeSDKSession") -> None:
+    """The one way a session leaves the cache: retire it (record and clear its
+    tasks now, so the reset notice is complete and its slow close() cannot
+    publish over a replacement's row), then drop it. Every close path calls
+    this before awaiting close() (audit B11, 4 Nov 2026)."""
+    sess._retire()
+    if _SESSIONS.get(sess.conversation_id) is sess:
+        _SESSIONS.pop(sess.conversation_id, None)
+
+
 def _discard(conversation_id: int, sess: "ClaudeSDKSession") -> None:
     """Session'ı cache'ten düşür ve artıklarını arka planda kapat."""
-    # Now, not when the background close gets to it: the next turn may start first.
-    sess._retire()
-    _SESSIONS.pop(conversation_id, None)
+    _evict(sess)
     try:
         asyncio.create_task(sess.close())
     except RuntimeError:
@@ -2092,8 +2098,7 @@ async def close_session(conversation_id: int):
     sess = _SESSIONS.get(conversation_id)
     if sess is None:
         return
-    sess._retire()
-    _SESSIONS.pop(conversation_id, None)
+    _evict(sess)
     await sess.close()
 
 

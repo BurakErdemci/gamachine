@@ -298,3 +298,83 @@ def test_a_slow_close_neither_hides_the_notice_nor_clears_the_replacements_row()
     assert "old audit" in notice
     assert live == ["new build"]
     assert last == (CONV, ["new build"])
+
+
+def test_the_hard_reset_path_retires_before_its_slow_close():
+    """cancel_turn's hard reset popped and closed without _retire: the notice was
+    empty and close() later published an empty row over the replacement's
+    (audit B11, 4 Nov 2026)."""
+    async def run():
+        entered, release = asyncio.Event(), asyncio.Event()
+        seen = []
+        cs.add_bg_tasks_listener(lambda cid, tasks: seen.append((cid, [t["desc"] for t in tasks])))
+        old = _live(CONV)
+        await old._on_message(_started("o", "old audit"))
+        old._turn_active = True
+
+        async def no_interrupt():
+            raise RuntimeError("no")
+        old._client.interrupt = no_interrupt
+
+        async def slow_exit(*a):
+            entered.set()
+            await release.wait()
+        old._client.__aexit__ = slow_exit
+        canceller = asyncio.create_task(old.cancel_turn())
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        new = cs.get_session(CONV)
+        notice = cs.take_reset_notice(CONV)
+        await new._on_message(_started("n", "new build"))
+        release.set()
+        await asyncio.wait_for(canceller, timeout=2)
+        return notice, seen[-1], cs.take_reset_notice(CONV)
+
+    notice, last, stale = asyncio.run(run())
+    assert "old audit" in notice
+    assert last == (CONV, ["new build"])
+    assert stale is None or stale == ""
+
+
+def test_the_reader_error_path_retires_before_its_close():
+    async def run():
+        entered, release = asyncio.Event(), asyncio.Event()
+        seen = []
+        cs.add_bg_tasks_listener(lambda cid, tasks: seen.append((cid, [t["desc"] for t in tasks])))
+        old = _live(CONV)
+        await old._on_message(_started("o", "old audit"))
+
+        async def slow_exit(*a):
+            entered.set()
+            await release.wait()
+        old._client.__aexit__ = slow_exit
+
+        async def boom():
+            raise RuntimeError("cli died")
+            yield
+        old._client.receive_messages = boom
+        old._reader_task = asyncio.create_task(old._reader_loop())
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        new = cs.get_session(CONV)
+        notice = cs.take_reset_notice(CONV)
+        await new._on_message(_started("n", "new build"))
+        release.set()
+        await asyncio.sleep(0.2)
+        return notice, seen[-1]
+
+    notice, last = asyncio.run(run())
+    assert "old audit" in notice
+    assert last == (CONV, ["new build"])
+
+
+def test_an_unticketed_wake_claim_starts_no_turn_and_stores_no_row(runner):
+    """An expired ticket claimed late: no user row with the notice text, no turn;
+    one wake_stale done frame, the notice stays queued (audit B10, 4 Nov 2026)."""
+    wake_queue.enqueue(1, "tasks_done|audit")
+    wake_queue.issue_ticket(1, wake_queue.drain(1))
+    db = _db()
+    with patch.object(wake_queue, "WAKE_TICKET_TTL", 0.0):
+        out = _post(db, ChatRequest(conversation_id=1, message="tasks_done|audit", user_id=1, origin="wake"))
+    assert db.add_message.call_args_list == []
+    assert runner.messages == []
+    assert "wake_stale" in str(out)
+    assert wake_queue.drain(1) == ["tasks_done|audit"]

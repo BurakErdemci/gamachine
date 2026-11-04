@@ -2194,8 +2194,17 @@ Max 300 kelime. Türkçe yaz.
         wake_notices = (wake_queue.take_ticket_notices(request.conversation_id)
                         if request.origin == "wake" else [])
         if request.origin == "wake" and not ticketed_wake:
-            logger.info("[wake] conv=%s unticketed wake claim downgraded",
+            # No ticket (expired or already claimed): the notices stay queued
+            # and are offered again. The client's text is not a user message.
+            logger.info("[wake] conv=%s unticketed wake claim -> no turn",
                         request.conversation_id)
+
+            async def _stale():
+                yield f"data: {json.dumps({'type': 'done', 'stop_reason': 'wake_stale'})}\n\n"
+
+            return StreamingResponse(
+                localize_sse(_tag_sse_stream(_stale(), request.conversation_id), _stream_language(request, x_ui_lang)),
+                media_type="text/event-stream")
         # The text this turn runs on. A mail wake replaces it with the notes
         # from the DB: the client's text is never what gets delivered.
         turn_message = request.message
