@@ -184,6 +184,9 @@ const RESERVED_FILE_NAMES = /^(con|prn|aux|nul|conin\$|conout\$|com[1-9]|lpt[1-9
 /** True when a file: URL names a plain local path inside one of `roots` (links, UNC, device and stream names refused). */
 export function isFileInRoots(url: string, roots: readonly string[] | null | undefined): boolean {
   if (!roots || roots.length === 0) return false
+  // An encoded slash or backslash is refused on every platform, as in policy.py: on Linux and macOS a decoded
+  // "\\" is an ordinary file-name character, so the separator checks below would not see it.
+  if (/%(2f|5c)/i.test(url)) return false
   let target: string
   try {
     const parsed = new URL(url)
