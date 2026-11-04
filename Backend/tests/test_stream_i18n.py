@@ -104,9 +104,6 @@ def test_chat_route_localizes_error_using_body_then_header(monkeypatch, body_lan
 @pytest.mark.parametrize("source,expected", [
     ("🤖 Görev başladı: build", "🤖 Task started: build"),
     ("✅ Görev bitti: build", "✅ Task finished: build"),
-    ("⏳ 2 arka plan görevi sürüyor (build, audit) — bitince devam edilecek",
-     "⏳ 2 background tasks running (build, audit) — will resume when finished"),
-    ("⏳ 2 arka plan görevi sürüyor", "⏳ 2 background tasks running"),
     ("aşama: bilinmiyor · RuntimeError", "stage: unknown · RuntimeError"),
     ("Codex session hatası: Codex thread/start başarısız: bad request",
      "Codex session error: Codex thread/start failed: bad request"),

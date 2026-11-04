@@ -80,7 +80,7 @@ def test_the_session_error_path_queues_one_terminal_not_two():
     sess = ClaudeSDKSession.__new__(ClaudeSDKSession)
     q: asyncio.Queue = asyncio.Queue()
     sess._turn_active = True
-    sess._result_pending = False
+    sess._drain_state = None
     sess._out_q = q
     sess._usage_event = None
     sess._final_text = "yarım cevap"
@@ -105,7 +105,7 @@ def test_the_session_error_path_still_delivers_the_partial_text():
     sess = ClaudeSDKSession.__new__(ClaudeSDKSession)
     q: asyncio.Queue = asyncio.Queue()
     sess._turn_active = True
-    sess._result_pending = False
+    sess._drain_state = None
     sess._out_q = q
     sess._usage_event = None
     sess._final_text = "yarım cevap"
@@ -126,7 +126,7 @@ def test_the_session_success_path_still_sends_done():
     sess = ClaudeSDKSession.__new__(ClaudeSDKSession)
     q: asyncio.Queue = asyncio.Queue()
     sess._turn_active = True
-    sess._result_pending = False
+    sess._drain_state = None
     sess._out_q = q
     sess._usage_event = None
     sess._final_text = "tam cevap"

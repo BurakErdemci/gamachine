@@ -86,6 +86,37 @@ def set_db_saver(cb: Callable[..., None]) -> None:
     _DB_SAVE_CB = cb
 
 
+# Called as (conv_id, tasks) on every start/end of a background task, from the
+# reader's loop; /wake-stream-all turns it into a `bg_tasks` frame.
+_BG_TASK_LISTENERS: List[Callable[[int, List[dict]], None]] = []
+
+
+def add_bg_tasks_listener(fn: Callable[[int, List[dict]], None]) -> None:
+    _BG_TASK_LISTENERS.append(fn)
+
+
+def remove_bg_tasks_listener(fn: Callable[[int, List[dict]], None]) -> None:
+    try:
+        _BG_TASK_LISTENERS.remove(fn)
+    except ValueError:
+        pass
+
+
+class _TapEvent:
+    """The `.type`/`.data` shape `turn_events.TurnTap.feed` reads."""
+    __slots__ = ("type", "data")
+
+    def __init__(self, type_: str, data: dict):
+        self.type = type_
+        self.data = data
+
+
+def bg_tasks_snapshots() -> Dict[int, List[dict]]:
+    """Running background tasks of every live session that has any."""
+    return {cid: sess.bg_tasks() for cid, sess in list(_SESSIONS.items())
+            if sess.is_live and sess._active_tasks}
+
+
 class SessionBusyError(RuntimeError):
     """Önceki tur kilidi bırakmadı (sıkışmış session). AgentRunner yakalayıp resetler."""
 
@@ -349,18 +380,16 @@ def claude_ikilisini_coz() -> Optional[str]:
 
     logger.warning("[ClaudeSDK] PATH'te yalnız .cmd kabuğu var, arkasındaki exe bulunamadı")
     return None
-# Arka plan görevleri bitince CLI kendiliğinden devam etmezse bu süre sonra dürtülür.
+# After the last background task ends with no turn running, wait this long for
+# the CLI's own unprompted turn before leaving an AUTO-WAKE notice. Measured
+# 4 Nov 2026 (CLI 2.1.318): a finished background Bash is followed ~50 ms later
+# by an unprompted turn; a finished subagent is followed by none.
 _TASKS_DONE_GRACE_S = 20.0
-# Nudge sonrası devam turu hiç gelmezse turu bitirme emniyeti.
-_NUDGE_FALLBACK_S = 180.0
-# Result geldi + görevler sürüyor: görevler hiç bitmezse turu bitirme emniyeti.
-_TASKS_WATCHDOG_S = 900.0
 # End an idle merged-prompt stream only after an earlier turn's Result was absorbed.
 _OWED_RESULT_IDLE_S = 120.0
-_NUDGE_MESSAGE = (
-    "[Sistem] Arka plan görevlerin tamamlandı. Sonuçlarını değerlendirip kaldığın "
-    "yerden kısaca devam et ve işi sonuçlandır."
-)
+# A task that ends stopped/killed/failed this soon after a Stop was ended by it.
+_STOP_KILL_WINDOW_S = 15.0
+_STOP_KILLED_NOTICE = "[Sistem] Durdurma şu arka plan işlerini kesti: {names}. Gerekirse yeniden başlat."
 
 
 def _canonical(path: str, base: str = "") -> Path:
@@ -921,25 +950,29 @@ class ClaudeSDKSession:
         self._turn_tokens = 0          # tur boyunca üretilen output token (canlı sayaç)
         self._msg_tokens_seen = 0      # aktif API mesajının son bilinen output_tokens'ı
         # Arka plan görevleri (session ömürlü — görev turlar arası sürebilir).
+        # Background shells (`run_in_background`) and async subagents both land
+        # here: measured 4 Nov 2026 (CLI 2.1.318), a local_bash task gets
+        # TaskStarted, then TaskUpdated(completed) + TaskNotification when it
+        # ends, like a subagent. A running task never holds a turn open.
         self._active_tasks: Dict[str, str] = {}   # task_id → açıklama
-        # Names of tasks that FINISHED this turn. Kept so the AUTO-WAKE notice can
-        # say "which task finished" — the name removed from `_active_tasks` at
-        # completion time wasn't stored anywhere else.
+        self._task_meta: Dict[str, Dict[str, Any]] = {}  # task_id → {kind, started_at}
+        # Bumped on every start/end; /wake-stream-all publishes the change.
+        self.bg_tasks_version = 0
+        # Names of finished tasks not yet answered by a turn. Kept so the AUTO-WAKE
+        # notice can say "which task finished" — the name removed from
+        # `_active_tasks` at completion time wasn't stored anywhere else.
         self._done_tasks: List[str] = []
-        # Bash shells started with `run_in_background`: tool_use_id → command.
-        # Deliberately NOT put into `_active_tasks` — there is NO SDK event that
-        # reports a background shell ending (TaskUpdated/TaskNotification only fire
-        # for Task-based work and carry no `tool_use_id`). If it were in
-        # `_active_tasks`, it would never drain, the ResultMessage branch would keep
-        # the SSE open, and every turn that starts a background server would look
-        # "still running" until the 900s watchdog. The only way out: the model
-        # closing the shell with `BashOutput`/`KillShell` — if that output says
-        # "completed", the finish is MEASURED.
-        self._bg_shells: Dict[str, str] = {}
-        self._result_pending = False   # Result geldi ama arka plan görevleri sürüyor
-        self._owed_results: int = 0    # CLI turns come from user queries, nudges, or autonomous work.
+        # Wake-once rule for finished tasks: None, "grace" (no turn: waiting for
+        # the CLI's unprompted turn) or "after_turn" (a turn was running: apply
+        # the grace once it ends).
+        self._drain_state: Optional[str] = None
+        # Tasks a Stop ended; the next turn's message tells the model.
+        self._stop_killed: List[str] = []
+        self._cancel_at = 0.0
+        # The ring record of an unprompted CLI turn (no listener).
+        self._agent_tap: Any = None
+        self._owed_results: int = 0    # CLI turns come from user queries or autonomous work.
         self._absorbed_result_at: float = 0.0
-        self._nudges = 0               # görevler bitince gönderilen dürtme sayısı (tur başına)
         self._turn_started_at = 0.0
         self._cancel_requested = False
         self._grace_task: Optional[asyncio.Task] = None
@@ -1052,6 +1085,12 @@ class ClaudeSDKSession:
         self._started = False
         self._turn_active = False
         self._owed_results = 0
+        self._end_agent_tap("error")
+        # The CLI took its background tasks with it.
+        if self._active_tasks:
+            self._active_tasks.clear()
+            self._task_meta.clear()
+            self._tasks_changed()
 
     # ── can_use_tool: native onay + AskUserQuestion köprüsü ──────────────
     async def _can_use_tool(self, tool_name: str, input_data: dict, context):
@@ -1214,6 +1253,14 @@ class ClaudeSDKSession:
            300sn bloklu kalır). 2) SDK turunu interrupt() eder. 3) Tur makul sürede
            bitmezse session'ı ZORLA resetler — böylece sonraki mesaj asla eski kilide
            takılmaz. _turn_lock ALMAZ (deadlock önlemi — cancel ayrı request task'ından gelir)."""
+        # No model turn: only background tasks may be running. interrupt() has
+        # nothing to stop, no Result follows it, and the wait below ran out into
+        # the hard reset that orphaned the background shells ("Background shell
+        # command didn't finish before the previous session ended", measured
+        # 10 Oct 2026). Stop is a no-op for the session then.
+        if not self._turn_active:
+            logger.info(f"[ClaudeSDKSession:{self.conversation_id}] Durdur: model turu yok; arka plan gorevleri ve session korunuyor")
+            return
         self._cancel_requested = True
         self._cancel_grace()
         for gid in list(self._active_gate_ids):
@@ -1221,18 +1268,8 @@ class ClaudeSDKSession:
         if self._cancel_event is not None:
             self._cancel_event.set()
 
-        # The model already answered and only background tasks hold the turn open.
-        # There is nothing for interrupt() to stop, so no Result follows it, and the
-        # wait below ran out into the hard reset: closing the CLI orphaned its
-        # background shells, and the next turn opened on "Background shell command
-        # didn't finish before the previous session ended" (measured 10 Oct 2026,
-        # "send now" during a long bot run). End the turn and keep the session.
-        if self._turn_active and self._result_pending:
-            logger.info(f"[ClaudeSDKSession:{self.conversation_id}] tur kapatildi; arka plan gorevleri ve session korunuyor")
-            await self._finish_turn()
-            return
-
         interrupted = False
+        self._cancel_at = time.time()
         try:
             if self._client is not None:
                 await asyncio.wait_for(self._client.interrupt(), timeout=8.0)
@@ -1280,8 +1317,93 @@ class ClaudeSDKSession:
         q = self._out_q
         if q is not None:
             await q.put(ev)
+        elif self._agent_tap is not None:
+            # An unprompted CLI turn: the ring is how the desktop and the
+            # browser remote follow it live (turn_live frames).
+            self._agent_tap.feed(_TapEvent(ev.get("type", ""), ev))
 
-    def _begin_turn(self):
+    def _start_agent_tap(self) -> None:
+        try:
+            from agentic import turn_events
+            self._agent_tap = turn_events.TurnTap(self.conversation_id, "claude", self.model or "", "agent")
+            self._agent_tap.start()
+        except Exception:
+            logger.exception("[ClaudeSDKSession] unprompted turn not recorded")
+            self._agent_tap = None
+
+    def _end_agent_tap(self, status: str) -> None:
+        tap, self._agent_tap = getattr(self, "_agent_tap", None), None
+        if tap is not None:
+            tap.end(status)
+
+    def bg_tasks(self) -> List[dict]:
+        """Snapshot of the running background tasks."""
+        out = []
+        for tid, desc in self._active_tasks.items():
+            meta = self._task_meta.get(tid) or {}
+            out.append({"task_id": tid, "desc": desc, "kind": meta.get("kind", "other"),
+                        "started_at": meta.get("started_at")})
+        return out
+
+    def _tasks_changed(self) -> None:
+        self.bg_tasks_version += 1
+        snapshot = self.bg_tasks()
+        for fn in list(_BG_TASK_LISTENERS):
+            try:
+                fn(self.conversation_id, snapshot)
+            except Exception:
+                logger.exception("[ClaudeSDKSession] bg_tasks listener failed")
+
+    def _task_kind(self, msg) -> str:
+        task_type = (getattr(msg, "task_type", None) or "").lower()
+        if "bash" in task_type or "shell" in task_type:
+            return "bash"
+        if "agent" in task_type:
+            return "agent"
+        tool = self._tool_names.get(getattr(msg, "tool_use_id", None) or "")
+        if tool in ("Task", "Agent"):
+            return "agent"
+        if tool == "Bash":
+            return "bash"
+        return "other"
+
+    def _task_ended(self, task_id: str, status: Optional[str]) -> str:
+        """Drop a finished task; a Stop's casualty is kept apart from real finishes."""
+        known = task_id in self._active_tasks
+        desc = self._active_tasks.pop(task_id, None) or "Görev"
+        self._task_meta.pop(task_id, None)
+        if (status != "completed" and self._cancel_at
+                and time.time() - self._cancel_at <= _STOP_KILL_WINDOW_S):
+            self._stop_killed.append(desc)
+        else:
+            self._done_tasks.append(desc)
+        if known:
+            self._tasks_changed()
+        return desc
+
+    def take_stop_notice(self) -> str:
+        """The line telling the model which background tasks a Stop ended, once."""
+        if not self._stop_killed:
+            return ""
+        names = ", ".join(dict.fromkeys(self._stop_killed))
+        self._stop_killed = []
+        return _STOP_KILLED_NOTICE.format(names=names)
+
+    @property
+    def unprompted_turn_active(self) -> bool:
+        """A CLI turn runs with no listener (unprompted, or its stream went away)."""
+        return self._turn_active and self._out_q is None
+
+    def _begin_turn(self, unprompted: bool = False):
+        if self._drain_state == "grace":
+            # Tasks finished with no turn running. The CLI continuing by itself
+            # IS the continuation; a user/wake turn sees the notification
+            # in-session and the rule is applied again once it ends.
+            if unprompted:
+                self._drain_state = None
+                self._done_tasks = []
+            else:
+                self._drain_state = "after_turn"
         self._turn_active = True
         self._final_text = ""
         self._last_result_text = ""
@@ -1294,15 +1416,13 @@ class ClaudeSDKSession:
         self._think_buf = ""
         self._turn_tokens = 0
         self._msg_tokens_seen = 0
-        self._result_pending = False
-        self._nudges = 0
         self._absorbed_result_at = 0.0
-        # The new turn's wake notice must not carry PREVIOUS turn's task names.
-        self._done_tasks = []
         self._turn_started_at = time.time()
         self._cancel_requested = False
         self._usage_event = None
         self._cancel_grace()
+        if unprompted:
+            self._start_agent_tap()
 
     async def _flush_deltas(self):
         if self._think_buf:
@@ -1317,7 +1437,6 @@ class ClaudeSDKSession:
         if not self._turn_active:
             return
         self._turn_active = False
-        self._result_pending = False
         self._cancel_grace()
         await self._flush_deltas()
         final = self._final_text or self._last_result_text
@@ -1356,71 +1475,54 @@ class ClaudeSDKSession:
             await q.put(None)  # sentinel → stream() biter
         elif final and not error:
             # SSE kapalıyken biten tur (Durdur/kopma sonrası otonom devam) → kaybolmasın.
+            # Its text lives only here: an unprompted turn's ring record carries
+            # it live, and this is its one DB row.
             if _DB_SAVE_CB is not None:
                 try:
                     _DB_SAVE_CB(self.conversation_id, final, self.model)
                     logger.info(f"[ClaudeSDKSession:{self.conversation_id}] otonom tur yanıtı DB'ye kaydedildi ({len(final)} kr)")
                 except Exception:
                     logger.exception("[ClaudeSDKSession] otonom yanıt DB kaydı başarısız")
-            # This text written to the DB stays INVISIBLE until the chat is reloaded.
-            # If a background task actually finished this turn, a wake notice is left.
-            # The condition is kept narrow: waking up on a disconnect where Stop was
-            # pressed, or where no task finished at all, would mean restarting on its
-            # own a job the user had shut down.
-            if self._done_tasks and not self._cancel_requested:
-                self._queue_wake("tasks_done_saved")
+        self._end_agent_tap("error" if error else "done")
+        # Tasks finished while this turn ran: the model saw the notification
+        # in-session; give the CLI the same grace before waking, once.
+        if self._drain_state == "after_turn" and not self._active_tasks:
+            self._drain_state = "grace"
+            self._schedule_grace(_TASKS_DONE_GRACE_S)
 
-    # ── Grace/nudge zamanlayıcıları (arka plan görev orkestrasyonu) ──────
+    # ── Wake-once timer for finished background tasks ───────────────────
     def _cancel_grace(self):
         gt = self._grace_task
         self._grace_task = None
         if gt is not None and not gt.done():
             gt.cancel()
 
-    def _schedule_grace(self, delay: float, action: str):
-        """action: 'nudge' → görevler bitti, CLI kendiliğinden devam etmezse dürt;
-        'finish' → emniyet: turu bitir."""
+    def _schedule_grace(self, delay: float):
         self._cancel_grace()
-        self._grace_task = asyncio.create_task(self._grace_fire(delay, action))
+        self._grace_task = asyncio.create_task(self._grace_fire(delay))
 
-    async def _grace_fire(self, delay: float, action: str):
+    async def _grace_fire(self, delay: float):
+        """No unprompted CLI turn came within the grace (a subagent, measured
+        4 Nov 2026): leave ONE wake notice for the renderer to start the turn."""
         try:
             await asyncio.sleep(delay)
         except asyncio.CancelledError:
             return
-        if action != "nudge" and not self._turn_active:
-            return  # 'finish' yalnızca aktif turda anlamlı; nudge tur kapandıktan sonra da
-                    # çalışabilir (görev geç bitti → devam turu tetiklenir, yanıt DB'ye düşer)
-        if action == "nudge" and (self._turn_active and not self._result_pending):
-            return  # bu arada yeni bir kullanıcı turu başlamış → nudge araya girmesin
-        if action == "nudge" and self._nudges < 1 and not self._cancel_requested and not self._broken:
-            self._nudges += 1
-            logger.info(f"[ClaudeSDKSession:{self.conversation_id}] görevler bitti, otonom devam gelmedi → nudge")
-            await self._emit({"type": "status", "detail": "🔔 Arka plan görevleri bitti — devam ettiriliyor…",
-                              "tokens": self._turn_tokens})
-            try:
-                try:
-                    self._owed_results += 1
-                    await self._client.query(_NUDGE_MESSAGE)
-                except BaseException:
-                    self._owed_results = max(0, self._owed_results - 1)
-                    raise
-                self._result_pending = False
-                self._schedule_grace(_NUDGE_FALLBACK_S, "finish")
-            except Exception:
-                logger.exception("[ClaudeSDKSession] nudge gönderilemedi")
-                await self._finish_turn()
-        else:
-            await self._finish_turn()
+        if self._drain_state != "grace" or self._broken:
+            return
+        if self._turn_active:
+            self._drain_state = "after_turn"
+            return
+        self._drain_state = None
+        logger.info(f"[ClaudeSDKSession:{self.conversation_id}] görevler bitti, CLI kendiliğinden devam etmedi → wake")
+        self._queue_wake("tasks_done")
 
     def _queue_wake(self, reason: str) -> None:
-        """Leave an AUTO-WAKE notice for work that finished with no SSE listening.
+        """Leave an AUTO-WAKE notice for work that finished with no turn to carry it.
 
-        This exists because of a measured blind spot: while `_out_q is None`, the
-        nudge went to the LIVE CLI session, whose reply only landed in the DB, and
-        the user saw nothing until the chat was reloaded. So the "proactive wake"
-        was talking into a void. The notice is queued here instead; `/wake-stream`
-        carries it to the client, and the client starts the next turn itself.
+        `/wake-stream-all` carries it to the client, and the client starts the
+        next turn itself; the CLI's own unprompted turn, when there is one, is
+        followed live through the turn-event ring instead.
         """
         names = ", ".join(self._done_tasks[-3:]) if self._done_tasks else "background work"
         self._done_tasks = []
@@ -1430,19 +1532,20 @@ class ClaudeSDKSession:
         except Exception:
             logger.exception("[ClaudeSDKSession] failed to enqueue wake notification")
 
-    async def _maybe_tasks_drained(self):
-        """Aktif arka plan görevi kalmadıysa: kısa bir süre CLI'ın otonom devam turunu
-        bekle; gelmezse nudge ile devam ettir (proaktif uyanma). Tur watchdog'la
-        kapanmış olsa bile çalışır — geç biten görevin sonucu kaybolmaz (hayalet tur
-        + DB kaydı)."""
-        if self._active_tasks or self._cancel_requested:
+    def _maybe_tasks_drained(self) -> None:
+        """The last running task ended: apply the wake-once rule.
+
+        With no turn running, wait the grace for the CLI's unprompted turn (it
+        comes for a background shell, not for a subagent); with a turn running,
+        apply the same once that turn ends. Tasks a Stop ended wake nothing.
+        """
+        if self._active_tasks or not self._done_tasks:
             return
-        if self._out_q is None:
-            # SSE is closed: no one to nudge. Queue a wake notice instead of a nudge.
-            self._queue_wake("tasks_done")
+        if self._turn_active:
+            self._drain_state = "after_turn"
             return
-        if (self._turn_active and self._result_pending) or not self._turn_active:
-            self._schedule_grace(_TASKS_DONE_GRACE_S, "nudge")
+        self._drain_state = "grace"
+        self._schedule_grace(_TASKS_DONE_GRACE_S)
 
     # ── Mesaj çevirici + tur durum makinesi ──────────────────────────────
     async def _on_message(self, msg):
@@ -1492,6 +1595,8 @@ class ClaudeSDKSession:
         if isinstance(msg, TaskStartedMessage):
             desc = msg.description or "arka plan görevi"
             self._active_tasks[msg.task_id] = desc
+            self._task_meta[msg.task_id] = {"kind": self._task_kind(msg), "started_at": time.time()}
+            self._tasks_changed()
             await self._emit({"type": "status", "scope": "subagent",
                               "detail": f"🤖 Görev başladı: {desc}",
                               "tokens": self._turn_tokens})
@@ -1505,8 +1610,7 @@ class ClaudeSDKSession:
                               "tokens": u.get("total_tokens") or self._turn_tokens})
             return
         if isinstance(msg, TaskNotificationMessage):
-            desc = self._active_tasks.pop(msg.task_id, None) or "Görev"
-            self._done_tasks.append(desc)
+            desc = self._task_ended(msg.task_id, msg.status)
             ok = msg.status == "completed"
             icon = "✅" if ok else ("🛑" if msg.status == "stopped" else "❌")
             await self._emit({"type": "tool_result", "tool": "Subagent", "success": ok,
@@ -1514,16 +1618,15 @@ class ClaudeSDKSession:
             await self._emit({"type": "status",
                               "detail": f"{icon} Görev bitti: {desc}",
                               "tokens": self._turn_tokens})
-            await self._maybe_tasks_drained()
+            self._maybe_tasks_drained()
             return
         if isinstance(msg, TaskUpdatedMessage):
             if msg.status in TERMINAL_TASK_STATUSES and msg.task_id in self._active_tasks:
-                desc = self._active_tasks.pop(msg.task_id, "Görev")
-                self._done_tasks.append(desc)
+                desc = self._task_ended(msg.task_id, msg.status)
                 ok = msg.status == "completed"
                 await self._emit({"type": "tool_result", "tool": "Subagent", "success": ok,
                                   "summary": f"{'✅' if ok else '❌'} {desc}: {msg.status}"})
-                await self._maybe_tasks_drained()
+                self._maybe_tasks_drained()
             return
 
         if isinstance(msg, StreamEvent):
@@ -1562,9 +1665,9 @@ class ClaudeSDKSession:
                 self._owed_results = 1
             if not self._turn_active:
                 # Tur kapandıktan SONRA gelen asistan mesajı = otonom devam turu
-                # (watchdog/stop sonrası geciken task bitişi). "Hayalet tur" aç ki
-                # Result geldiğinde metni DB'ye kaydedilsin — hiçbir yanıt kaybolmasın.
-                self._begin_turn()
+                # (a finished background task, measured 4 Nov 2026). Open it so its
+                # Result saves the text and the ring shows it live.
+                self._begin_turn(unprompted=True)
             self._cancel_grace()  # asistan aktif → otonom devam başladı, bitirme sayacı dursun
             for b in msg.content:
                 if isinstance(b, TextBlock):
@@ -1598,14 +1701,6 @@ class ClaudeSDKSession:
                         await self._emit({"type": "tool_call", "tool": "TodoWrite", "summary": ""})
                     elif b.name in _NOISE_TOOLS:
                         continue  # düşük-değerli iç araçları gizle
-                    elif b.name == "Bash" and inp.get("run_in_background"):
-                        self._bg_shells[tool_id or str(len(self._bg_shells))] = (
-                            str(inp.get("command") or "arka plan komutu")[:120]
-                        )
-                        await self._emit({"type": "tool_call", "tool": b.name,
-                                          "tool_id": tool_id,
-                                          "arguments": _trim_args(inp),
-                                          "summary": _describe_tool(b.name, inp)})
                     else:
                         await self._emit({"type": "tool_call", "tool": b.name,
                                           "tool_id": tool_id,
@@ -1640,16 +1735,6 @@ class ClaudeSDKSession:
                     "summary": first_line,
                     "output": txt,
                 })
-                # The only measurable signal that a background shell has FINISHED:
-                # `BashOutput`'s "completed" status (or the shell being killed).
-                # When a shell ends on its own, the SDK produces no event at all —
-                # so a finish not caught here is never caught anywhere.
-                if self._bg_shells and name in ("BashOutput", "KillShell"):
-                    if name == "KillShell" or "completed" in txt.lower():
-                        _sid, _cmd = next(iter(self._bg_shells.items()))
-                        self._bg_shells.pop(_sid, None)
-                        self._done_tasks.append(f"background command ({_cmd})")
-                        await self._maybe_tasks_drained()
             return
 
         if isinstance(msg, ResultMessage):
@@ -1668,18 +1753,9 @@ class ClaudeSDKSession:
                 return
             self._last_result_text = getattr(msg, "result", "") or ""
             self._usage_event = self._build_usage_event(msg)
-            if getattr(msg, "is_error", False) or self._cancel_requested or not self._active_tasks:
-                await self._finish_turn()
-            else:
-                # Arka plan görevleri sürüyor → turu (SSE'yi) AÇIK tut; kullanıcı
-                # süreci canlı izler, görevler bitince devam otomatik akar.
-                self._result_pending = True
-                names = ", ".join(list(self._active_tasks.values())[:3])
-                await self._flush_deltas()
-                await self._emit({"type": "status",
-                                  "detail": f"⏳ {len(self._active_tasks)} arka plan görevi sürüyor ({names}) — bitince devam edilecek",
-                                  "tokens": self._turn_tokens})
-                self._schedule_grace(_TASKS_WATCHDOG_S, "finish")
+            # Running background tasks never hold the turn: the renderer shows
+            # them from the `bg_tasks` frame and the wake-once rule continues.
+            await self._finish_turn()
             return
 
     async def _on_stream_event(self, msg):
@@ -1716,6 +1792,10 @@ class ClaudeSDKSession:
         elif et == "message_start":
             if self._owed_results == 0:
                 self._owed_results = 1
+            if not self._turn_active:
+                # The CLI started a turn nobody asked for: its deltas come
+                # before its AssistantMessage, so the turn opens here.
+                self._begin_turn(unprompted=True)
             self._msg_tokens_seen = 0
             self._cancel_grace()  # yeni model mesajı başladı → otonom devam geldi
         elif et == "message_delta":
@@ -1782,6 +1862,8 @@ class ClaudeSDKSession:
             # real one went nowhere (audit of 35057cf). Take that turn over: its text
             # is shown here and its Result does not count as this request's answer.
             carried = self._final_text if autonomous else None
+            # The taken-over turn's ring record ends; this request records its own.
+            self._end_agent_tap("done")
             self._begin_turn()
             if carried is not None:
                 if carried:
@@ -1823,8 +1905,6 @@ class ClaudeSDKSession:
                         # limit/yoğunluk backoff'u da olabilir. Kör "düşünüyor" yerine dürüst bilgi.
                         hb["detail"] = (f"⏳ Claude API {stall // 60} dk {stall % 60} sn'dir sessiz — "
                                         "uzun düşünme ya da limit/yoğunluk (otomatik yeniden deneniyor)")
-                    elif self._active_tasks:
-                        hb["detail"] = f"⏳ {len(self._active_tasks)} arka plan görevi sürüyor"
                     yield hb
                     continue
                 if ev is None:

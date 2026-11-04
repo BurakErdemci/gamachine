@@ -22,7 +22,7 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from time import monotonic
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,8 @@ _WAKE_TICKETS: Dict[int, float] = {}
 # reads them here, not from the client's request, when it must know them
 # (mail delivery keeps the other notices of the same frame).
 _TICKET_NOTICES: Dict[int, List[str]] = {}
+# Chats whose last wake turn was deferred once (requeue_deferred).
+_DEFERRED: Set[int] = set()
 
 
 def notice_turn_text(notices) -> str:
@@ -115,6 +117,38 @@ def drain(conv_id: int) -> List[str]:
     out, e.notices = e.notices, []
     e.event.clear()
     return out
+
+
+def drop_mail_notices(conv_id: int) -> None:
+    """A real user message: drop the mail notices (their notes stay queued in the
+    DB and are re-armed after the turn) but KEEP background-task notices, so a
+    task that finished still wakes the chat once the user's turn is over."""
+    e = _QUEUES.get(conv_id)
+    if e is None:
+        return
+    from agentic.mailbox import is_mail_notice
+    e.notices = [n for n in e.notices if not is_mail_notice(n)]
+    if not e.notices:
+        e.event.clear()
+
+
+def requeue_deferred(conv_id: int, notices: List[str]) -> bool:
+    """A wake turn could not start (session busy): queue its notices again, once.
+
+    Returns False when this chat's wake was already deferred once; the notices
+    are dropped then, so a session that stays busy cannot loop wakes."""
+    if conv_id in _DEFERRED:
+        _DEFERRED.discard(conv_id)
+        return False
+    _DEFERRED.add(conv_id)
+    for n in notices:
+        enqueue(conv_id, n)
+    return True
+
+
+def wake_ran(conv_id: int) -> None:
+    """A wake turn started: a later busy session may defer again."""
+    _DEFERRED.discard(conv_id)
 
 
 def issue_ticket(conv_id: int, notices: Optional[List[str]] = None) -> None:
@@ -230,3 +264,4 @@ def reset_all() -> None:
     _QUEUES.clear()
     _WAKE_TICKETS.clear()
     _TICKET_NOTICES.clear()
+    _DEFERRED.clear()

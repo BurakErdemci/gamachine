@@ -79,6 +79,15 @@ It does not go through CHANNEL: the route puts it on its own stream's queue.
     {"type": "turn_live", "conversation_id": int,
      "kind": "turn_start" | "text" | "tool_call" | "turn_end", "seq": int}
 
+A chat's running background tasks (claude_sdk_session's snapshot) ride the
+same stream, owner-checked like `turn_live`, whenever they change and once per
+chat when a stream connects while some run; an empty list clears them. They
+are data, not a turn: the renderer shows a quiet row and keeps the chat idle.
+
+    {"type": "bg_tasks", "conversation_id": int,
+     "tasks": [{"task_id": str, "desc": str, "kind": "agent" | "bash" | "other",
+                "started_at": <epoch s>}, ...]}
+
 The command frames (`DESKTOP_ONLY_TYPES`) are for the desktop renderer alone:
 a browser's copy of `/wake-stream-all` leaves them out.
 """
@@ -99,6 +108,7 @@ COMPUTER_HALTED_TYPE = "computer_halted"
 IPC_TYPE = "remote_ipc"
 IPC_SUBSCRIBE_TYPE = "remote_ipc_subscribe"
 TURN_LIVE_TYPE = "turn_live"
+BG_TASKS_TYPE = "bg_tasks"
 TURN_LIVE_KINDS = frozenset({"turn_start", "text", "tool_call", "turn_end"})
 DESKTOP_ONLY_TYPES = frozenset({FRAME_TYPE, EFFORT_SET_TYPE, IPC_TYPE, IPC_SUBSCRIBE_TYPE})
 QUEUE_SIZE = 100

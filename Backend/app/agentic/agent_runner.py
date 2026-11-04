@@ -1204,7 +1204,11 @@ class AgentRunner:
         read_only: bool = False,
         mail_depth: int = 0,
         side_turn: Optional[SideTurn] = None,
+        task_wake: bool = False,
     ):
+        # A wake turn for finished background tasks: a busy Claude session
+        # defers it instead of being reset (the reset kills the CLI's tasks).
+        self.task_wake = bool(task_wake)
         # Side chat: no write of any kind on any path, whatever the approval
         # mode. The route derives it from the DB (`side_of`), never the client.
         self.read_only = bool(read_only)
@@ -2555,6 +2559,13 @@ Kullanıcı hangi dilde yazıyorsa o dilde cevap ver; mesajın dili belli değil
                 cleanup_dir(_att_dir)
                 return
             except Exception as e:
+                if (isinstance(e, SessionBusyError) and _yielded == 0
+                        and getattr(self, "task_wake", False) and not session._broken):
+                    # A wake never resets the session: the route queues it again.
+                    logger.info(f"[ClaudeSession] wake deferred, session busy ({e})")
+                    cleanup_dir(_att_dir)
+                    yield _done_event(0, "wake_deferred")
+                    return
                 # Event akmadan patladıysa (busy/kopuk) güvenle resetleyip tekrar dene;
                 # akış ortasında patladıysa retry çift metin basar → direkt hata göster.
                 if _attempt == 1 and _yielded == 0:

@@ -167,14 +167,15 @@ def test_wake_ticket_cannot_be_consumed_twice():
     assert wake_queue.consume_ticket(1) is False
 
 
-def test_user_turn_is_stored_with_user_role_and_cancels_pending_wake():
+def test_user_turn_is_stored_with_user_role_and_keeps_a_pending_task_notice():
     db = _db()
     wake_queue.enqueue(1, "pending notice")
     wake_queue.bump_chain(1)
     _chat_stream(db, origin="user")
     assert db.add_message.call_args_list[0].args[1] == "user"
-    # The human is back in the loop: both the pending notice and the counter drop.
-    assert wake_queue.pending(1) == 0
+    # The human is back in the loop, so the chain counter drops; a finished background task's notice
+    # stays, so its result still reaches the model after this turn (owner decision, 4 Nov 2026).
+    assert wake_queue.pending(1) == 1
     assert wake_queue.chain(1) == 0
 
 

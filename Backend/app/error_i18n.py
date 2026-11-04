@@ -68,7 +68,6 @@ EN: dict[str, str] = {
     "Sırada — başka bir agy sohbetinin turu bitince başlayacak":
         "Queued — will start when another agy chat finishes its turn",
     "Çalışıyor…": "Working…",
-    "🔔 Arka plan görevleri bitti — devam ettiriliyor…": "🔔 Background tasks finished — resuming…",
     "Codex app-server süreci beklenmedik şekilde kapandı.": "The Codex app-server process exited unexpectedly.",
     "AI yanıt üretemedi.": "AI could not produce a response.",
     "⚠️ Claude session yanıt vermedi — yeniden başlatılıyor…": "⚠️ Claude session did not respond — restarting…",
@@ -205,9 +204,6 @@ PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"🤖 Görev başladı: (?P<desc>.*)", re.DOTALL), "🤖 Task started: {desc}"),
     (re.compile(r"(?P<icon>.+) Görev bitti: (?P<desc>.*)", re.DOTALL), "{icon} Task finished: {desc}"),
     (re.compile(r"🤖 Subagent çalışıyor: (?P<desc>.*)", re.DOTALL), "🤖 Subagent running: {desc}"),
-    (re.compile(r"⏳ (?P<count>.+) arka plan görevi sürüyor \((?P<names>.*)\) — bitince devam edilecek", re.DOTALL),
-     "⏳ {count} background tasks running ({names}) — will resume when finished"),
-    (re.compile(r"⏳ (?P<count>.+) arka plan görevi sürüyor", re.DOTALL), "⏳ {count} background tasks running"),
     (re.compile(r"(?P<provider>.+) API key kaydedildi\.", re.DOTALL), "{provider} API key saved."),
     (re.compile(r"⏳ (?P<model>.+) (?P<seconds>.+) sn'dir yanıt vermedi — sağlayıcı hâlâ işliyor \(Durdur ile iptal edebilirsin\)", re.DOTALL),
      "⏳ {model} has not responded for {seconds}s — the provider is still processing (use Stop to cancel)"),

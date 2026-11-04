@@ -1418,6 +1418,11 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
             sess = peek_session(conv_id)
             if sess is not None and sess._active_gate_ids:
                 return "gate_pending"
+            # The CLI's own unprompted turn (no listener, no lock) is the
+            # continuation of finished background work: a wake on top of it
+            # would continue twice.
+            if sess is not None and sess.unprompted_turn_active:
+                return "turn_running"
         except Exception:
             logger.exception("[wake] block check failed")
             # If we can't measure it, don't wake: a silent false trigger would
@@ -1530,6 +1535,7 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
             loop = asyncio.get_running_loop()
             owners: Dict[int, Any] = {}
 
+            # Also carries `bg_tasks` frames: the same owner check, same queue.
             def offer_turn_live(frame: dict) -> None:
                 conv_id = frame["conversation_id"]
                 if conv_id not in owners:
@@ -1562,7 +1568,22 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
                 except RuntimeError:
                     pass  # the loop is closed: the stream is gone
 
+            def offer_bg_tasks(conv_id: int, tasks: list) -> None:
+                offer_turn_live({"type": desktop_channel.BG_TASKS_TYPE,
+                                 "conversation_id": conv_id, "tasks": tasks})
+
+            def bg_tasks_listener(conv_id: int, tasks: list) -> None:
+                try:
+                    loop.call_soon_threadsafe(offer_bg_tasks, conv_id, list(tasks))
+                except RuntimeError:
+                    pass  # the loop is closed: the stream is gone
+
+            from providers import claude_sdk_session as _claude_sessions
             turn_events.RING.add_listener(ring_listener)
+            _claude_sessions.add_bg_tasks_listener(bg_tasks_listener)
+            # A stream that connects while tasks run learns them at once.
+            for _conv, _tasks in _claude_sessions.bg_tasks_snapshots().items():
+                offer_bg_tasks(_conv, _tasks)
             try:
                 # A reloaded desktop renderer lost the event listeners browsers
                 # still want; it fetches /remote/ui-ipc-subscriptions on this.
@@ -1621,6 +1642,7 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
                 logger.exception("[wake] all-chats stream error")
             finally:
                 turn_events.RING.remove_listener(ring_listener)
+                _claude_sessions.remove_bg_tasks_listener(bg_tasks_listener)
                 desktop_channel.CHANNEL.unlisten(remote_q)
 
         return StreamingResponse(localize_sse(gen(), x_ui_lang), media_type="text/event-stream")
@@ -2242,10 +2264,11 @@ Max 300 kelime. Türkçe yaz.
                 db.add_message(request.conversation_id, "system",
                                _wake_text or request.message)
         else:
-            # A real user message CANCELS any pending wakes: the human is back
+            # A real user message CANCELS pending mail wakes: the human is back
             # in the loop and decides the next step. Queued notes stay in the
-            # DB and are re-armed once this turn is over.
-            wake_queue.drain(request.conversation_id)
+            # DB and are re-armed once this turn is over. Background-task
+            # notices stay: that work finished and still needs its continuation.
+            wake_queue.drop_mail_notices(request.conversation_id)
             wake_queue.reset_chain(request.conversation_id)
             # The user's next message ends a computer-use Stop; a wake that lost its ticket is not one.
             if request.origin != "wake":
@@ -2257,6 +2280,18 @@ Max 300 kelime. Türkçe yaz.
             except Exception:
                 _end_turn_reply(request.conversation_id, _turn_user_row, None, "error")
                 raise
+
+        # Background tasks a Stop ended: one line in front of this turn's
+        # message tells the model; the chat shows it as a system row.
+        try:
+            from providers.claude_sdk_session import peek_session as _peek_claude
+            _claude = _peek_claude(request.conversation_id)
+            _stop_notice = _claude.take_stop_notice() if _claude is not None else ""
+            if _stop_notice:
+                db.add_message(request.conversation_id, "system", _stop_notice)
+                turn_message = f"{_stop_notice}\n\n{turn_message}"
+        except Exception:
+            logger.exception("[bg-tasks] conv=%s stop notice not stored", request.conversation_id)
 
         # A turn that fails before its stream starts still ends its record.
         try:
@@ -2306,6 +2341,7 @@ Max 300 kelime. Türkçe yaz.
                 ultracode=request.ultracode,
                 resume_id=_resume_id,
                 mail_depth=mail_depth,
+                task_wake=bool(ticketed_wake and not mail_rows),
             )
         except Exception:
             _end_turn_reply(request.conversation_id, _turn_user_row, None, "error")
@@ -2347,6 +2383,13 @@ Max 300 kelime. Türkçe yaz.
                     entry.add(event)
                     turn_reply.add(event)
                     tap.feed(event)
+                    if event.type == "done" and (event.data or {}).get("stop_reason") == "wake_deferred":
+                        # The session was busy: no turn ran and nothing reset it.
+                        if not wake_queue.requeue_deferred(request.conversation_id, wake_notices):
+                            logger.info("[wake] conv=%s deferred twice -> notices dropped",
+                                        request.conversation_id)
+                    elif ticketed_wake and event.type != "status":
+                        wake_queue.wake_ran(request.conversation_id)
                     if event.type == "done":
                         ended_normally = ((event.data or {}).get("stop_reason")
                                           or "complete") == "complete"

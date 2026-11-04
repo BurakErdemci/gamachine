@@ -1,35 +1,54 @@
-"""Stop (and "send now") while only background tasks hold the turn open.
+"""Background tasks never hold a Claude turn open (owner decision, 4 Nov 2026).
 
-Measured 10 Oct 2026: the agent had answered and was waiting on a background bot
-run when the user pressed "send now". `cancel_turn` called `interrupt()` on a CLI
-that had nothing running, no Result followed, and after the 10 s wait the session
-was hard-reset. The CLI died with its background shells, and the next turn opened
-on "Background shell command didn't finish before the previous session ended".
+The model answers, the turn ends, the composer is free; a running task is data
+(`bg_tasks`), not a turn. When the last task ends with no turn running, the
+CLI's own unprompted turn is the continuation (a background shell, measured
+4 Nov 2026); if none comes within the grace (a subagent), ONE wake notice is
+left for the renderer. Stop with no model turn running is a no-op for the
+session: the hard reset it used to reach killed the background shells
+(measured 10 Oct 2026, "Background shell command didn't finish before the
+previous session ended").
 """
 import asyncio
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app"))
 
 import providers.claude_sdk_session as cs
+from agentic import turn_events, wake_queue
+
+
+@pytest.fixture(autouse=True)
+def _clean_state():
+    wake_queue.reset_all()
+    turn_events.RING.reset()
+    yield
+    wake_queue.reset_all()
+    turn_events.RING.reset()
 
 
 async def _noop():
     return None
 
 
-def _session(result_pending: bool):
+def _session(turn_active: bool, tasks: bool):
     sess = cs.ClaudeSDKSession.__new__(cs.ClaudeSDKSession)
     sess.conversation_id = 4242
-    sess._turn_active = True
-    sess._result_pending = result_pending
+    sess._turn_active = turn_active
     sess._cancel_requested = False
     sess._cancel_event = asyncio.Event()
     sess._active_gate_ids = set()
-    sess._active_tasks = {"t1": "bot run"} if result_pending else {}
+    sess._active_tasks = {"t1": "bot run"} if tasks else {}
+    sess._task_meta = {}
     sess._done_tasks = []
+    sess._stop_killed = []
+    sess._drain_state = None
+    sess._agent_tap = None
+    sess._cancel_at = 0.0
     sess._out_q = asyncio.Queue()
     sess._usage_event = None
     sess._final_text = "Waiting for the bot run."
@@ -51,24 +70,23 @@ def _drain(q: asyncio.Queue) -> list:
     return out
 
 
-def test_stop_while_waiting_on_background_tasks_keeps_the_session():
-    sess = _session(result_pending=True)
+def test_stop_with_no_model_turn_while_tasks_run_is_a_noop():
+    sess = _session(turn_active=False, tasks=True)
     cs._SESSIONS[sess.conversation_id] = sess
     try:
         asyncio.run(sess.cancel_turn())
-        assert not sess._turn_active
         sess._client.interrupt.assert_not_awaited()
         sess.close.assert_not_awaited()
         assert cs._SESSIONS.get(sess.conversation_id) is sess
-        events = _drain(sess._out_q)
-        assert events.count("done") == 1 and "error" not in events, events
-        assert events[-1] is None
+        assert sess._active_tasks == {"t1": "bot run"}
+        assert not sess._cancel_requested
+        assert _drain(sess._out_q) == []
     finally:
         cs._SESSIONS.pop(sess.conversation_id, None)
 
 
 def test_stop_during_a_running_model_turn_still_interrupts():
-    sess = _session(result_pending=False)
+    sess = _session(turn_active=True, tasks=False)
 
     async def _interrupt():
         sess._turn_active = False  # the CLI answers the interrupt with a Result
@@ -85,7 +103,12 @@ def test_stop_during_a_running_model_turn_still_interrupts():
 
 def test_the_next_turn_starts_without_the_stop_flag():
     """A later task notification must not be swallowed as 'user stopped it'."""
-    sess = _session(result_pending=True)
+    sess = _session(turn_active=True, tasks=True)
+
+    async def _interrupt():
+        sess._turn_active = False
+
+    sess._client.interrupt = AsyncMock(side_effect=_interrupt)
     asyncio.run(sess.cancel_turn())
     assert sess._cancel_requested
     sess._begin_turn()
@@ -166,21 +189,6 @@ def test_a_request_after_a_finished_autonomous_turn_is_not_held_open():
     assert next(e["content"] for e in events if e.get("type") == "response") == "Done."
 
 
-def test_a_request_while_a_listener_less_turn_only_waits_on_tasks_is_not_held_open():
-    """`_result_pending` with no listener: the Result already came, none is owed."""
-    sess = _live_session()
-
-    async def run():
-        sess._begin_turn()
-        sess._result_pending = True  # its Result came; the task has since ended unnoticed
-        return await _collect(sess, "status?", [_assistant("Still here."), _result("Still here.")])
-
-    events = asyncio.run(run())
-    types = [e.get("type") for e in events]
-    assert types.count("done") == 1, types
-    assert next(e["content"] for e in events if e.get("type") == "response") == "Still here."
-
-
 async def _start_stream(sess, message, events):
     async def consume():
         async for ev in sess.stream(message, lock_timeout=0):
@@ -214,32 +222,36 @@ async def _answer(sess, task, events, text="OWN answer"):
     assert sess._owed_results == 0
 
 
-def test_a_nudge_result_does_not_end_a_new_user_stream():
+def test_a_result_with_tasks_running_ends_the_turn():
     async def run():
-        from claude_agent_sdk import TaskNotificationMessage, TaskStartedMessage
+        from claude_agent_sdk import TaskStartedMessage
 
         sess = _live_session()
-        first = await _start_stream(sess, "first", [])
-        try:
-            await sess._on_message(TaskStartedMessage("task_started", {}, "task", "worker", "t", "s1"))
-            await sess._on_message(_result("first"))
-            await sess._on_message(TaskNotificationMessage(
-                "task_notification", {}, "task", "completed", "unused", "done", "n", "s1"))
-            first.cancel()
-            await asyncio.gather(first, return_exceptions=True)
-            sess._cancel_grace()
-            await sess._grace_fire(0, "nudge")
-            assert sess._client.query.await_args.args == (cs._NUDGE_MESSAGE,)
-            assert sess._owed_results == 1
-            events = []
-            current = await _start_stream(sess, "new user request", events)
-            assert sess._owed_results == 2
-            await _assert_waiting(sess, current, events, _result("old nudge result"))
-            await _answer(sess, current, events)
-        finally:
-            sess._cancel_grace()
-            first.cancel()
-            await asyncio.gather(first, return_exceptions=True)
+        events = []
+        current = await _start_stream(sess, "start the bot run", events)
+        await sess._on_message(TaskStartedMessage("task_started", {}, "t", "bot run", "u", "s1",
+                                                  task_type="local_bash"))
+        await _answer(sess, current, events, "Started it in the background.")
+        assert not sess._turn_active and sess._active_tasks == {"t": "bot run"}
+        assert not hasattr(sess, "_result_pending")
+        assert [t["kind"] for t in sess.bg_tasks()] == ["bash"]
+
+    asyncio.run(run())
+
+
+def test_a_user_message_while_tasks_run_is_a_normal_turn():
+    async def run():
+        sess = _live_session()
+        sess._active_tasks = {"t": "subagent"}
+        sess._client.interrupt = AsyncMock()
+        sess.close = AsyncMock()
+        events = []
+        current = await _start_stream(sess, "meanwhile, a question", events)
+        await _answer(sess, current, events, "An answer.")
+        assert sess._client.query.await_args.args == ("meanwhile, a question",)
+        sess._client.interrupt.assert_not_awaited()
+        sess.close.assert_not_awaited()
+        assert sess._active_tasks == {"t": "subagent"}
 
     asyncio.run(run())
 
@@ -310,19 +322,19 @@ def test_stop_during_takeover_preserves_the_queued_requests_result_debt():
     asyncio.run(run())
 
 
-def test_watchdog_finish_preserves_the_still_open_cli_turns_result_debt():
+def test_a_stream_that_went_away_preserves_the_still_open_cli_turns_result_debt():
     async def run():
         sess = _live_session()
         first_events = []
         first = await _start_stream(sess, "first request", first_events)
         await sess._on_message(_assistant("OLD partial"))
-        await sess._grace_fire(0, "finish")
-        await asyncio.wait_for(first, timeout=1)
-        assert not sess._turn_active and sess._out_q is None
+        first.cancel()
+        await asyncio.gather(first, return_exceptions=True)
+        assert sess._turn_active and sess._out_q is None and sess.unprompted_turn_active
         assert sess._owed_results == 1
         events = []
         current = await _start_stream(sess, "new user request", events)
-        await _assert_waiting(sess, current, events, _result("OLD watchdog result"))
+        await _assert_waiting(sess, current, events, _result("OLD result"))
         await _answer(sess, current, events)
 
     asyncio.run(run())
@@ -412,7 +424,7 @@ def test_owed_result_idle_safety_valve_requires_absorption_and_no_backoff_or_tas
 
 def test_query_failures_roll_back_only_the_new_result_debt():
     async def run():
-        for message in ("user", "nudge"):
+        for message in ("user",):
             for failure in (RuntimeError("offline query failed"), asyncio.CancelledError()):
                 sess = _live_session()
                 sess._owed_results = 1
@@ -422,15 +434,9 @@ def test_query_failures_roll_back_only_the_new_result_debt():
                     raise failure
 
                 sess._client.query.side_effect = fail_query
-                try:
-                    if message == "user":
-                        await anext(sess.stream("new query", lock_timeout=0))
-                    else:
-                        await sess._grace_fire(0, "nudge")
-                except (RuntimeError, asyncio.CancelledError) as exc:
-                    assert exc is failure
-                else:
-                    assert message == "nudge" and isinstance(failure, RuntimeError)
+                with pytest.raises((RuntimeError, asyncio.CancelledError)) as exc:
+                    await anext(sess.stream("new query", lock_timeout=0))
+                assert exc.value is failure
                 assert sess._owed_results == 1
                 assert not sess._turn_lock.locked() and sess._out_q is None
 
@@ -464,5 +470,166 @@ def test_closing_the_session_clears_all_owed_results():
         sess._owed_results = 3
         await sess.close()
         assert sess._owed_results == 0 and sess._client is None
+
+    asyncio.run(run())
+
+
+# ── Wake exactly once when background tasks finish ───────────────────────────
+def _started(task_id="t", desc="worker", task_type="local_agent"):
+    from claude_agent_sdk import TaskStartedMessage
+    return TaskStartedMessage("task_started", {}, task_id, desc, "u", "s1", task_type=task_type)
+
+
+def _notified(task_id="t", status="completed"):
+    from claude_agent_sdk import TaskNotificationMessage
+    return TaskNotificationMessage("task_notification", {}, task_id, status, "out", "done", "n", "s1")
+
+
+def _stream_event(event):
+    from claude_agent_sdk import StreamEvent
+    return StreamEvent("e", "s1", event)
+
+
+GRACE = 0.05
+
+
+def test_an_unprompted_cli_turn_is_recorded_and_not_followed_by_a_wake():
+    async def run():
+        sess = _live_session()
+        saver = MagicMock()
+        with patch.object(cs, "_TASKS_DONE_GRACE_S", GRACE), patch.object(cs, "_DB_SAVE_CB", saver):
+            await sess._on_message(_started("b", "npm run build", "local_bash"))
+            await sess._on_message(_notified("b"))
+            assert sess._drain_state == "grace"
+            # ~50 ms later the CLI answers the task result by itself (case A).
+            await sess._on_message(_stream_event({"type": "message_start"}))
+            assert sess.unprompted_turn_active
+            await sess._on_message(_stream_event({
+                "type": "content_block_delta", "delta": {"type": "text_delta", "text": "Build is green."}}))
+            await sess._on_message(_assistant("Build is green."))
+            await sess._on_message(_result("Build is green."))
+            await asyncio.sleep(GRACE * 4)
+        assert not sess._turn_active and sess._owed_results == 0
+        assert wake_queue.pending(sess.conversation_id) == 0
+        saver.assert_called_once()
+        assert saver.call_args.args[1] == "Build is green."
+        turn_events.RING.flush(sess.conversation_id)
+        events = turn_events.RING.since(sess.conversation_id)["events"]
+        kinds = [e["kind"] for e in events]
+        assert kinds[0] == "turn_start" and kinds[-1] == "turn_end", kinds
+        assert events[0]["origin"] == "agent"
+        assert events[-1]["status"] == "done"
+        assert "Build is green." in "".join(e.get("content", "") for e in events if e["kind"] == "text")
+
+    asyncio.run(run())
+
+
+def test_a_subagent_end_with_no_unprompted_turn_wakes_exactly_once():
+    async def run():
+        sess = _live_session()
+        with patch.object(cs, "_TASKS_DONE_GRACE_S", GRACE):
+            await sess._on_message(_started("a", "audit the scene"))
+            await sess._on_message(_notified("a"))
+            await asyncio.sleep(GRACE / 5)
+            assert wake_queue.pending(sess.conversation_id) == 0  # still in the grace
+            await asyncio.sleep(GRACE * 4)
+            assert wake_queue.drain(sess.conversation_id) == ["tasks_done|audit the scene"]
+            await asyncio.sleep(GRACE * 4)
+            assert wake_queue.pending(sess.conversation_id) == 0
+            assert sess._drain_state is None and sess._done_tasks == []
+
+    asyncio.run(run())
+
+
+def test_tasks_ending_during_a_user_turn_apply_the_rule_once_after_it():
+    async def run():
+        sess = _live_session()
+        with patch.object(cs, "_TASKS_DONE_GRACE_S", GRACE):
+            await sess._on_message(_started("a", "audit"))
+            events = []
+            current = await _start_stream(sess, "meanwhile", events)
+            await sess._on_message(_notified("a"))
+            assert sess._drain_state == "after_turn"
+            await asyncio.sleep(GRACE * 3)
+            assert wake_queue.pending(sess.conversation_id) == 0  # the turn sees it in-session
+            await _answer(sess, current, events)
+            assert sess._drain_state == "grace"
+            await asyncio.sleep(GRACE * 4)
+            assert wake_queue.drain(sess.conversation_id) == ["tasks_done|audit"]
+
+    asyncio.run(run())
+
+
+def test_a_user_turn_during_the_grace_defers_the_rule_to_its_end():
+    async def run():
+        sess = _live_session()
+        with patch.object(cs, "_TASKS_DONE_GRACE_S", GRACE):
+            await sess._on_message(_started("a", "audit"))
+            await sess._on_message(_notified("a"))
+            events = []
+            current = await _start_stream(sess, "hi", events)
+            assert sess._drain_state == "after_turn"
+            await asyncio.sleep(GRACE * 3)
+            assert wake_queue.pending(sess.conversation_id) == 0
+            await _answer(sess, current, events)
+            await asyncio.sleep(GRACE * 4)
+            assert wake_queue.drain(sess.conversation_id) == ["tasks_done|audit"]
+
+    asyncio.run(run())
+
+
+def test_a_stop_that_kills_tasks_tells_the_next_turn_and_wakes_nothing():
+    async def run():
+        from claude_agent_sdk import TaskUpdatedMessage
+
+        sess = _live_session()
+        sess.close = AsyncMock()
+        with patch.object(cs, "_TASKS_DONE_GRACE_S", GRACE):
+            await sess._on_message(_started("a", "audit"))
+            await sess._on_message(_started("b", "dev server", "local_bash"))
+            events = []
+            current = await _start_stream(sess, "go", events)
+
+            async def interrupt():
+                await sess._on_message(_notified("a", "stopped"))
+                await sess._on_message(TaskUpdatedMessage("task_updated", {}, "b", {"status": "killed"},
+                                                          status="killed"))
+                await sess._on_message(_result("stopped"))
+
+            sess._client.interrupt = AsyncMock(side_effect=interrupt)
+            await sess.cancel_turn()
+            await asyncio.wait_for(current, timeout=1)
+            sess.close.assert_not_awaited()
+            await asyncio.sleep(GRACE * 4)
+        assert not sess._active_tasks
+        assert wake_queue.pending(sess.conversation_id) == 0
+        notice = sess.take_stop_notice()
+        assert notice == "[Sistem] Durdurma şu arka plan işlerini kesti: audit, dev server. Gerekirse yeniden başlat."
+        assert sess.take_stop_notice() == ""
+
+    asyncio.run(run())
+
+
+def test_every_task_start_and_end_is_published():
+    async def run():
+        sess = _live_session()
+        seen = []
+
+        def listener(cid, tasks):
+            seen.append((cid, [t["desc"] for t in tasks]))
+
+        cs.add_bg_tasks_listener(listener)
+        try:
+            with patch.object(cs, "_TASKS_DONE_GRACE_S", GRACE):
+                await sess._on_message(_started("a", "audit"))
+                await sess._on_message(_started("b", "build", "local_bash"))
+                await sess._on_message(_notified("a"))
+                await sess._on_message(_notified("b"))
+                sess._cancel_grace()
+        finally:
+            cs.remove_bg_tasks_listener(listener)
+        cid = sess.conversation_id
+        assert seen == [(cid, ["audit"]), (cid, ["audit", "build"]), (cid, ["build"]), (cid, [])]
+        assert sess.bg_tasks_version == 4
 
     asyncio.run(run())

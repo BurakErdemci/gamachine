@@ -438,6 +438,8 @@ export const tr = {
   'notice.detail': 'Teknik ayrıntı',
   'notice.wakeChainExhausted': 'Arka plan işleri bitince sohbet kendiliğinden üst üste 3 kez devam etti; dördüncüsü başlatılmadı. Bu bir hata değil — sen yokken sonsuza kadar dönmemesi için konmuş bir sınır. Devam etmesini istiyorsan bir mesaj yaz.',
   'chat.wakeRow': 'Arka plan işi bitti — sohbet kendiliğinden devam etti',
+  'chat.bgTasks.running': '⏳ Arka planda {n} iş sürüyor: {names}',
+  'chat.bgTasks.more': '+{k}',
   'chat.wakeRow.tasks_done_saved': 'Arka plan görevleri bitti ve tur kaydedildi',
   'chat.wakeRow.tasks_done': 'Arka plan görevleri bitti',
   // Sağlayıcı hataları: backend `code` + hazır metin gönderiyor; kodu
@@ -2523,6 +2525,8 @@ export const en: Record<keyof typeof tr, string> = {
   'notice.detail': 'Technical detail',
   'notice.wakeChainExhausted': 'The chat carried on by itself 3 times in a row as background jobs finished; the fourth was not started. This is not a failure — it is a limit so it cannot loop forever while you are away. Send a message if you want it to keep going.',
   'chat.wakeRow': 'Background job finished — the chat continued on its own',
+  'chat.bgTasks.running': '⏳ {n} background tasks running: {names}',
+  'chat.bgTasks.more': '+{k}',
   'chat.wakeRow.tasks_done_saved': 'background tasks finished and the turn was saved',
   'chat.wakeRow.tasks_done': 'background tasks finished',
   'error.providerQuota': 'The provider refused the request on all three attempts because of a quota or rate limit. Wait a while and try again, or switch to another model.',

@@ -32,6 +32,7 @@ import { McpApprovalCards } from './McpApprovalCards';
 import { MessageNotices } from './MessageNotices';
 import { modelFamily } from '../../lib/modelFamily';
 import { invokeVia } from '../../hooks/home/useFileSystem';
+import { useBgTasks, type BgTask } from '../../hooks/home/useChat';
 
 /**
  * hh:mm for a message's author line. The backend stores naive local "YYYY-MM-DD HH:MM:SS" (no
@@ -74,6 +75,34 @@ const Working: React.FC<{ text: string; tokens?: string | null; elapsed: string 
     <span className="working-meta num">· {elapsed}</span>
   </div>
 );
+
+/** At most this many task names in the background row, then "+k". */
+const BG_TASK_NAMES = 3;
+
+/**
+ * The quiet line for background tasks that run while no turn does: no spinner,
+ * no stop, the composer stays free. The elapsed time is the oldest task's.
+ */
+const BgTasksRow: React.FC<{ tasks: BgTask[] }> = ({ tasks }) => {
+  const { t } = useLang();
+  const [now, setNow] = useState(() => Date.now() / 1000);
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now() / 1000), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const names = tasks.slice(0, BG_TASK_NAMES).map(task => stripBidi(task.desc)).join(', ')
+    + (tasks.length > BG_TASK_NAMES ? ` ${t('chat.bgTasks.more', { k: String(tasks.length - BG_TASK_NAMES) })}` : '');
+  const starts = tasks.map(task => task.started_at).filter((v): v is number => typeof v === 'number');
+  const secs = starts.length ? Math.max(0, Math.floor(now - Math.min(...starts))) : null;
+  return (
+    <div className="bg-tasks-row" data-testid="bg-tasks-row" aria-live="polite">
+      <span className="bg-tasks-text">{t('chat.bgTasks.running', { n: String(tasks.length), names })}</span>
+      {secs !== null && (
+        <span className="working-meta num">· {Math.floor(secs / 60)}:{String(secs % 60).padStart(2, '0')}</span>
+      )}
+    </div>
+  );
+};
 
 /** Fixed start of a stored note between chats (backend `mailbox.MAIL_MARKER`). */
 export const MAIL_MARKER = '📨';
@@ -216,6 +245,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   phonePaired,
 }) => {
   const { t } = useLang();
+  const bgTasks = useBgTasks(activeConvId);
   // A card keeps the file/workspace it was created for across editor navigation.
   const fixTarget = useRef<{ data: DiffData; path: string | null; workspace: string | null } | null>(null);
   if (!pendingFix) fixTarget.current = null;
@@ -681,6 +711,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             elapsed={fmtElapsed(elapsedSec)}
           />
         )}
+
+        {/* Background tasks with no turn running: data, not a turn. */}
+        {!loading && bgTasks.length > 0 && <BgTasksRow tasks={bgTasks} />}
 
         {/* MCP onay kartları — mesaj listesinin DIŞINDA, tek bileşende.
             Kartların markup'ı `McpApprovalCards`'ta duruyor çünkü aynı kartlar

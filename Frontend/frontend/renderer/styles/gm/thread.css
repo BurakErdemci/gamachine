@@ -169,6 +169,9 @@
 .dots i:nth-child(3) { animation-delay: .32s; }
 @keyframes dot-hop { 0%, 30%, 100% { transform: none; } 15% { transform: translateY(-2px); } }
 .working-label { display: none; }
+/* Background tasks with no turn running: quiet, no dots. */
+.bg-tasks-row { display: flex; align-items: center; gap: 6px; font-size: var(--fs-small); color: var(--ink-faint); min-height: 24px; }
+.bg-tasks-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .step { display: inline-block; overflow: hidden; }
 .step-text { display: inline-block; }
 .step-text.is-out { animation: step-out var(--g-dur-quick) var(--g-ease-exit) forwards; }

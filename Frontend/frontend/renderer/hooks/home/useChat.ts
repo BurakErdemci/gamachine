@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import { useState, useCallback, useEffect, useRef, useMemo, useSyncExternalStore } from 'react';
 import { flushSync } from 'react-dom';
 import axios from 'axios';
 import { Message, Conversation, UserData, AIConfig, GenerationMode, toGenerationMode, ChatActivity, ContextUsage } from '../../components/home/types';
@@ -19,6 +19,54 @@ import { handleRemoteIpcFrame } from '../../lib/remote/desktopRunner';
 import { addBrowserChips, captureNoteShots, clearBrowserPins, dropChatBrowser, formatBrowserContext, MAX_MESSAGE_IMAGES, notesTab, releaseBrowser, CAPTURE_WAIT_MS, RELEASE_WAIT_MS, takeBrowserChips, withinMs, type BrowserChip } from '../../lib/browserNotes';
 
 const ipc = typeof window !== 'undefined' ? (window as any).ipc : null;
+
+/** One running background task of a chat, from the `bg_tasks` frame. */
+export type BgTask = { task_id: string; desc: string; kind: 'agent' | 'bash' | 'other'; started_at: number | null };
+
+// Per-chat running background tasks. Data, not a turn: they never set
+// `loading`, so the composer stays free while they run. A store outside the
+// runtimes so the chat panel reads it by chat id without a new prop.
+const NO_BG_TASKS: BgTask[] = [];
+const bgTasksByConv = new Map<number, BgTask[]>();
+const bgTasksListeners = new Set<() => void>();
+
+function emitBgTasks(): void {
+  for (const fn of bgTasksListeners) fn();
+}
+
+function parseBgTasks(raw: unknown): BgTask[] {
+  if (!Array.isArray(raw)) return NO_BG_TASKS;
+  return raw.filter(t => t && typeof t === 'object').map((t: any) => ({
+    task_id: String(t.task_id ?? ''),
+    desc: String(t.desc ?? ''),
+    kind: t.kind === 'agent' || t.kind === 'bash' ? t.kind : 'other',
+    started_at: typeof t.started_at === 'number' ? t.started_at : null,
+  }));
+}
+
+export function setBgTasks(convId: number, raw: unknown): void {
+  const tasks = parseBgTasks(raw);
+  if (tasks.length) bgTasksByConv.set(convId, tasks);
+  else if (!bgTasksByConv.delete(convId)) return;
+  emitBgTasks();
+}
+
+function clearAllBgTasks(): void {
+  if (!bgTasksByConv.size) return;
+  bgTasksByConv.clear();
+  emitBgTasks();
+}
+
+function subscribeBgTasks(fn: () => void): () => void {
+  bgTasksListeners.add(fn);
+  return () => { bgTasksListeners.delete(fn); };
+}
+
+/** The chat's running background tasks (empty when none). */
+export function useBgTasks(convId: number | null | undefined): BgTask[] {
+  return useSyncExternalStore(subscribeBgTasks,
+    () => (convId == null ? NO_BG_TASKS : bgTasksByConv.get(convId) ?? NO_BG_TASKS));
+}
 const LEGACY_MODE_KEY = 'unityai-generation-mode';
 
 type PendingCommand = {
@@ -275,6 +323,7 @@ export const useChat = (
   const loading = screen.loading;
   const activity = screen.activity;
   const contextUsage = screen.contextUsage;
+  const bgTasks = useBgTasks(activeConvId);
 
   const setMessages = useCallback((arg: SetArg<Message[]>) => {
     patchConv(keyOf(activeConvIdRef.current), r => ({ messages: resolveArg(arg, r.messages) }));
@@ -1127,7 +1176,8 @@ export const useChat = (
                     const reason = typeof data.stop_reason === 'string'
                       ? data.stop_reason
                       : (data.max_reached ? 'max_iterations' : 'complete');
-                    if (reason !== 'complete') {
+                    // `wake_deferred`: the backend queued this wake again (busy session); no fault to show.
+                    if (reason !== 'complete' && reason !== 'wake_deferred') {
                       const detail = [`stop_reason=${reason}`,
                         typeof data.iterations === 'number' ? `iterations=${data.iterations}` : null]
                         .filter(Boolean).join(' · ');
@@ -1685,6 +1735,9 @@ export const useChat = (
           if (res && res.ok === false) retryMs = 30000;
           const reader = res?.body?.getReader();
           if (reader) {
+            // The backend re-sends the chats that still run tasks on connect;
+            // ones that ended while the stream was down must not linger.
+            clearAllBgTasks();
             // A turn_end sent while the stream was down would leave a
             // followed chat loading for good: read those chats' rings again.
             for (const [id, f] of followsRef.current) if (f.start !== null) void turnLiveRef.current.pull(id);
@@ -1713,6 +1766,11 @@ export const useChat = (
                 if (data?.type === 'remote_message') {
                   const remoteMsg = parseRemoteMessage(data);
                   if (remoteMsg && !iptal) void deliverRemoteRef.current(remoteMsg);
+                  continue;
+                }
+                if (data?.type === 'bg_tasks') {
+                  const bgId = Number(data.conversation_id);
+                  if (Number.isSafeInteger(bgId) && bgId > 0 && !iptal) setBgTasks(bgId, data.tasks);
                   continue;
                 }
                 if (data?.type === 'turn_live') {
@@ -1977,6 +2035,7 @@ export const useChat = (
     convStatus, attention,
     sendMessage, stopMessage, setWakeDefaults,
     queue: screen.queue, queuePaused: screen.queuePaused,
+    bgTasks,
     deleteQueued, editQueued, resumeQueue, sendQueuedNow,
     compactConversation,
     // Kararı backend'e iletir ve İLETİLDİĞİNİ DOĞRULAR. Yanıt gövdesi eskiden
