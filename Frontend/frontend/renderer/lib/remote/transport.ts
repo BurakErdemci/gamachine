@@ -206,6 +206,8 @@ export class RemoteTransport {
     await this.takeSlot()
     let reply: RemoteReply
     try {
+      // The link may have dropped while this request waited for a slot.
+      await this.waitReady()
       if (!this.link) throw new RemoteError('not_ready')
       try {
         reply = await this.link.request(type, params)
