@@ -353,3 +353,30 @@ def test_the_api_loop_carries_the_tool_and_injects_its_own_chat(env, tool):
     assert refused == {"success": False, "error": chat_files.REASONS["not_image"]}
     none = asyncio.run(tool_registry.execute_tool_async("show_image", {"path": path}, ".", None))
     assert none["success"] is False
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows path forms")
+def test_mixed_slash_unc_forms_are_refused_before_any_file_system_call(env, monkeypatch):
+    # `\/host/share` and `/\host\share` passed a starts-with check, yet Windows opens
+    # them as UNC paths and sends the user's NTLM hash to that host (4 Nov 2026).
+    bs = chr(92)
+    touched = []
+    monkeypatch.setattr(chat_files.action_risk, "gamachine_secret_target",
+                        lambda p: touched.append(p) or False)
+    monkeypatch.setattr(chat_files.os.path, "realpath", lambda p: touched.append(p) or p)
+    chat = env.db.create_conversation(1, "A")
+    for path in (bs + "/server/share/a.png", "/" + bs + "server" + bs + "share" + bs + "a.png",
+                 bs + bs + "?" + bs + "UNC" + bs + "server" + bs + "share" + bs + "a.png",
+                 bs + bs + "." + bs + "C:" + bs + "a.png", "/a.png"):
+        assert chat_files.add_file(env.db, chat, path, "") == (None, "bad_path"), path
+    assert touched == []
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows path forms")
+def test_a_path_that_resolves_to_a_share_is_refused(env, monkeypatch):
+    bs = chr(92)
+    src = _write(env, "a.png", _image("PNG"))
+    monkeypatch.setattr(chat_files.action_risk, "gamachine_secret_target", lambda p: False)
+    monkeypatch.setattr(chat_files.os.path, "realpath",
+                        lambda p: bs + bs + "server" + bs + "share" + bs + "a.png")
+    assert chat_files.add_file(env.db, env.db.create_conversation(1, "A"), src, "") == (None, "bad_path")

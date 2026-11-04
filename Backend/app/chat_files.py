@@ -12,7 +12,9 @@ a file whose first bytes are not PNG/JPEG/GIF/WEBP (the extension is not trusted
 """
 import io
 import logging
+import ntpath
 import os
+import re
 import shutil
 import sqlite3
 import stat
@@ -81,18 +83,45 @@ def file_path(db_path: str, record: Dict[str, Any]) -> str:
     return os.path.join(_folder(db_path, record["conversation_id"]), record["id"] + _EXT[record["mime"]])
 
 
+def _is_local_path(path: str) -> bool:
+    """A plain absolute path on a local disk, decided from the text alone.
+
+    Mixed slashes such as `\\/host/share` or `/\\host\\share` passed a
+    starts-with check yet Windows opens them as UNC paths, and touching a UNC
+    path sends the user's NTLM hash to that host (measured 4 Nov 2026). So the
+    drive part must be exactly one letter, after normalising the slashes, and a
+    mapped network drive is refused too.
+    """
+    if os.name != "nt":
+        return path.startswith("/") and not path.startswith("//")
+    norm = path.replace("/", "\\")
+    drive, rest = ntpath.splitdrive(norm)
+    if not re.fullmatch(r"[A-Za-z]:", drive) or not rest.startswith("\\"):
+        return False
+    try:
+        import ctypes
+        # DRIVE_REMOTE = 4: a letter mapped to a network share.
+        return ctypes.windll.kernel32.GetDriveTypeW(drive + "\\") != 4
+    except Exception:
+        return False
+
+
 def _read_source(path: Any) -> Tuple[Optional[bytes], Optional[str]]:
     """The source's bytes, or a refusal code. The file is opened once and every
     check runs on that descriptor, so the path cannot be swapped in between."""
     if not isinstance(path, str) or not path.strip() or "\x00" in path:
         return None, "bad_path"
     path = path.strip()
-    if path.startswith(("\\\\", "//")) or not os.path.isabs(path):
+    # Before any call that touches the file system (the secret check stats the path).
+    if not _is_local_path(path):
         return None, "bad_path"
     try:
         if action_risk.gamachine_secret_target(path):
             return None, "secret"
         real = os.path.realpath(path)
+        # A junction or symlink can still lead to a share: judge where it resolved to.
+        if not _is_local_path(real):
+            return None, "bad_path"
         if action_risk.gamachine_secret_target(real):
             return None, "secret"
         flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
