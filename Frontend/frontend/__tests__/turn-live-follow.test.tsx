@@ -227,6 +227,60 @@ describe('turn_live · a renderer that did not start the turn', () => {
   })
 })
 
+describe('turn_live · a read or a store that comes late', () => {
+  const sleep = async (ms: number) => { await act(async () => { await new Promise(r => setTimeout(r, ms)) }) }
+
+  it('a failed turn-events read is retried and the chat stops loading', async () => {
+    const { result } = hook()
+    await open(result, 5)
+    stored[5] = [USER_ROW]
+    await emit(5, 'turn_start')
+    expect(result.current.loading).toBe(true)
+
+    const base = mockedAxios.get.getMockImplementation() as any
+    let failed = false
+    mockedAxios.get.mockImplementation(async (url: string) => {
+      if (!failed && String(url).includes('/turn-events')) { failed = true; throw new Error('relay dropped') }
+      return base(url)
+    })
+    await emit(5, 'text', { content: 'Hello world' })
+    expect(failed).toBe(true)
+    expect(result.current.messages.map((m: any) => m.content)).toEqual(['from the browser', ''])
+
+    await sleep(700)
+    expect(result.current.messages.map((m: any) => m.content)).toEqual(['from the browser', 'Hello world'])
+    stored[5] = [USER_ROW, REPLY_ROW]
+    await emit(5, 'turn_end', { status: 'done' })
+    expect(result.current.loading).toBe(false)
+    expect(result.current.messages).toEqual([USER_ROW, REPLY_ROW])
+  })
+
+  it('a reply stored after turn_end still appears, once', async () => {
+    const { result } = hook()
+    await open(result, 5)
+    stored[5] = [USER_ROW]
+    await emit(5, 'turn_start')
+    await emit(5, 'text', { content: 'Hello world' })
+
+    // The reads at turn end come back without the reply; it lands 1.5 s later.
+    const gets = mockedAxios.get.getMockImplementation() as any
+    const landAt = Date.now() + 1500
+    mockedAxios.get.mockImplementation(async (url: string) => {
+      if (String(url).endsWith('/messages') && Date.now() < landAt) return { data: [USER_ROW] }
+      return gets(url)
+    })
+    stored[5] = [USER_ROW, REPLY_ROW]
+    await emit(5, 'turn_end', { status: 'done' })
+
+    await sleep(1250)
+    expect(result.current.loading).toBe(false)
+    expect(result.current.messages.map((m: any) => m.content)).toEqual(['from the browser', 'Hello world'])
+
+    await sleep(2500)
+    expect(result.current.messages).toEqual([USER_ROW, REPLY_ROW])
+  })
+})
+
 describe('turn_live · the renderer running the turn itself', () => {
   it('ignores the frames of its own turn', async () => {
     const { result } = hook()

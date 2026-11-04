@@ -1366,16 +1366,24 @@ export const useChat = (
   // read, the ring's epoch, one request at a time (`busy`, `again` for a frame
   // that came meanwhile), `start` = seq of the followed turn's turn_start
   // (null = not following), `own` = frames of this renderer's own turn were
-  // skipped, so a turn_end with no start is that turn's.
+  // skipped, so a turn_end with no start is that turn's. `endSeen` = a
+  // turn_end frame came; `fails`/`failSince`/`retry` = the back-off after a
+  // failed ring read; `reread` = the timer that re-reads the messages until
+  // the reply is stored.
   type Follow = {
     seq: number; epoch: string | null; busy: boolean; again: boolean; resync: boolean;
     start: number | null; aiId: number; own: boolean;
+    endSeen: boolean; fails: number; failSince: number | null;
+    retry: ReturnType<typeof setTimeout> | null; reread: ReturnType<typeof setTimeout> | null;
   };
   const followsRef = useRef<Map<number, Follow>>(new Map());
   const followOf = (convId: number) => {
     let f = followsRef.current.get(convId);
     if (!f) {
-      f = { seq: 0, epoch: null, busy: false, again: false, resync: false, start: null, aiId: 0, own: false };
+      f = {
+        seq: 0, epoch: null, busy: false, again: false, resync: false, start: null, aiId: 0, own: false,
+        endSeen: false, fails: 0, failSince: null, retry: null, reread: null,
+      };
       followsRef.current.set(convId, f);
     }
     return f;
@@ -1387,6 +1395,7 @@ export const useChat = (
     const f = followOf(convId);
     f.start = startSeq;
     f.own = false;
+    f.endSeen = false;
     f.aiId = nextClientMsgId();
     // Loading first: a message typed here meanwhile waits in the queue.
     patchConv(convId, () => ({ loading: true }));
@@ -1408,8 +1417,29 @@ export const useChat = (
       messages: r.messages.map(m => (m.id === id ? { ...m, content: (m.content || '') + text } : m)),
     }));
   };
-  const endFollow = async (convId: number, status: string, following: boolean) => {
+  // The backend records turn_end just before it stores the reply, so a read
+  // at turn end can miss the reply: the streamed placeholder stays on screen
+  // and the messages are read again until the stored reply replaces it.
+  const REREAD_AT_MS = [800, 1600, 3000, 6000];
+  const rereadReply = (convId: number, aiId: number, attempt = 0) => {
+    if (attempt >= REREAD_AT_MS.length) return;
     const f = followOf(convId);
+    f.reread = setTimeout(async () => {
+      f.reread = null;
+      const list = await getMessages(convId);
+      // A newer turn owns the chat now.
+      if (f.aiId !== aiId || f.start !== null || rt(convId).loading) return;
+      if (list && list[list.length - 1]?.role === 'assistant') {
+        patchConv(convId, () => ({ messages: list, unsynced: false, clientOnly: false }));
+      } else rereadReply(convId, aiId, attempt + 1);
+    }, REREAD_AT_MS[attempt] - (attempt ? REREAD_AT_MS[attempt - 1] : 0));
+  };
+  const endFollow = async (convId: number, status: string, following: boolean, keepText = true) => {
+    const f = followOf(convId);
+    f.endSeen = false;
+    f.fails = 0;
+    f.failSince = null;
+    if (f.retry) { clearTimeout(f.retry); f.retry = null; }
     if (!following) {
       // This renderer's own turn ends through its own stream.
       if (f.own) { f.own = false; return; }
@@ -1429,16 +1459,20 @@ export const useChat = (
       if (!list || status !== 'done' || !hadText || list[list.length - 1]?.role === 'assistant') break;
       await new Promise(resolve => setTimeout(resolve, 300));
     }
+    // The streamed text is all there is until the reply is stored (not after
+    // a lost ring: that turn's end is unknown, the stored list is the truth).
+    const awaitStore = keepText && hadText && list?.[list.length - 1]?.role !== 'assistant';
+    if (awaitStore) rereadReply(convId, f.aiId);
     if (f.start === null && !rt(convId).loading) {
       // Stopped here meanwhile: Stop already cleared the turn.
-      if (list) patchConv(convId, () => ({ messages: list!, unsynced: false, clientOnly: false }));
+      if (list && !awaitStore) patchConv(convId, () => ({ messages: list!, unsynced: false, clientOnly: false }));
       return;
     }
     f.start = null;
     const visible = activeConvIdRef.current === convId;
     const failed = status === 'error';
     patchConv(convId, r => ({
-      ...(list ? { messages: list, unsynced: false, clientOnly: false } : { unsynced: !visible }),
+      ...(list && !awaitStore ? { messages: list, unsynced: false, clientOnly: false } : { unsynced: !visible }),
       loading: false, activity: null, unread: !visible,
       // As after this chat's own turn: a user Stop records no turn end and
       // pauses the queue; an error pauses it too.
@@ -1451,7 +1485,7 @@ export const useChat = (
   };
   // One batch of ring events, oldest first. Only the chat's latest turn
   // matters: an older one in the same batch is already in the stored list.
-  const applyFollowed = async (convId: number, events: any[], wasFollowing: boolean) => {
+  const applyFollowed = async (convId: number, events: any[], wasFollowing: boolean, resync = false) => {
     const f = followOf(convId);
     let i = -1;
     events.forEach((e, k) => { if (e?.kind === 'turn_start') i = k; });
@@ -1465,8 +1499,24 @@ export const useChat = (
     } else if (f.start !== null && text) {
       appendFollowed(convId, text);
     }
-    if (end) await endFollow(convId, String(end.status ?? 'done'), f.start !== null || wasFollowing);
+    if (end) await endFollow(convId, String(end.status ?? 'done'), f.start !== null || wasFollowing, !resync);
     return i >= 0 || !!end;
+  };
+  // A failed ring read is tried again with a growing wait while the chat is
+  // followed. After a turn_end frame, or 30 s of failures, the turn is ended
+  // from the stored messages so the chat never stays loading.
+  const retryFollowRead = (convId: number, f: Follow) => {
+    if (f.start === null) return;
+    f.failSince ??= Date.now();
+    if (f.endSeen || Date.now() - f.failSince >= 30000) {
+      void endFollow(convId, 'stopped', true);
+      return;
+    }
+    const wait = [500, 1000, 2000, 4000][f.fails++] ?? 5000;
+    f.retry = setTimeout(() => {
+      f.retry = null;
+      if (f.start !== null) void pullFollowed(convId);
+    }, wait);
   };
   const pullFollowed = async (convId: number) => {
     const f = followOf(convId);
@@ -1479,7 +1529,10 @@ export const useChat = (
         let data: any;
         try {
           data = (await axios.get(`${API}/conversations/${convId}/turn-events?since=${since}`)).data;
-        } catch { break; }
+        } catch { retryFollowRead(convId, f); continue; }
+        f.fails = 0;
+        f.failSince = null;
+        if (f.retry) { clearTimeout(f.retry); f.retry = null; }
         const reset = !!data?.gap || (f.epoch !== null && data?.epoch !== f.epoch);
         f.epoch = data?.epoch ?? null;
         if (reset && since > 0) {
@@ -1494,10 +1547,10 @@ export const useChat = (
         const wasFollowing = f.start !== null;
         // A resync re-derives the turn from the ring, placeholder included.
         if (resync) f.start = null;
-        const handled = await applyFollowed(convId, Array.isArray(data?.events) ? data.events : [], resync && wasFollowing);
+        const handled = await applyFollowed(convId, Array.isArray(data?.events) ? data.events : [], resync && wasFollowing, resync);
         f.seq = Math.max(f.seq, Number(data?.last_seq) || 0);
         if (resync && !handled) {
-          if (wasFollowing) await endFollow(convId, 'stopped', true);
+          if (wasFollowing) await endFollow(convId, 'stopped', true, false);
           else await endFollow(convId, 'done', false);
         }
       } while (f.again);
@@ -1505,7 +1558,7 @@ export const useChat = (
       f.busy = false;
     }
   };
-  const onTurnLive = (convId: number, seq: number) => {
+  const onTurnLive = (convId: number, seq: number, kind?: string) => {
     const f = followOf(convId);
     // This renderer runs the chat's turn itself and has its stream.
     if (rt(convId).loading && f.start === null) {
@@ -1513,6 +1566,7 @@ export const useChat = (
       if (Number.isSafeInteger(seq)) f.seq = Math.max(f.seq, seq);
       return;
     }
+    if (kind === 'turn_end') f.endSeen = true;
     void pullFollowed(convId);
   };
   const turnLiveRef = useRef({ frame: onTurnLive, pull: pullFollowed });
@@ -1579,6 +1633,12 @@ export const useChat = (
     }
     return held;
   }), [patchConv]);
+  useEffect(() => () => {
+    for (const f of followsRef.current.values()) {
+      if (f.retry) clearTimeout(f.retry);
+      if (f.reread) clearTimeout(f.reread);
+    }
+  }, []);
   const userId = user?.id;
   const sessionToken = user?.sessionToken;
   useEffect(() => {
@@ -1652,7 +1712,7 @@ export const useChat = (
                 }
                 if (data?.type === 'turn_live') {
                   const liveId = Number(data.conversation_id);
-                  if (Number.isSafeInteger(liveId) && liveId > 0 && !iptal) turnLiveRef.current.frame(liveId, Number(data.seq));
+                  if (Number.isSafeInteger(liveId) && liveId > 0 && !iptal) turnLiveRef.current.frame(liveId, Number(data.seq), String(data.kind ?? ''));
                   continue;
                 }
                 if (data?.type === 'card_closed') {
