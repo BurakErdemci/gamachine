@@ -5,6 +5,7 @@ import os
 import re
 import socket
 import sys
+import tempfile
 import unicodedata
 from urllib.parse import unquote, urlsplit
 
@@ -96,11 +97,11 @@ def file_type(name) -> str:
 # Ports of Gamachine's own local listeners: a page opened in the agent browser must never reach them
 # (the backend and the browser host carry tokens, the Unity MCP server drives the editor). Each default
 # below is the port the named code listens on when nothing overrides it; gamachine_ports() adds the values
-# this process knows at run time.
+# this process knows at run time (the whisper STT server listens on a random loopback port).
 _GAMACHINE_DEFAULT_PORTS = frozenset({
     8000,  # backend HTTP: main.py PORT default, docker-compose.yml, Docker backend mode
     8080,  # Unity MCP HTTP server: unity_mcp_manager.mcp_port, mcp_port_guard.DEFAULT_MCP_PORT
-    6400,  # Unity editor bridge: unity-mcp transport/legacy/port_discovery.py DEFAULT_PORT
+    *range(6400, 6500),  # Unity editor bridge: port_discovery.py DEFAULT_PORT, PortManager.cs falls back DefaultPort+1..+99
     9876,  # Blender connector bridge: connectors/views.py BRIDGE_PORTS
     8799,  # relay dev server: relay/package.json "wrangler dev --port 8799"
     8888,  # nextron renderer dev server (Electron main loads it in dev)
@@ -135,6 +136,9 @@ def gamachine_ports(extra=()) -> frozenset:
     ports.update(port for name in _GAMACHINE_PORT_ENV if (port := _port_of(os.environ.get(name))))
     manager = getattr(sys.modules.get("unity_ai_mcp.unity_mcp_manager"), "unity_mcp_manager", None)
     ports.update(port for port in (_port_of(getattr(manager, "mcp_port", None)),) if port)
+    # providers/stt_whisper.py _spawn(): the whisper server gets a random free port once it exists.
+    whisper = getattr(getattr(sys.modules.get("providers.stt_whisper"), "_server", None), "_port", None)
+    ports.update(port for port in (_port_of(whisper),) if port)
     ports.update(port for port in map(_port_of, extra or ()) if port)
     return frozenset(ports)
 
@@ -148,7 +152,7 @@ def _blocked_address(ip) -> bool:
     judged by the caller, which knows the port."""
     ip = _unmapped(ip)
     return (ip.is_private or ip.is_link_local or ip.is_unspecified or ip.is_multicast or ip.is_reserved
-            or not ip.is_global)
+            or getattr(ip, "is_site_local", False) or not ip.is_global)
 
 
 def _file_refusal(parts, roots) -> str:
@@ -158,6 +162,8 @@ def _file_refusal(parts, roots) -> str:
     if parts.netloc.casefold() not in {"", "localhost"}:
         return "Network file shares cannot be opened in the agent browser."
     raw = parts.path
+    if not raw.startswith("/"):
+        return "The file address is not a plain local path."
     if re.search(r"%(2f|5c)", raw, re.I):
         return "The file address hides a path separator."
     path = unquote(raw)
@@ -175,8 +181,16 @@ def _file_refusal(parts, roots) -> str:
     if ":" in rest or any(name.endswith((".", " ")) or name.split(".")[0].casefold() in _FILE_RESERVED_NAMES
                           for name in names):
         return "The file address is not a plain local path."
-    if not any(is_within(path, root) for root in roots if isinstance(root, str) and root):
+    roots = [root for root in roots if isinstance(root, str) and root]
+    if not any(is_within(path, root) for root in roots):
         return "Only files inside this chat's project or the temp folder can be opened."
+    # Inside the temp folder only: Gamachine's own files (gamachine.log, its temp folders) stay closed.
+    temp = os.path.realpath(tempfile.gettempdir())
+    if not any(is_within(path, root) for root in roots if os.path.realpath(root) != temp):
+        real = os.path.realpath(path)
+        if is_within(real, temp) and any(name.casefold().startswith("gamachine")
+                                         for name in os.path.relpath(real, temp).replace("\\", "/").split("/")):
+            return "Gamachine's own files cannot be opened in the agent browser."
     return ""
 
 
@@ -198,8 +212,13 @@ def navigation_refusal(url, file_roots=None, extra_ports=()) -> str:
         return _file_refusal(parts, file_roots)
     if scheme not in _DEFAULT_SCHEME_PORT:
         return "Only http and https pages can be opened."
-    if not host or re.search(r"\s", host):
-        return "The URL has no valid host."
+    # Spellings a browser reads differently from this parser: no slashes after the scheme, backslashes,
+    # percent-encoded or non-ASCII (full-width dots) host.
+    if (url[len(scheme):len(scheme) + 3] != "://" or "\\" in url
+            or "%" in parts.netloc or not parts.netloc.isascii()):
+        return "The URL is not written in a plain form."
+    if not host or re.search(r"\s", host) or port == 0:
+        return "The URL has no valid host or port."
     host = host.rstrip(".").casefold()
     ip = None
     if not (host == "localhost" or host.endswith(".localhost")):

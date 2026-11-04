@@ -1,7 +1,10 @@
 """Agent-browser navigation allow-list and critical-step classifier."""
+import json
 import os
 import subprocess
+import sys
 import tempfile
+import types
 from pathlib import Path
 
 import pytest
@@ -116,7 +119,7 @@ def test_file_pages_open_inside_the_workspace_and_the_temp_dir(workspace):
     assert policy.navigation_refusal(uri(workspace / "not-yet.html"), allowed) == ""
     assert policy.navigation_refusal(uri(workspace), allowed) == ""  # a directory listing
     assert policy.navigation_refusal(uri(workspace / "index.html") + "?x=1#top", allowed) == ""
-    temp_file = Path(tempfile.gettempdir()) / "gamachine-shot.png"
+    temp_file = Path(tempfile.gettempdir()) / "shot.png"
     assert policy.navigation_refusal(uri(temp_file), allowed) == ""
 
 
@@ -166,6 +169,84 @@ def test_a_link_that_points_out_of_the_workspace_is_refused(workspace, tmp_path)
             pytest.skip("cannot create a link here")
     assert policy.navigation_refusal(uri(workspace / "link" / "secret.html"), [str(workspace)])
     assert policy.navigation_refusal(uri(workspace / "index.html"), [str(workspace)]) == ""
+
+
+CASES = json.loads((Path(__file__).parent / "data" / "browser_policy_cases.json").read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("case", CASES["http"], ids=lambda case: ascii(case["url"]))
+def test_shared_http_cases(case):
+    refusal = policy.navigation_refusal(case["url"], None, (5555,))
+    assert (refusal == "") is case["allow"], (case["url"], refusal)
+
+
+@pytest.fixture
+def case_tree(tmp_path, monkeypatch):
+    """base/ws (the chat project), base/outside_long_name_dir, base/ws2, base/ws_long_directory_name and a
+    separate temp dir, which tempfile.gettempdir() is pointed at (the pytest dirs themselves live in the real one)."""
+    base = tmp_path / "base"
+    ws, temp = base / "ws", tmp_path / "temp"
+    for folder in (ws / "sub dir", base / "outside_long_name_dir", base / "ws2", base / "ws_long_directory_name", temp):
+        folder.mkdir(parents=True)
+    (ws / "ok.html").write_text("x")
+    (base / "outside_long_name_dir" / "secret.html").write_text("x")
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(temp))
+    return base, ws, temp
+
+
+def _make_link(link, target) -> bool:
+    try:
+        os.symlink(target, link, target_is_directory=True)
+        return True
+    except (OSError, NotImplementedError):
+        if os.name != "nt":
+            return False
+        return subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)], capture_output=True).returncode == 0
+
+
+def fill_case_url(url, base, ws, temp) -> str:
+    def path_of(path):
+        return Path(path).as_uri()[len("file://"):]
+    drive_less = path_of(ws).lstrip("/")
+    return (url.replace("{ws_upper}", path_of(ws).upper()).replace("{ws_nolead}", drive_less)
+            .replace("{ws_pipe}", drive_less.replace(":", "|", 1)).replace("{ws2}", path_of(base / "ws2"))
+            .replace("{ws_prefix}", path_of(base / "ws_long_directory_name")).replace("{ws}", path_of(ws))
+            .replace("{base}", path_of(base)).replace("{tmp}", path_of(temp)))
+
+
+@pytest.mark.parametrize("case", CASES["file"], ids=lambda case: ascii(case["url"]))
+def test_shared_file_cases(case, case_tree):
+    base, ws, temp = case_tree
+    if case.get("os") == "nt" and os.name != "nt":
+        pytest.skip("Windows paths")
+    if case.get("needs") == "link" and not _make_link(ws / "link", base / "outside_long_name_dir"):
+        pytest.skip("cannot create a link here")
+    url = fill_case_url(case["url"], base, ws, temp)
+    refusal = policy.navigation_refusal(url, [os.path.realpath(ws), os.path.realpath(temp)])
+    assert (refusal == "") is case["allow"], (url, refusal)
+
+
+def test_bridge_fallback_ports_and_the_whisper_port_are_denied(monkeypatch):
+    for port in (6400, 6401, 6499):
+        assert policy.navigation_refusal(f"http://127.0.0.1:{port}/")
+    assert policy.navigation_refusal("http://127.0.0.1:6500/") == ""
+    monkeypatch.setitem(sys.modules, "providers.stt_whisper", types.SimpleNamespace(_server=types.SimpleNamespace(_port=47123)))
+    assert 47123 in policy.gamachine_ports()
+    assert policy.navigation_refusal("http://localhost:47123/inference")
+    monkeypatch.setitem(sys.modules, "providers.stt_whisper", types.SimpleNamespace(_server=None))
+    assert policy.navigation_refusal("http://localhost:47123/inference") == ""
+
+
+def test_gamachines_own_temp_files_are_closed_but_a_project_inside_temp_is_not(case_tree):
+    base, ws, temp = case_tree
+    roots = [os.path.realpath(ws), os.path.realpath(temp)]
+    assert policy.navigation_refusal(uri(temp / "gamachine.log"), roots)
+    assert policy.navigation_refusal(uri(temp / "Gamachine-cache" / "a.png"), roots)
+    assert policy.navigation_refusal(uri(temp / "shot.png"), roots) == ""
+    inside = temp / "gamachine-project"
+    inside.mkdir()
+    assert policy.navigation_refusal(uri(inside / "a.png"), roots) != ""
+    assert policy.navigation_refusal(uri(inside / "a.png"), roots + [os.path.realpath(inside)]) == ""
 
 
 def element(name="Show more", role="button", **extra):

@@ -1,0 +1,793 @@
+{
+ "_about": "Shared by Backend/tests/test_browser_use_policy.py and Frontend/frontend/__tests__/browser-url-policy.test.ts: both copies of the navigation rule must give the same verdict on every row. http rows run with 5555 as the extra Gamachine port; file rows with the roots [ws, temp] and the placeholders the tests fill in.",
+ "http": [
+  {
+   "url": "http://localhost/",
+   "allow": true
+  },
+  {
+   "url": "http://localhost:3000/",
+   "allow": true
+  },
+  {
+   "url": "http://LOCALHOST:3000/",
+   "allow": true
+  },
+  {
+   "url": "http://foo.localhost:5173/",
+   "allow": true
+  },
+  {
+   "url": "http://localhost./",
+   "allow": true
+  },
+  {
+   "url": "http://a.localhost.:3000/",
+   "allow": true
+  },
+  {
+   "url": "http://127.0.0.1:3000/",
+   "allow": true
+  },
+  {
+   "url": "http://127.0.0.1/",
+   "allow": true
+  },
+  {
+   "url": "https://127.0.0.1/",
+   "allow": true
+  },
+  {
+   "url": "http://127.0.0.1:80/",
+   "allow": true
+  },
+  {
+   "url": "http://127.0.0.1:443/",
+   "allow": true
+  },
+  {
+   "url": "https://127.0.0.1:443/",
+   "allow": true
+  },
+  {
+   "url": "http://localhost:80/",
+   "allow": true
+  },
+  {
+   "url": "http://127.0.0.1:/",
+   "allow": true
+  },
+  {
+   "url": "HTTP://127.0.0.1:3000/",
+   "allow": true
+  },
+  {
+   "url": "http://127.5.6.7:3000/",
+   "allow": true
+  },
+  {
+   "url": "http://user:pw@127.0.0.1:3000/",
+   "allow": true
+  },
+  {
+   "url": "http://127.0.0.1.:3000/",
+   "allow": true
+  },
+  {
+   "url": "http://127.1:3000/",
+   "allow": true
+  },
+  {
+   "url": "http://127.0.1:3000/",
+   "allow": true
+  },
+  {
+   "url": "http://127.000.000.001:3000/",
+   "allow": true
+  },
+  {
+   "url": "http://2130706433:3000/",
+   "allow": true
+  },
+  {
+   "url": "http://0x7f.1:3000/",
+   "allow": true
+  },
+  {
+   "url": "http://0x7f000001:3000/",
+   "allow": true
+  },
+  {
+   "url": "http://0177.0.0.1:3000/",
+   "allow": true
+  },
+  {
+   "url": "http://[::1]:3000/",
+   "allow": true
+  },
+  {
+   "url": "http://[0:0:0:0:0:0:0:1]:3000/",
+   "allow": true
+  },
+  {
+   "url": "http://[::ffff:127.0.0.1]:3000/",
+   "allow": true
+  },
+  {
+   "url": "http://[::ffff:7f00:1]:3000/",
+   "allow": true
+  },
+  {
+   "url": "http://127.0.0.1:8080/",
+   "allow": false
+  },
+  {
+   "url": "http://127.0.0.1:8000/",
+   "allow": false
+  },
+  {
+   "url": "http://localhost:8080/",
+   "allow": false
+  },
+  {
+   "url": "http://localhost.:8080/",
+   "allow": false
+  },
+  {
+   "url": "http://LOCALHOST:8000/",
+   "allow": false
+  },
+  {
+   "url": "http://127.1:8080/",
+   "allow": false
+  },
+  {
+   "url": "http://2130706433:8080/",
+   "allow": false
+  },
+  {
+   "url": "http://0x7f.1:6400/",
+   "allow": false
+  },
+  {
+   "url": "http://017700000001:9876/",
+   "allow": false
+  },
+  {
+   "url": "http://[::1]:8080/",
+   "allow": false
+  },
+  {
+   "url": "http://[::ffff:127.0.0.1]:8080/",
+   "allow": false
+  },
+  {
+   "url": "http://[::ffff:7f00:1]:8080/",
+   "allow": false
+  },
+  {
+   "url": "http://[0:0:0:0:0:0:0:1]:8888/",
+   "allow": false
+  },
+  {
+   "url": "http://[::1]:8799/",
+   "allow": false
+  },
+  {
+   "url": "http://127.0.0.1.:8080/",
+   "allow": false
+  },
+  {
+   "url": "http://evil.com@127.0.0.1:8080/",
+   "allow": false
+  },
+  {
+   "url": "http://user:pw@127.0.0.1:8080/",
+   "allow": false
+  },
+  {
+   "url": "http://127.0.0.1:08080/",
+   "allow": false
+  },
+  {
+   "url": "http://127.0.0.1:9876/",
+   "allow": false
+  },
+  {
+   "url": "http://127.0.0.1:8888/",
+   "allow": false
+  },
+  {
+   "url": "http://127.0.0.1:8799/",
+   "allow": false
+  },
+  {
+   "url": "http://127.0.0.1:6400/",
+   "allow": false
+  },
+  {
+   "url": "http://127.0.0.1:6401/",
+   "allow": false
+  },
+  {
+   "url": "http://127.0.0.1:6450/",
+   "allow": false
+  },
+  {
+   "url": "http://127.0.0.1:6499/",
+   "allow": false
+  },
+  {
+   "url": "http://127.0.0.1:5555/",
+   "allow": false
+  },
+  {
+   "url": "http://foo.localhost:8080/",
+   "allow": false
+  },
+  {
+   "url": "http://127.0.0.1:0/",
+   "allow": false
+  },
+  {
+   "url": "http://127.0.0.1:6500/",
+   "allow": true
+  },
+  {
+   "url": "http://127.0.0.1:6399/",
+   "allow": true
+  },
+  {
+   "url": "http://0.0.0.0:3000/",
+   "allow": false
+  },
+  {
+   "url": "http://0.0.0.0:8080/",
+   "allow": false
+  },
+  {
+   "url": "http://[::]:3000/",
+   "allow": false
+  },
+  {
+   "url": "http://169.254.169.254/",
+   "allow": false
+  },
+  {
+   "url": "http://169.254.169.254:3000/",
+   "allow": false
+  },
+  {
+   "url": "http://[fe80::1]/",
+   "allow": false
+  },
+  {
+   "url": "http://10.0.0.1/",
+   "allow": false
+  },
+  {
+   "url": "http://192.168.1.1:3000/",
+   "allow": false
+  },
+  {
+   "url": "http://172.16.0.1/",
+   "allow": false
+  },
+  {
+   "url": "http://172.31.255.255/",
+   "allow": false
+  },
+  {
+   "url": "http://100.64.0.1/",
+   "allow": false
+  },
+  {
+   "url": "http://100.100.100.200/",
+   "allow": false
+  },
+  {
+   "url": "http://192.0.0.1/",
+   "allow": false
+  },
+  {
+   "url": "http://198.18.0.1/",
+   "allow": false
+  },
+  {
+   "url": "http://224.0.0.1/",
+   "allow": false
+  },
+  {
+   "url": "http://240.0.0.1/",
+   "allow": false
+  },
+  {
+   "url": "http://255.255.255.255/",
+   "allow": false
+  },
+  {
+   "url": "http://[fc00::1]/",
+   "allow": false
+  },
+  {
+   "url": "http://[fd00::1]/",
+   "allow": false
+  },
+  {
+   "url": "http://[ff02::1]/",
+   "allow": false
+  },
+  {
+   "url": "http://[64:ff9b::7f00:1]/",
+   "allow": false
+  },
+  {
+   "url": "http://[64:ff9b::a00:1]/",
+   "allow": false
+  },
+  {
+   "url": "http://[::ffff:10.0.0.1]/",
+   "allow": false
+  },
+  {
+   "url": "http://[::ffff:169.254.169.254]/",
+   "allow": false
+  },
+  {
+   "url": "http://[2002:7f00:1::]/",
+   "allow": false
+  },
+  {
+   "url": "http://[::127.0.0.1]:3000/",
+   "allow": false
+  },
+  {
+   "url": "http://[::ffff:0:127.0.0.1]:3000/",
+   "allow": false
+  },
+  {
+   "url": "http://[2001:db8::1]/",
+   "allow": false
+  },
+  {
+   "url": "http://[100::1]/",
+   "allow": false
+  },
+  {
+   "url": "http://[fec0::1]/",
+   "allow": false
+  },
+  {
+   "url": "http://[::2]/",
+   "allow": false
+  },
+  {
+   "url": "http://[2001::1]/",
+   "allow": false
+  },
+  {
+   "url": "https://opengameart.org/",
+   "allow": true
+  },
+  {
+   "url": "http://example.com/",
+   "allow": true
+  },
+  {
+   "url": "https://example.com:8080/",
+   "allow": true
+  },
+  {
+   "url": "http://example.com:8000/",
+   "allow": true
+  },
+  {
+   "url": "http://8.8.8.8:8080/",
+   "allow": true
+  },
+  {
+   "url": "https://[2606:4700::1111]/",
+   "allow": true
+  },
+  {
+   "url": "http://127.0.0.1@evil.com/",
+   "allow": true
+  },
+  {
+   "url": "http://example.com/a b",
+   "allow": true
+  },
+  {
+   "url": "ftp://127.0.0.1/",
+   "allow": false
+  },
+  {
+   "url": "javascript:alert(1)",
+   "allow": false
+  },
+  {
+   "url": "data:text/html,hi",
+   "allow": false
+  },
+  {
+   "url": "about:blank",
+   "allow": false
+  },
+  {
+   "url": "blob:http://127.0.0.1:3000/x",
+   "allow": false
+  },
+  {
+   "url": "chrome://settings",
+   "allow": false
+  },
+  {
+   "url": "",
+   "allow": false
+  },
+  {
+   "url": " ",
+   "allow": false
+  },
+  {
+   "url": "http://",
+   "allow": false
+  },
+  {
+   "url": "https://example.com:99999/",
+   "allow": false
+  },
+  {
+   "url": "http://127.0.0.1:65536/",
+   "allow": false
+  },
+  {
+   "url": "http://127.0.0.1:%38080/",
+   "allow": false
+  },
+  {
+   "url": " http://example.com/",
+   "allow": false
+  },
+  {
+   "url": "http://exa mple.com/",
+   "allow": false
+  },
+  {
+   "url": "http://127.0.0.1\t:3000/",
+   "allow": false
+  },
+  {
+   "url": "http://127.0.0.1:3000/\n",
+   "allow": false
+  },
+  {
+   "url": "http://%31%32%37.0.0.1:8080/",
+   "allow": false
+  },
+  {
+   "url": "http://%31%32%37.0.0.1:3000/",
+   "allow": false
+  },
+  {
+   "url": "http://%6c%6f%63%61%6c%68%6f%73%74:8080/",
+   "allow": false
+  },
+  {
+   "url": "http://%6c%6f%63%61%6c%68%6f%73%74:3000/",
+   "allow": false
+  },
+  {
+   "url": "http://localhost%2e:3000/",
+   "allow": false
+  },
+  {
+   "url": "http://exa%6dple.com/",
+   "allow": false
+  },
+  {
+   "url": "http://127\u30020\u30020\u30021:8080/",
+   "allow": false
+  },
+  {
+   "url": "http://127\u30020\u30020\u30021:3000/",
+   "allow": false
+  },
+  {
+   "url": "http://\uff11\uff12\uff17.0.0.1:8080/",
+   "allow": false
+  },
+  {
+   "url": "http://\uff11\uff12\uff17.0.0.1:3000/",
+   "allow": false
+  },
+  {
+   "url": "http://caf\u00e9.example/",
+   "allow": false
+  },
+  {
+   "url": "http://localhost\\@evil.com/",
+   "allow": false
+  },
+  {
+   "url": "http:\\\\127.0.0.1:3000/",
+   "allow": false
+  },
+  {
+   "url": "http:127.0.0.1:3000/",
+   "allow": false
+  },
+  {
+   "url": "http:///127.0.0.1:3000/",
+   "allow": false
+  },
+  {
+   "url": "https:example.com/",
+   "allow": false
+  },
+  {
+   "url": "http:/example.com/",
+   "allow": false
+  },
+  {
+   "url": "http://[::ffff:127.0.0.1%25eth0]:3000/",
+   "allow": false
+  },
+  {
+   "url": "http://[fe80::1%25eth0]/",
+   "allow": false
+  }
+ ],
+ "file": [
+  {
+   "url": "file://{ws}/ok.html",
+   "allow": true
+  },
+  {
+   "url": "file://{ws}/",
+   "allow": true
+  },
+  {
+   "url": "file://{ws}",
+   "allow": true
+  },
+  {
+   "url": "file://{ws}/sub%20dir/a%20b.png",
+   "allow": true
+  },
+  {
+   "url": "file://{ws}/not-yet.html",
+   "allow": true
+  },
+  {
+   "url": "file://{ws}/ok.html?x=1#y",
+   "allow": true
+  },
+  {
+   "url": "file://localhost{ws}/ok.html",
+   "allow": true
+  },
+  {
+   "url": "file://LOCALHOST{ws}/ok.html",
+   "allow": true
+  },
+  {
+   "url": "FILE://{ws}/ok.html",
+   "allow": true
+  },
+  {
+   "url": "file:{ws}/ok.html",
+   "allow": true
+  },
+  {
+   "url": "file://{ws}/./ok.html",
+   "allow": true
+  },
+  {
+   "url": "file://{ws}//ok.html",
+   "allow": true
+  },
+  {
+   "url": "file://{ws}/ok.html/..",
+   "allow": true
+  },
+  {
+   "url": "file://{ws}/%252e%252e/x",
+   "allow": true
+  },
+  {
+   "url": "file://{ws}/%ef%bc%8e%ef%bc%8e/x",
+   "allow": true
+  },
+  {
+   "url": "file://{ws_upper}/ok.html",
+   "allow": true,
+   "os": "nt"
+  },
+  {
+   "url": "file://{ws}/OK.HTML",
+   "allow": true,
+   "os": "nt"
+  },
+  {
+   "url": "file://{ws}/link/secret.html",
+   "allow": false,
+   "needs": "link"
+  },
+  {
+   "url": "file://{ws}/../outside_long_name_dir/secret.html",
+   "allow": false
+  },
+  {
+   "url": "file://{ws}/%2e%2e/outside_long_name_dir/secret.html",
+   "allow": false
+  },
+  {
+   "url": "file://{ws}/%2E%2E/ok.html",
+   "allow": false
+  },
+  {
+   "url": "file://{ws}/ok.html.",
+   "allow": false
+  },
+  {
+   "url": "file://{ws}/ok.html%20",
+   "allow": false
+  },
+  {
+   "url": "file://{ws}/ok.html:stream",
+   "allow": false
+  },
+  {
+   "url": "file://{ws}/ok.html::$DATA",
+   "allow": false
+  },
+  {
+   "url": "file://{ws}/CON",
+   "allow": false
+  },
+  {
+   "url": "file://{ws}/nul.txt",
+   "allow": false
+  },
+  {
+   "url": "file://{ws}/COM1.html",
+   "allow": false
+  },
+  {
+   "url": "file://{ws}/con.html/x",
+   "allow": false
+  },
+  {
+   "url": "file://{ws}/a%5cb",
+   "allow": false
+  },
+  {
+   "url": "file://{ws}/a%2fb",
+   "allow": false
+  },
+  {
+   "url": "file://{ws}/a%2Fb",
+   "allow": false
+  },
+  {
+   "url": "file://{ws}/ok%00.html",
+   "allow": false
+  },
+  {
+   "url": "file://{ws}/ok.html%0a",
+   "allow": false
+  },
+  {
+   "url": "file://{ws}/ok.html%08",
+   "allow": false
+  },
+  {
+   "url": "file://{ws}/..%2foutside_long_name_dir",
+   "allow": false
+  },
+  {
+   "url": "file://{ws}/..%5coutside_long_name_dir",
+   "allow": false
+  },
+  {
+   "url": "file://{ws_nolead}/ok.html",
+   "allow": false
+  },
+  {
+   "url": "file://server/share/ok.html",
+   "allow": false
+  },
+  {
+   "url": "file:////server/share/ok.html",
+   "allow": false
+  },
+  {
+   "url": "file://///server/share/x",
+   "allow": false
+  },
+  {
+   "url": "file:{ws_nolead}/ok.html",
+   "allow": false
+  },
+  {
+   "url": "file:///{ws_pipe}/ok.html",
+   "allow": false,
+   "os": "nt"
+  },
+  {
+   "url": "file:///C:ok.html",
+   "allow": false,
+   "os": "nt"
+  },
+  {
+   "url": "file:////?/{ws_nolead}/ok.html",
+   "allow": false
+  },
+  {
+   "url": "file:///%5C%5C?%5C{ws_nolead}/ok.html",
+   "allow": false
+  },
+  {
+   "url": "file://{ws2}/n.html",
+   "allow": false
+  },
+  {
+   "url": "file://{ws_prefix}/in.html",
+   "allow": false
+  },
+  {
+   "url": "file:///C:/Windows/win.ini",
+   "allow": false,
+   "os": "nt"
+  },
+  {
+   "url": "file:///etc/passwd",
+   "allow": false
+  },
+  {
+   "url": "file:///",
+   "allow": false
+  },
+  {
+   "url": "file://{base}/ok.html",
+   "allow": false
+  },
+  {
+   "url": "file://{tmp}/shot.png",
+   "allow": true
+  },
+  {
+   "url": "file://{tmp}/sub/page.html",
+   "allow": true
+  },
+  {
+   "url": "file://{tmp}/notgamachine/x.png",
+   "allow": true
+  },
+  {
+   "url": "file://{tmp}/gamachine.log",
+   "allow": false
+  },
+  {
+   "url": "file://{tmp}/GAMACHINE.LOG",
+   "allow": false
+  },
+  {
+   "url": "file://{tmp}/gamachine-x/a.png",
+   "allow": false
+  },
+  {
+   "url": "file://{tmp}/Gamachine_cache/b.html",
+   "allow": false
+  },
+  {
+   "url": "file://{tmp}/sub/gamachine.log",
+   "allow": false
+  },
+  {
+   "url": "file://{tmp}/gamachine.log.1",
+   "allow": false
+  }
+ ]
+}

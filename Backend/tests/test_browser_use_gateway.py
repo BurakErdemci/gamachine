@@ -412,4 +412,7 @@ def test_post_cmd_sends_the_bearer_token_to_the_host_port(monkeypatch):
     assert asyncio.run(gateway.post_cmd(RUNTIME, "snapshot", 3, {})) == {"ok": True}
     assert sent["url"] == "http://127.0.0.1:4711/cmd"
     assert sent["headers"] == {"Authorization": f"Bearer {RUNTIME['token']}"}
+    denied = sent["json"].pop("denied_ports")
     assert sent["json"] == {"op": "snapshot", "conversation_id": 3, "args": {}}
+    # Every command carries the ports the host must keep closed to loopback pages, its own among them.
+    assert {RUNTIME["port"], 8000, 8080, 6400, 6450, 6499} <= set(denied) and denied == sorted(denied)

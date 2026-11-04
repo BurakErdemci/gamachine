@@ -76,7 +76,10 @@ async def post_cmd(runtime: dict, op: str, conversation_id: int, args: dict) -> 
         response = await client.post(
             f"http://127.0.0.1:{runtime['port']}/cmd",
             headers={"Authorization": f"Bearer {runtime['token']}"},
-            json={"op": op, "conversation_id": conversation_id, "args": args})
+            # The host denies the same local ports as the policy here, including ones only this process knows
+            # (the whisper server's random port); it refuses every loopback address until it has seen this list.
+            json={"op": op, "conversation_id": conversation_id, "args": args,
+                  "denied_ports": sorted(policy.gamachine_ports((runtime["port"],)))})
         response.raise_for_status()
         return response.json()
 

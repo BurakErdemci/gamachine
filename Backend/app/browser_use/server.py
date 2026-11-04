@@ -85,8 +85,10 @@ def create_server(handler: BrowserServer | None = None) -> MCPServer:
         return register
 
     @tool("browser_navigate", "Open an http(s) page in the agent browser, in your agent tab (the tab that was in "
-          "front when the user sent their message; switch with browser_use_tab). Local and private addresses are "
-          "refused. Use it for an address you know; when you would have to guess a URL, use browser_search instead.")
+          "front when the user sent their message; switch with browser_use_tab). Local servers on localhost or "
+          "127.0.0.1 open, except Gamachine's own ports; files open only inside this chat's project or the temp "
+          "folder, as file:///; private network addresses are refused. Use it for an address you know; when you "
+          "would have to guess a URL, use browser_search instead.")
     async def browser_navigate(url: str) -> CallToolResult:
         return await handler.call("navigate", {"url": url})
 

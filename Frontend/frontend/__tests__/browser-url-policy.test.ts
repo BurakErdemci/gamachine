@@ -34,7 +34,7 @@ describe('isPrivateAddress', () => {
   it('flags the reserved IPv4 ranges and the IPv6 forms that embed a private IPv4 address', () => {
     for (const ip of ['100.64.0.1', '100.127.255.254', '192.0.0.8', '192.0.2.5', '198.18.0.1', '198.19.255.255', '198.51.100.7',
       '203.0.113.9', '224.0.0.1', '239.1.1.1', '240.0.0.1', '255.255.255.255', 'ff02::1', 'ff00::', '::7f00:1', '::a00:1',
-      '64:ff9b::7f00:1', '64:ff9b::10.0.0.1', '2002:7f00:1::1', '2002:c0a8:101::1'])
+      '64:ff9b::7f00:1', '64:ff9b::10.0.0.1', '2002:7f00:1::1', '2002:c0a8:101::1', 'fec0::1', '::ffff:0:127.0.0.1', '2001:db8::1', '2001::1', '100::1'])
       expect(isPrivateAddress(ip), ip).toBe(true)
   })
 
@@ -45,7 +45,7 @@ describe('isPrivateAddress', () => {
   })
 
   it('leaves public addresses and non-addresses alone', () => {
-    for (const ip of ['8.8.8.8', '172.32.0.1', '172.15.255.255', '1.1.1.1', '2606:4700::1111', 'fec0::1', '::ffff:8.8.8.8', 'example.com'])
+    for (const ip of ['8.8.8.8', '172.32.0.1', '172.15.255.255', '1.1.1.1', '2606:4700::1111', '::ffff:8.8.8.8', 'example.com'])
       expect(isPrivateAddress(ip), ip).toBe(false)
   })
 })
@@ -170,7 +170,7 @@ describe('file: pages', () => {
   it('opens inside the workspace and the OS temp dir', () => {
     const ctx = ctxFor(workspace, tempRoot())
     for (const target of [path.join(workspace, 'index.html'), path.join(workspace, 'sub dir', 'a b.png'), path.join(workspace, 'not-yet.html'), workspace,
-      path.join(os.tmpdir(), 'gamachine-shot.png')])
+      path.join(os.tmpdir(), 'shot.png')])
       expect(isAllowedNavigation(url(target), ctx), target).toBe(true)
     expect(isAllowedNavigation(`${url(path.join(workspace, 'index.html'))}?x=1#top`, ctx)).toBe(true)
   })
@@ -205,5 +205,69 @@ describe('a public name that resolves to loopback', () => {
     expect(await resolvesToPrivate('rebind.example', async () => [{ address: '127.0.0.1', family: 4 }])).toBe(true)
     expect(await resolvesToPrivate('rebind.example', async () => [{ address: '::1', family: 6 }])).toBe(true)
     expect(await resolvesToPrivate('rebind.example', async () => [{ address: '93.184.216.34', family: 4 }, { address: '127.0.0.1', family: 4 }])).toBe(true)
+  })
+})
+
+// The same rows run against the backend's copy (Backend/tests/test_browser_use_policy.py): both must give the same verdict.
+interface Case { url: string; allow: boolean; os?: string; needs?: string }
+const CASES: { http: Case[]; file: Case[] } = JSON.parse(fs.readFileSync(path.join(__dirname, '../../../Backend/tests/data/browser_policy_cases.json'), 'utf8'))
+
+describe('shared http cases', () => {
+  const ctx = { ports: gamachinePorts([5555]) }
+  it.each(CASES.http.map((c) => [JSON.stringify(c.url), c] as const))('%s', (_name, c) => {
+    expect(isAllowedNavigation(c.url, ctx)).toBe(c.allow)
+  })
+})
+
+describe('shared file cases', () => {
+  let container: string
+  let base: string
+  let workspace: string
+  let temp: string
+  let linked = false
+  beforeAll(() => {
+    container = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'gm-cases-')))
+    base = path.join(container, 'base')
+    workspace = path.join(base, 'ws')
+    temp = path.join(container, 'temp')
+    for (const dir of [path.join(workspace, 'sub dir'), path.join(base, 'outside_long_name_dir'), path.join(base, 'ws2'), path.join(base, 'ws_long_directory_name'), temp])
+      fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(workspace, 'ok.html'), 'x')
+    fs.writeFileSync(path.join(base, 'outside_long_name_dir', 'secret.html'), 'x')
+    try { fs.symlinkSync(path.join(base, 'outside_long_name_dir'), path.join(workspace, 'link'), 'junction'); linked = true } catch { linked = false }
+    vi.spyOn(os, 'tmpdir').mockReturnValue(temp)
+  })
+  afterAll(() => {
+    vi.restoreAllMocks()
+    fs.rmSync(container, { recursive: true, force: true })
+  })
+  const pathOf = (p: string) => pathToFileURL(p).toString().slice('file://'.length)
+  const fill = (u: string) => {
+    const noLead = pathOf(workspace).replace(/^\//, '')
+    return u.replace('{ws_upper}', pathOf(workspace).toUpperCase()).replace('{ws_nolead}', noLead).replace('{ws_pipe}', noLead.replace(':', '|'))
+      .replace('{ws2}', pathOf(path.join(base, 'ws2'))).replace('{ws_prefix}', pathOf(path.join(base, 'ws_long_directory_name')))
+      .replace('{ws}', pathOf(workspace)).replace('{base}', pathOf(base)).replace('{tmp}', pathOf(temp))
+  }
+  it.each(CASES.file.map((c) => [JSON.stringify(c.url), c] as const))('%s', (_name, c) => {
+    if (c.os === 'nt' && process.platform !== 'win32') return
+    if (c.needs === 'link' && !linked) return
+    const target = fill(c.url)
+    expect(isAllowedNavigation(target, { ports: gamachinePorts(), fileRoots: [workspace, tempRoot()] }), target).toBe(c.allow)
+  })
+
+  it('keeps a project that lives inside the temp folder open even when its name starts with gamachine', () => {
+    const inside = path.join(temp, 'gamachine-project')
+    fs.mkdirSync(inside)
+    const target = pathToFileURL(path.join(inside, 'a.png')).toString()
+    expect(isAllowedNavigation(target, { ports: gamachinePorts(), fileRoots: [workspace, tempRoot()] })).toBe(false)
+    expect(isAllowedNavigation(target, { ports: gamachinePorts(), fileRoots: [workspace, tempRoot(), inside] })).toBe(true)
+  })
+})
+
+describe('Gamachine ports that are not fixed', () => {
+  it('denies the whole Unity bridge fallback range 6400-6499 and nothing next to it', () => {
+    const ctx = { ports: gamachinePorts() }
+    for (const port of [6400, 6401, 6450, 6499]) expect(isAllowedNavigation(`http://127.0.0.1:${port}/`, ctx), String(port)).toBe(false)
+    for (const port of [6399, 6500]) expect(isAllowedNavigation(`http://127.0.0.1:${port}/`, ctx), String(port)).toBe(true)
   })
 })

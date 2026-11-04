@@ -54,7 +54,10 @@ export function isPrivateAddress(ip: string): boolean {
   if (g.slice(0, 6).every((x) => x === 0)) return embedded(g[6], g[7]) // IPv4-compatible ::/96
   if (g[0] === 0x64 && g[1] === 0xff9b && g.slice(2, 6).every((x) => x === 0)) return embedded(g[6], g[7]) // NAT64
   if (g[0] === 0x2002) return embedded(g[1], g[2]) // 6to4
-  return false
+  // Only global unicast (2000::/3) is public, minus the protocol-assignment, documentation and benchmarking blocks;
+  // everything else is reserved or site-local, as in the backend's copy of the rule.
+  if ((g[0] & 0xe000) !== 0x2000) return true
+  return (g[0] === 0x2001 && (g[1] < 0x0200 || g[1] === 0x0db8)) || (g[0] === 0x3fff && g[1] < 0x1000)
 }
 
 function hostOf(url: URL): string {
@@ -69,7 +72,7 @@ function hostOf(url: URL): string {
 export const GAMACHINE_DEFAULT_PORTS: readonly number[] = [
   8000, // backend HTTP: Backend main.py PORT default, docker-compose.yml, DOCKER_BACKEND_PORT default in background.ts
   8080, // Unity MCP HTTP server: unity_mcp_manager.mcp_port, mcp_port_guard.DEFAULT_MCP_PORT
-  6400, // Unity editor bridge: unity-mcp transport/legacy/port_discovery.py DEFAULT_PORT
+  ...Array.from({ length: 100 }, (_, i) => 6400 + i), // Unity editor bridge: port_discovery.py DEFAULT_PORT, PortManager.cs falls back DefaultPort+1..+99
   9876, // Blender connector bridge: Backend connectors/views.py BRIDGE_PORTS
   8799, // relay dev server: relay/package.json "wrangler dev --port 8799"
   8888, // nextron renderer dev server (background.ts loads it in dev, port in process.argv[2])
@@ -151,6 +154,18 @@ function insideDir(target: string, root: string): boolean {
   return relative === '' || (relative.split(path.sep)[0] !== '..' && !path.isAbsolute(relative))
 }
 
+/**
+ * Spellings a browser reads differently from the backend's parser, refused in both copies: control characters or
+ * surrounding whitespace, no slashes after the scheme, backslashes, a percent-encoded or non-ASCII host, port 0,
+ * and a file: address that is not file:///path, file://localhost/path or file:/path.
+ */
+function plainAddress(url: string, parsed: URL): boolean {
+  if (/[\x00-\x1f\x7f]/.test(url) || url !== url.trim()) return false
+  if (parsed.protocol === 'file:') return /^file:(\/\/(localhost)?\/(?!\/)|\/(?!\/))/i.test(url)
+  const authority = /^[a-z][a-z0-9+.-]*:\/\/([^/?#]*)/i.exec(url)
+  return authority !== null && authority[1] !== '' && !url.includes('\\') && !authority[1].includes('%') && !/[^\x00-\x7f]/.test(authority[1]) && parsed.port !== '0'
+}
+
 const RESERVED_FILE_NAMES = /^(con|prn|aux|nul|conin\$|conout\$|com[1-9]|lpt[1-9])$/i
 
 /** True when a file: URL names a plain local path inside one of `roots` (links, UNC, device and stream names refused). */
@@ -159,20 +174,27 @@ export function isFileInRoots(url: string, roots: readonly string[] | null | und
   let target: string
   try {
     const parsed = new URL(url)
-    if (parsed.protocol !== 'file:' || parsed.hostname !== '') return false
+    if (parsed.protocol !== 'file:' || parsed.hostname !== '' || !plainAddress(url, parsed)) return false
     target = fileURLToPath(parsed)
   } catch {
     return false
   }
   const win = process.platform === 'win32'
-  if (target.includes('\0') || target.startsWith('\\\\') || target.startsWith('//')) return false
+  // WHATWG reads "C|" as a drive letter; the backend does not.
+  if (win && /^file:(\/\/(localhost)?)?\/[A-Za-z]\|/i.test(url)) return false
+  if (/[\x00-\x1f\x7f]/.test(target) || target.startsWith('\\\\') || target.startsWith('//')) return false
   if (win && !/^[A-Za-z]:[\\/]/.test(target)) return false
   const rest = win ? target.slice(2) : target
   if (rest.includes(':')) return false
   const names = rest.split(/[\\/]/).filter((name) => name !== '' && name !== '.' && name !== '..')
   if (names.some((name) => /[. ]$/.test(name) || RESERVED_FILE_NAMES.test(name.split('.')[0]))) return false
   const real = realPathLoose(target)
-  return roots.some((root) => typeof root === 'string' && root !== '' && insideDir(real, realPathLoose(root)))
+  const inside = (root: string) => typeof root === 'string' && root !== '' && insideDir(real, realPathLoose(root))
+  if (!roots.some(inside)) return false
+  // Inside the temp folder alone, Gamachine's own files (gamachine.log, its temp folders) stay closed.
+  const temp = tempRoot()
+  if (roots.some((root) => inside(root) && realPathLoose(root) !== temp)) return true
+  return !path.relative(temp, real).split(path.sep).some((name) => name.toLowerCase().startsWith('gamachine'))
 }
 
 /** The OS temp folder, one of the roots a file: page may always read from. */
@@ -197,6 +219,7 @@ export function isAllowedRequest(url: string, origin: PageOrigin, ctx: Navigatio
     return false
   }
   if (parsed.protocol === 'file:') return origin === 'file' && isFileInRoots(url, ctx.fileRoots)
+  if (!plainAddress(url, parsed)) return false
   if (!['http:', 'https:', 'ws:', 'wss:'].includes(parsed.protocol) || origin === 'file') return false
   const host = hostOf(parsed)
   if (!host) return false

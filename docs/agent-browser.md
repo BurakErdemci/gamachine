@@ -358,20 +358,30 @@ only answers two read-only calls and keeps no pick state; nothing is ever reconc
 3. Navigation allow-list (owner decision, 4 Nov 2026: the agent may show its own screenshot, HTML page or local
    game preview). `http:` and `https:` pages open, and so do loopback pages (`localhost`, `*.localhost`,
    127.0.0.0/8, ::1, IPv4-mapped and legacy spellings) **except on a port Gamachine itself listens on**: the
-   backend's, the browser host's own command port, Unity MCP's (8080), and the other fixed listeners (6400 Unity
-   bridge, 9876 Blender bridge, 8799 relay dev, 8888 renderer dev, 8000 default backend). Each copy of the rule keeps
-   that list with where every port comes from (`gamachine_ports()` in `browser_use/policy.py`, `GAMACHINE_DEFAULT_PORTS`
-   and `gamachinePorts()` in `browser-url-policy.ts`); a runtime value that is not known adds nothing in the backend and,
-   in the host, refuses every loopback address. Still refused: the private network (10/8, 172.16/12, 192.168/16,
+   backend's, the browser host's own command port, Unity MCP's (8080), the whisper STT server's random port, and the
+   other fixed listeners (6400-6499 Unity bridge and its fallback ports, 9876 Blender bridge, 8799 relay dev, 8888
+   renderer dev, 8000 default backend). Each copy of the rule keeps that list with where every port comes from
+   (`gamachine_ports()` in `browser_use/policy.py`, `GAMACHINE_DEFAULT_PORTS` and `gamachinePorts()` in
+   `browser-url-policy.ts`). The backend gateway sends its full computed list as `denied_ports` with every command; the
+   host keeps the latest one per runtime and merges it with what it knows itself (its ports, `UNITY_MCP_HTTP_PORT` /
+   `UNITY_MCP_HTTP_URL`), and until it has received one it refuses every loopback address. A runtime value that is not
+   known adds nothing in the backend. Still refused: the private network (10/8, 172.16/12, 192.168/16,
    fc00::/7), link-local and cloud metadata (169.254/16), CGNAT (100.64/10), unspecified, multicast and reserved ranges,
    `data:` (top level), `javascript:`, `chrome:`, `devtools:`, and any public name that resolves to a loopback or
    non-public address (DNS rebinding; the connected IP is checked too). `file:` opens only for the agent's `navigate`
    (the backend sends the chat's project folder and the OS temp folder as `file_roots`; the host checks the same roots
    again) and for links between files inside those roots: realpath inside a root, percent-decoded, no UNC, `\?\`
-   or device path, no stream (`:`) in a name, directory listings allowed. **Origin rule:** a request (frame,
-   sub-resource, redirect, window open) to a loopback address is allowed only while the tab's page is itself a loopback
-   page, or while the host's own load of a loopback address is under way; a public page reaches nothing local or
-   private; a `file:` page loads only files inside its roots, never http(s) or loopback. The two copies of the rule
+   or device path, no stream (`:`) in a name, directory listings allowed; inside the temp folder Gamachine's own files
+   (`gamachine.log` and anything under a name that starts with `gamachine`) stay closed. Both copies also refuse
+   spellings a browser reads differently (control characters, no `//` after the scheme, backslashes, a percent-encoded
+   or non-ASCII host, port 0, `file:` without `file:///`); the shared case table `Backend/tests/data/browser_policy_cases.json`
+   run against both copies. **Origin rule:** a request (frame, sub-resource, redirect, window open) to a loopback
+   address is allowed only when the *requesting frame* is itself a loopback page (a public child frame inside a loopback
+   page reaches nothing local; a blank frame speaks for its parent; a request that names no frame is public), or while
+   the host's own load of a loopback address is under way. A main-frame redirect is judged by the hop before it, so a
+   loopback page that sends the tab through a public site cannot be redirected back to loopback. A public page reaches
+   nothing local or private; a `file:` page loads only files inside its roots, never http(s) or loopback; a tab keeps
+   the roots of every `file:` address it opened, so Back and Forward to one restores them. The two copies of the rule
    (`browser_use/policy.py` and `main/helpers/browser-url-policy.ts`) change in the same commit. The check runs in
    `will-navigate`, `will-redirect` and `will-frame-navigate`, and in `session.webRequest.onBeforeRequest` for
    sub-resources.
@@ -424,7 +434,7 @@ at a time per tab (one queue per chat's tab; a second caller for that tab waits)
 
 | op | args | extra reply fields |
 |---|---|---|
-| `navigate` | `{url}`; `{url, file_roots}` for a `file:` URL (the gateway adds the roots) | — |
+| `navigate` | `{url}`; `{url, file_roots}` for a `file:` URL (the gateway adds the roots); every command also carries `denied_ports` | — |
 | `snapshot` | `{max_chars?}` (default 20 000) | `text` (readable text), `elements`: `[{ref, role, name, href?, value?, kind}]` (links, buttons, inputs, selects; at most 300), `snapshot_id` |
 | `click` | `{snapshot_id, ref}` | — |
 | `fill` | `{snapshot_id, ref, value}` | — |
@@ -562,7 +572,7 @@ Order: A and B in parallel against this contract; C in parallel against a mocked
 2. "Find a free CC0 walk-cycle animation" ends with candidates shown, no card.
 3. A form submit, a password fill and a "Buy" click each open a card and the agent says it
    is waiting; approving the card lets the identical retry through; rejecting it does not.
-4. `http://127.0.0.1:<backend port>/`, `http://127.0.0.1:8080/` (Unity MCP) and a `file:` path outside the chat's project
-   and the temp folder are refused; `http://127.0.0.1:<free port>/` and a file inside the project open (owner decision, 4 Nov 2026).
+4. `http://127.0.0.1:<backend port>/`, `http://127.0.0.1:8080/` (Unity MCP), `http://127.0.0.1:6450/` (Unity bridge
+   fallback range) and a `file:` path outside the chat's project and the temp folder (or Gamachine's own file in it) are refused; `http://127.0.0.1:<free port>/` and a file inside the project open (owner decision, 4 Nov 2026).
 5. Stop halts an in-flight navigation and denies the next browser tool until the user's
    next message.
