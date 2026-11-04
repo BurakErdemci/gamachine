@@ -48,8 +48,9 @@ authenticated session:
   against the FastAPI app (ASGI call) with an internal identity for the device, never with
   the desktop's own session token or UI secret. Anything not listed returns 403.
 - **No secrets cross:** routes that read or write API keys, provider credentials, CLI
-  installs, approval mode secrets, profile reset, remote-control pairing itself, computer-use
-  grants and the browser runtime are never on the list. Model/effort selection stays the
+  installs, approval mode secrets, profile reset, remote-control pairing itself and the
+  computer-use and browser runtime reports are never on the list. Computer use and the agent
+  browser (on/off, card switch, app grants) are on it since the owner decision of 4 Nov 2026. Model/effort selection stays the
   existing RPCs (lists only, as today).
 - **Work parity (owner decision, 29 Oct 2026):** everything the user does at the desk to
   keep the game moving works remotely: chats, cards, file tree, file read and write,
@@ -59,7 +60,9 @@ authenticated session:
   Native dialogs (open-file, open-folder) have no remote equivalent: the remote UI offers a
   picker over the trusted roots instead; authorising a new root stays desktop-only.
   Desktop-only: API keys, provider sign-in, CLI install, remote pairing management,
-  profile reset, computer-use app grants. A paired device that is taken can run terminal
+  profile reset. Computer use and the agent browser (switches, settings, app grants, live
+  view with downscaled frames) work remotely as at the desk (owner decision, 4 Nov 2026).
+  A paired device that is taken can run terminal
   commands; the guards are pairing, the 90-day idle expiry and one-click device removal.
 - **Cards** keep their rules: risky cards need the hold on the page; approving a
   computer-use or browser card from remote goes through the existing remote answer path
@@ -104,11 +107,11 @@ follow a turn the desktop started.
 HTTP allow-list rules (W1 owns the exact table): everything under the chat, conversation,
 workspace, file, scene, Unity, model-list, card and halt routes is allowed. Denied by
 default and always: `/api-keys/*`, `/cli-install/*`, `/cli-login/*`, `/profile/reset`,
-`/computer-use/grants/*`, `/computer-use/runtime`, `/computer-use/settings` (POST),
-`/browser/runtime`, `/browser/settings` (PUT), `/remote/*`, `/approval-mode` (POST; the v1
+`/computer-use/runtime`, `/browser/runtime`, `/remote/*`, `/approval-mode` (POST; the v1
 `set_approval_mode` RPC stays the remote way). Requests run in-process with an internal
 device identity. The few allowed routes that require the UI secret (card answer
-`/mcp-approval-respond/*`, halt `/computer-use/halt/*`) get it added by the dispatcher from
+`/mcp-approval-respond/*`, halt `/computer-use/halt/*`, and since 4 Nov 2026 the
+computer-use and browser settings, card switch and grant removal) get it added by the dispatcher from
 an explicit, separate list; no other route ever sees it.
 
 ## Relay and budget

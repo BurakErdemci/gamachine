@@ -5,7 +5,7 @@ import { confirmDialog } from '../../ui/ConfirmDialog';
 import { LIVE_FEATURES_EVENT } from '../../../lib/liveFeatures';
 import { stripBidi } from '../../../lib/modelText';
 import {
-  computerUseStatus, hasComputerUseIpc, isComputerUseError, openScreenSettings, removeComputerGrant,
+  computerUseStatus, hasComputerUseSettingsIpc, isComputerUseError, openScreenSettings, removeComputerGrant,
   requestAccessibility, restartComputerUse, setComputerUseCardsOff, setComputerUseEnabled, type ComputerUseStatus,
 } from '../../../lib/computerUse';
 import { Lamp, SetCard, SetGroup, SetPageHead, SetRow, SetSwitch } from './controls';
@@ -45,7 +45,7 @@ const Notice = () => {
  */
 export const ComputerUsePage = ({ saved, showToast }: { saved: () => void; showToast?: Toast }) => {
   const { t, lang } = useLang();
-  const desktop = hasComputerUseIpc();
+  const desktop = hasComputerUseSettingsIpc();
   const [status, setStatus] = useState<ComputerUseStatus | null>(null);
   const [readFailed, setReadFailed] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);

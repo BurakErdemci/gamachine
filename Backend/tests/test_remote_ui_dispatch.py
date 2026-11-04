@@ -157,6 +157,10 @@ async def call(ui, session=None, **req):
     ("GET", "/mcp/unity/console"), ("GET", "/cli-models/claude"), ("GET", "/mcp-pending"),
     ("POST", "/question-answer/g1"), ("GET", "/approval-mode"), ("GET", "/computer-use/settings"),
     ("GET", "/browser/settings"), ("get", "/available-models"), ("GET", "/conversations/a%20b/messages"),
+    # computer use and the agent browser: switches, card switch, app grants (owner decision 4 Nov 2026)
+    ("POST", "/computer-use/settings"), ("POST", "/computer-use/settings/cards"),
+    ("DELETE", "/computer-use/grants/com.apple.finder"), ("PUT", "/browser/settings"),
+    ("PUT", "/browser/settings/cards"),
 ])
 def test_allowed(method, path):
     assert d.http_allowed(method, path) is True
@@ -165,8 +169,10 @@ def test_allowed(method, path):
 @pytest.mark.parametrize("method,path", [
     ("POST", "/api-keys/save"), ("GET", "/api-keys/1"), ("DELETE", "/api-keys/1/openai"),
     ("POST", "/cli-install/claude"), ("POST", "/cli-login/codex"), ("POST", "/profile/reset"),
-    ("DELETE", "/computer-use/grants/com.apple.finder"), ("POST", "/computer-use/runtime"),
-    ("POST", "/computer-use/settings"), ("POST", "/browser/runtime"), ("PUT", "/browser/settings"),
+    ("POST", "/computer-use/runtime"), ("POST", "/browser/runtime"),
+    ("GET", "/computer-use/grants/com.apple.finder"), ("PUT", "/computer-use/settings"),
+    ("POST", "/browser/settings"), ("POST", "/connectors/x/install"), ("DELETE", "/computer-use/grants"),
+    ("POST", "/computer-use/settings/other"),
     ("POST", "/remote/pair/start"), ("GET", "/remote/status"), ("POST", "/remote/ui-ipc-result/" + "a" * 16),
     ("POST", "/approval-mode"), ("POST", "/save-ai-config"), ("POST", "/mailbox/send"),
     ("POST", "/mcp-approval-request"),
@@ -190,6 +196,16 @@ def test_deny_wins_over_allow(monkeypatch):
     assert d.http_allowed("POST", "/remote/enable") is False
 
 
+def test_secret_elevated_for_the_cu_and_browser_switches():
+    for m, p in (("POST", "/computer-use/settings"), ("POST", "/computer-use/settings/cards"),
+                 ("DELETE", "/computer-use/grants/com.apple.finder"), ("PUT", "/browser/settings"),
+                 ("PUT", "/browser/settings/cards")):
+        assert d.secret_elevated(m, p) is True, (m, p)
+    for m, p in (("GET", "/computer-use/settings"), ("GET", "/browser/settings"),
+                 ("POST", "/computer-use/runtime"), ("POST", "/browser/runtime"), ("POST", "/api-keys/save")):
+        assert d.secret_elevated(m, p) is False, (m, p)
+
+
 def test_secret_elevated_only_for_the_two_routes():
     assert d.secret_elevated("POST", "/mcp-approval-respond/abc") is True
     assert d.secret_elevated("POST", "/computer-use/halt/12") is True
@@ -203,10 +219,20 @@ def test_ipc_lists():
     for ch in ("read-file", "write-file", "terminal-spawn", "terminal-write", "read-directory", "move-entry"):
         assert ch in d.IPC_ALLOW
     for ch in ("app-token-get", "profile-reset", "authorize-workspace", "open-folder-dialog", "open-file-dialog",
-               "remote-control", "approval-mode-set", "register-dropped-folder", "computer-use"):
+               "remote-control", "approval-mode-set", "register-dropped-folder"):
         assert ch not in d.IPC_ALLOW
     assert d.ipc_allowed("browser-live", [{"op": "halt"}])
-    assert not d.ipc_allowed("browser-live", [{"op": "enable"}])
+    for op in ("settings", "enable", "disable", "cards-on", "cards-off"):
+        assert d.ipc_allowed("browser-live", [{"op": op}]), op
+    for op in ("set-bounds", "visible", "full", "navigate", "clear-browsing-data", "sites", "history", "close"):
+        assert not d.ipc_allowed("browser-live", [{"op": op}]), op
+    for op in ("status", "enable", "disable", "cards-on", "cards-off", "remove-grant", "restart"):
+        assert d.ipc_allowed("computer-use", [{"op": op}]), op
+    for op in ("request-accessibility", "open-screen-settings", "bogus"):
+        assert not d.ipc_allowed("computer-use", [{"op": op}]), op
+    assert not d.ipc_allowed("computer-use", [])
+    assert not d.ipc_allowed("computer-use-live", [{"op": "enable"}])
+    assert not d.ipc_allowed("computer-use-live", [{"op": "panel-visible", "visible": True}])
     assert not d.ipc_allowed("browser-live", [])
     assert d.ipc_allowed("computer-use-live", [{"op": "status"}])
     assert not d.ipc_allowed("computer-use-live", [{"op": "open-panel"}])
@@ -556,7 +582,7 @@ async def test_ipc_error_and_refusals(ui, renderer):
     assert r["error"] == "ipc_failed" and r["message"] == "outside workspace"
 
     for i, (ch, args) in enumerate((("app-token-get", []), ("profile-reset", []),
-                                       ("browser-live", [{"op": "enable"}]), ("open-folder-dialog", []))):
+                                       ("browser-live", [{"op": "set-bounds"}]), ("open-folder-dialog", []))):
         r = await call(ui, rid=10 + i, type="ui_ipc", channel=ch, args=args)
         assert r["error"] == "remote_unavailable"
     assert renderer.q.empty()
@@ -720,7 +746,7 @@ async def test_ipc_single_payload_without_args(ui, renderer):
 
 async def test_ipc_args_win_over_payload_and_are_checked(ui, renderer):
     # The op check reads args[0]; a harmless payload cannot cover a refused op.
-    r = await call(ui, type="ui_ipc", channel="browser-live", payload={"op": "status"}, args=[{"op": "enable"}])
+    r = await call(ui, type="ui_ipc", channel="browser-live", payload={"op": "status"}, args=[{"op": "set-bounds"}])
     assert r["error"] == "remote_unavailable"
     assert renderer.q.empty()
     r = await call(ui, rid=2, type="ui_ipc", channel="read-file", args=list(range(d.IPC_ARGS_MAX + 1)))

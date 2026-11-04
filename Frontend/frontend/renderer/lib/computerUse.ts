@@ -38,6 +38,11 @@ const ipc = (): { invoke: (...a: unknown[]) => Promise<unknown> } | null => {
 // `computer-use` channel over it: that page has no desktop computer-use IPC.
 export const hasComputerUseIpc = (): boolean => ipc() !== null && !isRemotePage();
 
+// The settings page also works on the paired browser (owner decision 4 Nov 2026): the switches, the card
+// switch, app grants and the driver restart cross to the desktop; the ops that open native dialogs there
+// answer remote_unavailable (the shim turns that into `{ error }`). Card answers keep their HTTP path above.
+export const hasComputerUseSettingsIpc = (): boolean => ipc() !== null;
+
 export const isComputerUseError = (v: unknown): v is ComputerUseError =>
   !!v && typeof v === 'object' && typeof (v as { error?: unknown }).error === 'string';
 

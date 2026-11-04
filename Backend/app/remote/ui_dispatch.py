@@ -120,6 +120,12 @@ _ALLOW: List[Tuple[Tuple[str, ...], str]] = [
     (("GET",), r"/approval-mode"),
     (("GET",), r"/computer-use/(settings|activity)"),
     (("GET",), r"/browser/settings"),
+    # computer use and the agent browser: on/off, card switch, app grants (owner decision 4 Nov 2026).
+    # Their runtime routes (/computer-use/runtime, /browser/runtime) stay denied: only the desktop's own
+    # process reports its driver paths and port/token there, no settings screen calls them.
+    (("POST",), r"/computer-use/settings(/cards)?"),
+    (("DELETE",), rf"/computer-use/grants/{_ID}"),
+    (("PUT",), r"/browser/settings(/cards)?"),
     (("GET",), rf"/connectors(/{_ID}/install)?"),
     (("GET",), r"/(me|health|health/auth|agent-guide|profile/stats)"),
 ]
@@ -131,11 +137,8 @@ _DENY: List[Tuple[Optional[Tuple[str, ...]], str]] = [
     (None, "/cli-install"),
     (None, "/cli-login"),
     (None, "/profile/reset"),
-    (None, "/computer-use/grants"),
     (None, "/computer-use/runtime"),
-    (("POST", "PUT", "PATCH", "DELETE"), "/computer-use/settings"),
     (None, "/browser/runtime"),
-    (("POST", "PUT", "PATCH", "DELETE"), "/browser/settings"),
     (("POST", "PUT", "PATCH", "DELETE"), "/connectors"),
     (None, "/remote"),
     (("POST", "PUT", "PATCH", "DELETE"), "/approval-mode"),
@@ -143,7 +146,10 @@ _DENY: List[Tuple[Optional[Tuple[str, ...]], str]] = [
 
 # The only routes that get the UI secret, and only for these methods.
 _SECRET = [("POST", re.compile(rf"/mcp-approval-respond/{_ID}")),
-           ("POST", re.compile(rf"/computer-use/halt/{_ID}"))]
+           ("POST", re.compile(rf"/computer-use/halt/{_ID}")),
+           ("POST", re.compile(r"/computer-use/settings(/cards)?")),
+           ("DELETE", re.compile(rf"/computer-use/grants/{_ID}")),
+           ("PUT", re.compile(r"/browser/settings(/cards)?"))]
 # Answered here through the v1 card path, never by running the route.
 _CARD_ANSWER = re.compile(rf"/mcp-approval-respond/({_ID})")
 
@@ -158,13 +164,21 @@ IPC_ALLOW = frozenset({
     "read-directory", "file-exists", "path-exists", "git-status", "workspace-info",
     "backend-workspace-path", "host-workspace-path",
     "terminal-spawn", "terminal-write", "terminal-resize",
-    "computer-use-live", "browser-live",
+    "computer-use-live", "browser-live", "computer-use",
 })
 # Channels whose first argument is `{op, ...}`: only these ops cross. The rest
-# drive the desktop's own window (panel bounds, visibility, enable/settings).
+# drive the desktop's own window (panel bounds, visibility, tabs, browsing data) or open native
+# dialogs on the PC. On/off and settings cross (owner decision 4 Nov 2026).
 IPC_OPS = {
-    "browser-live": frozenset({"status", "halt", "answer-card"}),
+    # settings/enable/disable/cards-off/cards-on: read and switch the agent browser, as in its settings page.
+    "browser-live": frozenset({"status", "halt", "answer-card",
+                               "settings", "enable", "disable", "cards-off", "cards-on"}),
     "computer-use-live": frozenset({"status", "halt", "halted"}),
+    # status: settings page state; enable/disable/cards-off/cards-on: the switches; remove-grant: revoke an
+    # app; restart: restart the driver runtime (installs nothing). request-accessibility and
+    # open-screen-settings pop native OS dialogs on the PC and stay desk-only.
+    "computer-use": frozenset({"status", "enable", "disable", "cards-off", "cards-on",
+                               "remove-grant", "restart"}),
 }
 # main -> renderer events a browser may subscribe to. Terminal events carry the
 # terminal id in the channel name (`terminal-data-<id>`).

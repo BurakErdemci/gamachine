@@ -1,0 +1,150 @@
+// computer-use-live events forwarded to a paired browser (renderer/lib/remote/desktopRunner.ts):
+// the PNG frame becomes a small JPEG, frames are throttled, state-only events pass at once.
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+
+const ipc = vi.hoisted(() => {
+  const listeners = new Map<string, (...args: unknown[]) => void>()
+  const stub = {
+    invoke: vi.fn(),
+    on: vi.fn((channel: string, cb: (...args: unknown[]) => void) => {
+      listeners.set(channel, cb)
+      return () => { listeners.delete(channel) }
+    }),
+    listeners,
+  }
+  ;(globalThis as any).window.ipc = stub
+  return stub
+})
+
+vi.mock('axios', () => {
+  const post = vi.fn()
+  const get = vi.fn()
+  return { default: { post, get }, post, get }
+})
+
+import axios from 'axios'
+import { handleRemoteIpcFrame, resetRemoteSubscriptionsForTests } from '../renderer/lib/remote/desktopRunner'
+
+const post = (axios as unknown as { post: ReturnType<typeof vi.fn> }).post
+const API = 'http://127.0.0.1:8000'
+const PNG = (n: number) => `data:image/png;base64,${btoa('p'.repeat(n))}`
+
+// Each drawn JPEG is `size(side, quality)` bytes of base64; every call is recorded.
+let size: (side: number, quality: number) => number
+let drawn: Array<{ side: number; quality: number }>
+
+class FakeOffscreenCanvas {
+  width: number
+  height: number
+  constructor(w: number, h: number) { this.width = w; this.height = h }
+  getContext() { return { drawImage: () => {} } }
+  async convertToBlob({ type, quality }: { type: string; quality: number }) {
+    const side = Math.max(this.width, this.height)
+    drawn.push({ side, quality })
+    return new Blob([new Uint8Array(size(side, quality))], { type })
+  }
+}
+
+const sentArgs = () => post.mock.calls.map(c => (c[1] as any).args[0] as { frame: string | null; seq?: number })
+const flushAsync = async () => { for (let i = 0; i < 20; i++) await vi.advanceTimersByTimeAsync(0) }
+const emit = (live: Record<string, unknown>) => ipc.listeners.get('computer-use-live')!(live)
+
+beforeEach(() => {
+  vi.useFakeTimers()
+  vi.setSystemTime(1_000_000)
+  drawn = []
+  size = () => 1000
+  post.mockReset()
+  post.mockResolvedValue({ data: { subscribed: true } })
+  ipc.on.mockClear()
+  vi.stubGlobal('OffscreenCanvas', FakeOffscreenCanvas)
+  vi.stubGlobal('createImageBitmap', vi.fn(async () => ({ width: 2560, height: 1440, close: vi.fn() })))
+  handleRemoteIpcFrame({ type: 'remote_ipc_subscribe', channel: 'computer-use-live' }, API, 'tok')
+})
+
+afterEach(() => {
+  resetRemoteSubscriptionsForTests()
+  vi.unstubAllGlobals()
+  vi.useRealTimers()
+})
+
+describe('frame downscale', () => {
+  it('turns a large PNG into a JPEG under 400_000 bytes', async () => {
+    emit({ active: true, conversationId: 3, frame: PNG(3_000_000) })
+    await flushAsync()
+    const [sent] = sentArgs()
+    expect(sent.frame!.startsWith('data:image/jpeg;base64,')).toBe(true)
+    expect(JSON.stringify(post.mock.calls[0][1]).length).toBeLessThan(400_000)
+    expect(drawn[0]).toEqual({ side: 1280, quality: 0.75 })
+    expect(post.mock.calls[0][1].args[0].conversationId).toBe(3)
+  })
+
+  it('steps down in size, then quality, until it fits', async () => {
+    // Too big at 1280 and 960; fits only at 720 with the lower quality.
+    size = (side, quality) => (side === 720 && quality === 0.6 ? 1000 : 600_000)
+    emit({ active: true, frame: PNG(10) })
+    await flushAsync()
+    expect(drawn).toEqual([
+      { side: 1280, quality: 0.75 }, { side: 1280, quality: 0.6 },
+      { side: 960, quality: 0.75 }, { side: 960, quality: 0.6 },
+      { side: 720, quality: 0.75 }, { side: 720, quality: 0.6 },
+    ])
+    expect(sentArgs()[0].frame!.startsWith('data:image/jpeg')).toBe(true)
+  })
+
+  it('forwards frame null when nothing fits', async () => {
+    size = () => 600_000
+    emit({ active: true, conversationId: 4, frame: PNG(10) })
+    await flushAsync()
+    expect(sentArgs()).toHaveLength(1)
+    expect(sentArgs()[0].frame).toBeNull()
+    expect(post.mock.calls[0][1].args[0].conversationId).toBe(4)
+  })
+
+  it('forwards frame null when the image cannot be decoded', async () => {
+    vi.stubGlobal('createImageBitmap', vi.fn(async () => { throw new Error('bad image') }))
+    emit({ active: true, frame: PNG(10) })
+    await flushAsync()
+    expect(sentArgs()[0].frame).toBeNull()
+  })
+})
+
+describe('throttle', () => {
+  it('forwards at most 2 of 5 frames in 500 ms, the newest last', async () => {
+    for (let i = 1; i <= 5; i++) {
+      emit({ active: true, seq: i, frame: PNG(10 + i) })
+      await vi.advanceTimersByTimeAsync(100)
+    }
+    await vi.advanceTimersByTimeAsync(600)
+    await flushAsync()
+    const sent = sentArgs()
+    expect(sent.length).toBeLessThanOrEqual(2)
+    expect(sent.length).toBeGreaterThanOrEqual(1)
+    expect(sent[sent.length - 1].seq).toBe(5)
+  })
+
+  it('lets state-only events through at once and drops an older waiting frame', async () => {
+    emit({ active: true, seq: 1, frame: PNG(10) })
+    await flushAsync()
+    emit({ active: true, seq: 2, frame: PNG(10) })
+    emit({ active: false, seq: 3, frame: null })
+    expect(post).toHaveBeenCalledTimes(2)
+    expect(sentArgs()[1]).toMatchObject({ seq: 3, frame: null })
+    await vi.advanceTimersByTimeAsync(1000)
+    await flushAsync()
+    expect(post).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not let a frame still encoding overwrite a newer state', async () => {
+    emit({ active: true, seq: 1, frame: PNG(10) })
+    emit({ active: false, seq: 2, frame: null })
+    await flushAsync()
+    expect(sentArgs().map(a => a.seq)).toEqual([2])
+  })
+
+  it('sends nothing for other channels through the frame path', async () => {
+    handleRemoteIpcFrame({ type: 'remote_ipc_subscribe', channel: 'open-conversation' }, API, 'tok')
+    ipc.listeners.get('open-conversation')!({ frame: PNG(10) })
+    expect((post.mock.calls[0][1] as any).args[0].frame).toBe(PNG(10))
+  })
+})

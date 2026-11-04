@@ -15,12 +15,15 @@ const ALLOW = new Set([
   'read-directory', 'file-exists', 'path-exists', 'git-status', 'workspace-info',
   'backend-workspace-path', 'host-workspace-path',
   'terminal-spawn', 'terminal-write', 'terminal-resize',
-  'computer-use-live', 'browser-live',
+  'computer-use-live', 'browser-live', 'computer-use',
 ]);
 const OPS: Record<string, Set<string>> = {
   // `status` answers with the agent's page only; the panel's `panel-status` (every tab) is not on this list.
-  'browser-live': new Set(['status', 'halt', 'answer-card']),
+  // The settings ops are the agent browser's on/off and card switches (owner decision 4 Nov 2026).
+  'browser-live': new Set(['status', 'halt', 'answer-card', 'settings', 'enable', 'disable', 'cards-off', 'cards-on']),
   'computer-use-live': new Set(['status', 'halt', 'halted']),
+  // Computer use's switches, app grants and driver restart; the ops that open native dialogs on the PC stay out.
+  'computer-use': new Set(['status', 'enable', 'disable', 'cards-off', 'cards-on', 'remove-grant', 'restart']),
 };
 const EVENTS = new Set(['browser-live', 'computer-use-live', 'open-conversation']);
 const TERMINAL_EVENT = /^(terminal-data|terminal-exit)-[A-Za-z0-9_-]{1,64}$/;
@@ -106,16 +109,132 @@ export function remoteEventArgs(channel: string, args: unknown[]): unknown[] {
   return [reduced];
 }
 
+// A forwarded computer-use-live event stays under the relay's frame cap (session.py FRAME_PLAINTEXT_MAX is
+// 700_000 bytes); the desktop's own window keeps the full PNG.
+const LIVE_EVENT_MAX = 400_000;
+const LIVE_SIDES = [1280, 960, 720];
+const LIVE_QUALITIES = [0.75, 0.6];
+const LIVE_FRAME_GAP_MS = 500;
+
+const byteLength = (text: string): number => (typeof TextEncoder !== 'undefined' ? new TextEncoder().encode(text).length : text.length);
+
+function dataUrlToBlob(dataUrl: string): Blob | null {
+  const m = /^data:([^;,]+);base64,([\s\S]*)$/.exec(dataUrl);
+  if (!m) return null;
+  try {
+    const bin = atob(m[2]);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new Blob([bytes], { type: m[1] });
+  } catch {
+    return null;
+  }
+}
+
+async function blobToDataUrl(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return `data:${blob.type || 'image/jpeg'};base64,${btoa(bin)}`;
+}
+
+/** The frame as a JPEG data URL that fits `LIVE_EVENT_MAX` once wrapped by `wrap`, or null when no size/quality does. */
+export async function downscaleLiveFrame(frame: string, wrap: (frame: string) => unknown): Promise<string | null> {
+  const blob = dataUrlToBlob(frame);
+  if (!blob || typeof createImageBitmap !== 'function') return null;
+  let bitmap: any = null;
+  try {
+    bitmap = await createImageBitmap(blob);
+    const longest = Math.max(bitmap.width, bitmap.height);
+    if (!(longest > 0)) return null;
+    for (const side of LIVE_SIDES) {
+      const scale = Math.min(1, side / longest);
+      const w = Math.max(1, Math.round(bitmap.width * scale));
+      const h = Math.max(1, Math.round(bitmap.height * scale));
+      const canvas: any = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(w, h) : document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return null;
+      ctx.drawImage(bitmap, 0, 0, w, h);
+      for (const quality of LIVE_QUALITIES) {
+        const url: string = typeof canvas.convertToBlob === 'function'
+          ? await blobToDataUrl(await canvas.convertToBlob({ type: 'image/jpeg', quality }))
+          : canvas.toDataURL('image/jpeg', quality);
+        if (byteLength(JSON.stringify(wrap(url))) <= LIVE_EVENT_MAX) return url;
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    try { bitmap?.close?.(); } catch { /* already closed */ }
+  }
+}
+
+/**
+ * Forwards computer-use-live events with a downscaled JPEG frame and at most one frame per
+ * `LIVE_FRAME_GAP_MS`: the newest frame wins (no queue), and a state-only event (frame null) goes
+ * at once and drops any older frame still waiting.
+ */
+function liveForwarder(send: (args: unknown[]) => void): (args: unknown[]) => void {
+  let seq = 0;
+  let lastSent = -Infinity;
+  let pending: unknown[] | null = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+
+  const deliver = async (args: unknown[], mine: number) => {
+    const live = (args[0] ?? {}) as Record<string, any>;
+    const wrap = (frame: string | null) => [{ ...live, frame }];
+    const jpeg = typeof live.frame === 'string' ? await downscaleLiveFrame(live.frame, wrap) : null;
+    if (mine === seq) send(wrap(jpeg));
+  };
+  const flush = () => {
+    timer = null;
+    if (!pending) return;
+    const args = pending;
+    pending = null;
+    lastSent = Date.now();
+    void deliver(args, seq);
+  };
+
+  return (args) => {
+    const live = args[0] as Record<string, any> | undefined;
+    seq += 1;
+    if (!live || typeof live.frame !== 'string') {
+      pending = null;
+      if (timer) { clearTimeout(timer); timer = null; }
+      send(args);
+      return;
+    }
+    pending = args;
+    const wait = lastSent + LIVE_FRAME_GAP_MS - Date.now();
+    if (wait <= 0) {
+      if (timer) { clearTimeout(timer); timer = null; }
+      flush();
+    } else if (!timer) {
+      timer = setTimeout(flush, wait);
+    }
+  };
+}
+
 export function subscribeRemoteEvents(channel: string, api: string, token: string): void {
   const ipc = desktopIpc();
   if (!remoteEventAllowed(channel) || subscriptions.has(channel) || !ipc?.on) return;
-  const off = ipc.on(channel, (...args: unknown[]) => {
-    axios.post(`${api}/remote/ui-ipc-event`, { channel, args: remoteEventArgs(channel, args) }, { headers: { 'X-Session-Token': token } })
+  let stopped = false;
+  const send = (args: unknown[]) => {
+    if (stopped) return;
+    axios.post(`${api}/remote/ui-ipc-event`, { channel, args }, { headers: { 'X-Session-Token': token } })
       // No browser wants it any more (its session ended): stop listening.
       .then(res => { if (res?.data?.subscribed === false) unsubscribe(channel); })
       .catch(err => console.warn('[remote] forwarding an IPC event failed', err));
+  };
+  const forwardLive = channel === 'computer-use-live' ? liveForwarder(send) : null;
+  const off = ipc.on(channel, (...args: unknown[]) => {
+    if (forwardLive) forwardLive(args);
+    else send(remoteEventArgs(channel, args));
   });
-  subscriptions.set(channel, typeof off === 'function' ? off : () => {});
+  subscriptions.set(channel, () => { stopped = true; if (typeof off === 'function') off(); });
 }
 
 /** Listens again to the channels browsers still want. The backend asks for it
