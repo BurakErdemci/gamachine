@@ -1209,6 +1209,9 @@ class AgentRunner:
         # A wake turn for finished background tasks: a busy Claude session
         # defers it instead of being reset (the reset kills the CLI's tasks).
         self.task_wake = bool(task_wake)
+        # Background tasks a Claude session close took with it during this turn
+        # (model/effort/workspace change, reset): the route stores it as a system row.
+        self.session_reset_notice = ""
         # Side chat: no write of any kind on any path, whatever the approval
         # mode. The route derives it from the DB (`side_of`), never the client.
         self.read_only = bool(read_only)
@@ -2369,7 +2372,7 @@ Kullanıcı hangi dilde yazıyorsa o dilde cevap ver; mesajın dili belli değil
         import subprocess as _sp
         from providers.cli_base import BaseCLIProvider, build_spawn_env, env_family
         from providers.claude_sdk_session import (
-            get_session, close_session, _SESSIONS, SessionBusyError,
+            get_session, close_session, _SESSIONS, SessionBusyError, take_reset_notice,
             CLAUDE_SETTING_SOURCES as _CLAUDE_SETTING_SOURCES,
         )
 
@@ -2549,6 +2552,13 @@ Kullanıcı hangi dilde yazıyorsa o dilde cevap ver; mesajın dili belli değil
                 message = f"{message}\n\nultracode"
             # Ekli görsel yolları (varsa) mesaja eklenir → Claude Read ile açar.
             message = f"{message}{_img_suffix}"
+            # The close above (or a reset) killed background tasks: the new
+            # session's model hears it in this turn, never after a delay.
+            _reset_notice = take_reset_notice(self.conversation_id)
+            if _reset_notice:
+                self.session_reset_notice = "\n".join(filter(None, (self.session_reset_notice, _reset_notice)))
+            if self.session_reset_notice:
+                message = f"{self.session_reset_notice}\n\n{message}"
 
             _yielded = 0
             try:

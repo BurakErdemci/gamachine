@@ -151,6 +151,21 @@ def wake_ran(conv_id: int) -> None:
     _DEFERRED.discard(conv_id)
 
 
+def _expire_ticket(conv_id: int) -> None:
+    """A wake frame nobody acted on: the renderer declines it while the chat is
+    loading or has a queued message, or the SSE dropped. Its task notices go
+    back to the front of the queue so the next wake carries them; mail notices
+    are not returned (their notes stay in the DB and are re-armed)."""
+    _WAKE_TICKETS.pop(conv_id, None)
+    notices = _TICKET_NOTICES.pop(conv_id, None) or []
+    from agentic.mailbox import is_mail_notice  # lazy: mailbox imports this package
+    back = [n for n in notices if not is_mail_notice(n)]
+    if back:
+        e = _entry(conv_id)
+        e.notices = (back + e.notices)[-MAX_NOTICES:]
+        e.event.set()
+
+
 def issue_ticket(conv_id: int, notices: Optional[List[str]] = None) -> None:
     """Mark that the backend has issued one wake frame for this conversation."""
     if not conv_id:
@@ -158,8 +173,7 @@ def issue_ticket(conv_id: int, notices: Optional[List[str]] = None) -> None:
     now = monotonic()
     for ticket_conv, issued_at in list(_WAKE_TICKETS.items()):
         if now - issued_at >= WAKE_TICKET_TTL:
-            _WAKE_TICKETS.pop(ticket_conv, None)
-            _TICKET_NOTICES.pop(ticket_conv, None)
+            _expire_ticket(ticket_conv)
     if conv_id not in _WAKE_TICKETS:
         _WAKE_TICKETS[conv_id] = now
         _TICKET_NOTICES[conv_id] = list(notices or [])
@@ -181,8 +195,7 @@ def ticket_outstanding(conv_id: int) -> bool:
     if issued_at is None:
         return False
     if monotonic() - issued_at >= WAKE_TICKET_TTL:
-        _WAKE_TICKETS.pop(conv_id, None)
-        _TICKET_NOTICES.pop(conv_id, None)
+        _expire_ticket(conv_id)
         return False
     return True
 

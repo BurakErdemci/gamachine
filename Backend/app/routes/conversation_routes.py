@@ -2281,12 +2281,14 @@ Max 300 kelime. Türkçe yaz.
                 _end_turn_reply(request.conversation_id, _turn_user_row, None, "error")
                 raise
 
-        # Background tasks a Stop ended: one line in front of this turn's
-        # message tells the model; the chat shows it as a system row.
+        # Background tasks a Stop or a session close ended: one line in front
+        # of this turn's message tells the model; the chat shows it as a system row.
         try:
-            from providers.claude_sdk_session import peek_session as _peek_claude
+            from providers.claude_sdk_session import (peek_session as _peek_claude,
+                                                      take_reset_notice as _take_reset_notice)
             _claude = _peek_claude(request.conversation_id)
-            _stop_notice = _claude.take_stop_notice() if _claude is not None else ""
+            _stop_notice = (_claude.take_stop_notice() if _claude is not None
+                            else _take_reset_notice(request.conversation_id))
             if _stop_notice:
                 db.add_message(request.conversation_id, "system", _stop_notice)
                 turn_message = f"{_stop_notice}\n\n{turn_message}"
@@ -2420,6 +2422,15 @@ Max 300 kelime. Türkçe yaz.
                 # Kayıt başarısızlığı kullanıcıdan da GİZLENMEZ — cevabı ekranda
                 # duruyor ama kaydedilmedi, bunu bilmesi gerek; `warning`
                 # terminal olmayan bir olay, o yüzden sözleşmeyi bozmuyor.
+                # The runner replaced the Claude session mid-turn and that
+                # killed background tasks; its message to the model said so.
+                _reset_notice = getattr(runner, "session_reset_notice", "")
+                if _reset_notice:
+                    try:
+                        db.add_message(request.conversation_id, "system", _reset_notice)
+                    except Exception:
+                        logger.exception("[bg-tasks] conv=%s reset notice not stored",
+                                         request.conversation_id)
                 full_response = entry.value()
                 _tr_row: Optional[int] = None
                 if full_response:

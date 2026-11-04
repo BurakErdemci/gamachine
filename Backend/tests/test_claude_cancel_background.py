@@ -633,3 +633,83 @@ def test_every_task_start_and_end_is_published():
         assert sess.bg_tasks_version == 4
 
     asyncio.run(run())
+
+
+# ── Audit fix round (4 Nov 2026) ────────────────────────────────────────────
+def _updated(task_id="t", status="completed"):
+    from claude_agent_sdk import TaskUpdatedMessage
+    return TaskUpdatedMessage("task_updated", {}, task_id, {"status": status}, status=status)
+
+
+def test_the_two_end_events_of_one_task_count_once():
+    """The CLI sends TaskUpdated(terminal) AND TaskNotification for one task."""
+    async def run():
+        sess = _live_session()
+        with patch.object(cs, "_TASKS_DONE_GRACE_S", GRACE):
+            await sess._on_message(_started("a", "audit the scene"))
+            await sess._on_message(_updated("a"))
+            await sess._on_message(_notified("a"))
+            await asyncio.sleep(GRACE * 4)
+        return wake_queue.drain(sess.conversation_id)
+
+    assert asyncio.run(run()) == ["tasks_done|audit the scene"]
+
+
+def test_a_late_second_end_event_after_the_unprompted_turn_wakes_nothing():
+    async def run():
+        sess = _live_session()
+        with patch.object(cs, "_TASKS_DONE_GRACE_S", GRACE), patch.object(cs, "_DB_SAVE_CB", MagicMock()):
+            await sess._on_message(_started("b", "npm run build", "local_bash"))
+            await sess._on_message(_updated("b"))
+            await sess._on_message(_stream_event({"type": "message_start"}))
+            await sess._on_message(_notified("b"))
+            await sess._on_message(_assistant("Build is green."))
+            await sess._on_message(_result("Build is green."))
+            await asyncio.sleep(GRACE * 4)
+        return wake_queue.drain(sess.conversation_id), sess._done_tasks
+
+    assert asyncio.run(run()) == ([], [])
+
+
+async def _stopped_turn(sess):
+    """Run a turn and Stop it; the interrupt ends it with a Result."""
+    current = await _start_stream(sess, "go", [])
+
+    async def interrupt():
+        await sess._on_message(_result("stopped"))
+
+    sess._client.interrupt = AsyncMock(side_effect=interrupt)
+    await sess.cancel_turn()
+    sess.close.assert_not_awaited()
+    await asyncio.wait_for(current, timeout=1)
+
+
+def test_a_task_started_after_a_stop_fails_on_its_own():
+    async def run():
+        sess = _live_session()
+        sess.close = AsyncMock()
+        with patch.object(cs, "_TASKS_DONE_GRACE_S", GRACE):
+            await _stopped_turn(sess)
+            await sess._on_message(_started("b", "tests", "local_bash"))
+            await sess._on_message(_notified("b", "failed"))
+            await asyncio.sleep(GRACE * 4)
+        return wake_queue.drain(sess.conversation_id), sess.take_stop_notice()
+
+    assert asyncio.run(run()) == (["tasks_done|tests"], "")
+
+
+def test_a_new_turn_ends_the_previous_stops_window():
+    async def run():
+        sess = _live_session()
+        sess.close = AsyncMock()
+        with patch.object(cs, "_TASKS_DONE_GRACE_S", GRACE):
+            await sess._on_message(_started("b", "tests", "local_bash"))
+            await _stopped_turn(sess)
+            current = await _start_stream(sess, "next", [])
+            await sess._on_message(_result("ok"))
+            await asyncio.wait_for(current, timeout=1)
+            await sess._on_message(_notified("b", "failed"))
+            await asyncio.sleep(GRACE * 4)
+        return wake_queue.drain(sess.conversation_id), sess.take_stop_notice()
+
+    assert asyncio.run(run()) == (["tasks_done|tests"], "")

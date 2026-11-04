@@ -37,7 +37,7 @@ import time
 import unicodedata
 import uuid
 from pathlib import Path
-from typing import Any, AsyncGenerator, Callable, Dict, List, Optional, Set
+from typing import Any, AsyncGenerator, Callable, Dict, List, Optional, Set, Tuple
 
 from agentic.command_gates import (
     APPROVAL_GATES, APPROVAL_RESULTS,
@@ -390,6 +390,20 @@ _OWED_RESULT_IDLE_S = 120.0
 # A task that ends stopped/killed/failed this soon after a Stop was ended by it.
 _STOP_KILL_WINDOW_S = 15.0
 _STOP_KILLED_NOTICE = "[Sistem] Durdurma şu arka plan işlerini kesti: {names}. Gerekirse yeniden başlat."
+_SESSION_RESET_NOTICE = ("[Sistem] Oturum yenilendi (model/ayar değişikliği); şu arka plan işleri "
+                         "kesildi: {names}. Gerekirse yeniden başlat.")
+# Background tasks a session close took with it (model/effort/workspace change,
+# compact, reset), per chat: the session object is gone by the next turn, so
+# the names wait here for that turn's message to the model.
+_RESET_KILLED: Dict[int, List[str]] = {}
+
+
+def take_reset_notice(conversation_id: int) -> str:
+    """The line telling the model which background tasks a session close ended, once."""
+    names = _RESET_KILLED.pop(conversation_id, None)
+    if not names:
+        return ""
+    return _SESSION_RESET_NOTICE.format(names=", ".join(dict.fromkeys(names)))
 
 
 def _canonical(path: str, base: str = "") -> Path:
@@ -955,6 +969,9 @@ class ClaudeSDKSession:
         # TaskStarted, then TaskUpdated(completed) + TaskNotification when it
         # ends, like a subagent. A running task never holds a turn open.
         self._active_tasks: Dict[str, str] = {}   # task_id → açıklama
+        # Tasks that already ended (task_id → desc): the CLI sends TaskUpdated
+        # AND TaskNotification for one task, and only the first end counts.
+        self._ended_tasks: Dict[str, str] = {}
         self._task_meta: Dict[str, Dict[str, Any]] = {}  # task_id → {kind, started_at}
         # Bumped on every start/end; /wake-stream-all publishes the change.
         self.bg_tasks_version = 0
@@ -968,7 +985,10 @@ class ClaudeSDKSession:
         self._drain_state: Optional[str] = None
         # Tasks a Stop ended; the next turn's message tells the model.
         self._stop_killed: List[str] = []
+        # The last Stop of the current turn and the tasks running when it was
+        # issued: only their ends within the window are the Stop's doing.
         self._cancel_at = 0.0
+        self._cancel_tasks: Set[str] = set()
         # The ring record of an unprompted CLI turn (no listener).
         self._agent_tap: Any = None
         self._owed_results: int = 0    # CLI turns come from user queries or autonomous work.
@@ -1086,11 +1106,17 @@ class ClaudeSDKSession:
         self._turn_active = False
         self._owed_results = 0
         self._end_agent_tap("error")
-        # The CLI took its background tasks with it.
-        if self._active_tasks:
-            self._active_tasks.clear()
-            self._task_meta.clear()
-            self._tasks_changed()
+        self._drop_tasks_for_close()
+
+    def _drop_tasks_for_close(self) -> None:
+        """The CLI takes its background tasks with it: keep their names for the
+        next turn's notice and clear the row."""
+        if not self._active_tasks:
+            return
+        _RESET_KILLED.setdefault(self.conversation_id, []).extend(self._active_tasks.values())
+        self._active_tasks.clear()
+        self._task_meta.clear()
+        self._tasks_changed()
 
     # ── can_use_tool: native onay + AskUserQuestion köprüsü ──────────────
     async def _can_use_tool(self, tool_name: str, input_data: dict, context):
@@ -1270,6 +1296,7 @@ class ClaudeSDKSession:
 
         interrupted = False
         self._cancel_at = time.time()
+        self._cancel_tasks = set(self._active_tasks)
         try:
             if self._client is not None:
                 await asyncio.wait_for(self._client.interrupt(), timeout=8.0)
@@ -1367,27 +1394,36 @@ class ClaudeSDKSession:
             return "bash"
         return "other"
 
-    def _task_ended(self, task_id: str, status: Optional[str]) -> str:
-        """Drop a finished task; a Stop's casualty is kept apart from real finishes."""
-        known = task_id in self._active_tasks
-        desc = self._active_tasks.pop(task_id, None) or "Görev"
+    def _task_ended(self, task_id: str, status: Optional[str]) -> Tuple[str, bool]:
+        """Drop a finished task; a Stop's casualty is kept apart from real finishes.
+
+        Returns (desc, counted). Only the first end of a running task counts: a
+        second one for the same id, or one for a task never seen, only names it.
+        """
+        if task_id not in self._active_tasks:
+            return self._ended_tasks.get(task_id, "Görev"), False
+        desc = self._active_tasks.pop(task_id)
+        self._ended_tasks[task_id] = desc
         self._task_meta.pop(task_id, None)
-        if (status != "completed" and self._cancel_at
+        if (status != "completed" and task_id in self._cancel_tasks
                 and time.time() - self._cancel_at <= _STOP_KILL_WINDOW_S):
             self._stop_killed.append(desc)
         else:
             self._done_tasks.append(desc)
-        if known:
-            self._tasks_changed()
-        return desc
+        self._tasks_changed()
+        return desc, True
 
     def take_stop_notice(self) -> str:
-        """The line telling the model which background tasks a Stop ended, once."""
-        if not self._stop_killed:
-            return ""
-        names = ", ".join(dict.fromkeys(self._stop_killed))
-        self._stop_killed = []
-        return _STOP_KILLED_NOTICE.format(names=names)
+        """The lines telling the model which background tasks a Stop or a session
+        close ended, once."""
+        lines = []
+        if self._stop_killed:
+            lines.append(_STOP_KILLED_NOTICE.format(names=", ".join(dict.fromkeys(self._stop_killed))))
+            self._stop_killed = []
+        reset = take_reset_notice(self.conversation_id)
+        if reset:
+            lines.append(reset)
+        return "\n".join(lines)
 
     @property
     def unprompted_turn_active(self) -> bool:
@@ -1419,6 +1455,8 @@ class ClaudeSDKSession:
         self._absorbed_result_at = 0.0
         self._turn_started_at = time.time()
         self._cancel_requested = False
+        self._cancel_at = 0.0
+        self._cancel_tasks = set()
         self._usage_event = None
         self._cancel_grace()
         if unprompted:
@@ -1610,7 +1648,7 @@ class ClaudeSDKSession:
                               "tokens": u.get("total_tokens") or self._turn_tokens})
             return
         if isinstance(msg, TaskNotificationMessage):
-            desc = self._task_ended(msg.task_id, msg.status)
+            desc, counted = self._task_ended(msg.task_id, msg.status)
             ok = msg.status == "completed"
             icon = "✅" if ok else ("🛑" if msg.status == "stopped" else "❌")
             await self._emit({"type": "tool_result", "tool": "Subagent", "success": ok,
@@ -1618,11 +1656,12 @@ class ClaudeSDKSession:
             await self._emit({"type": "status",
                               "detail": f"{icon} Görev bitti: {desc}",
                               "tokens": self._turn_tokens})
-            self._maybe_tasks_drained()
+            if counted:
+                self._maybe_tasks_drained()
             return
         if isinstance(msg, TaskUpdatedMessage):
             if msg.status in TERMINAL_TASK_STATUSES and msg.task_id in self._active_tasks:
-                desc = self._task_ended(msg.task_id, msg.status)
+                desc, _ = self._task_ended(msg.task_id, msg.status)
                 ok = msg.status == "completed"
                 await self._emit({"type": "tool_result", "tool": "Subagent", "success": ok,
                                   "summary": f"{'✅' if ok else '❌'} {desc}: {msg.status}"})
@@ -1968,6 +2007,8 @@ def _identity_mismatch(sess: "ClaudeSDKSession", kwargs: dict) -> Optional[str]:
 def _discard(conversation_id: int, sess: "ClaudeSDKSession") -> None:
     """Session'ı cache'ten düşür ve artıklarını arka planda kapat."""
     _SESSIONS.pop(conversation_id, None)
+    # Now, not when the background close gets to it: the next turn may start first.
+    sess._drop_tasks_for_close()
     try:
         asyncio.create_task(sess.close())
     except RuntimeError:
