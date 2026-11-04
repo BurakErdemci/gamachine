@@ -22,7 +22,7 @@ const net = await import(new URL('net.js', PUBLIC).href);
 const html = fs.readFileSync(fileURLToPath(new URL('index.html', PUBLIC)), 'utf8');
 const source = fs.readFileSync(fileURLToPath(new URL('app.js', PUBLIC)), 'utf8');
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const REMOVED_TEXT = 'Bu telefon bilgisayardan kaldırıldı. Yeniden eşleştirmek için bilgisayarda Gamachine\'de AI Yapılandırması > Uzaktan kontrol > Telefon eşleştir ile QR kodunu aç ve telefonun kamerasıyla okut.';
+const REMOVED_TEXT = 'Bu telefon bilgisayardan kaldırıldı. Yeniden eşleştirmek için bilgisayarda Gamachine\'de AI Yapılandırması > Uzaktan kontrol > Cihaz eşleştir ile QR kodunu aç ve telefonun kamerasıyla okut.';
 
 async function boot({ paired = true } = {}) {
   const { window } = new JSDOM(html, { url: 'https://phone.invalid/p', runScripts: 'outside-only' });

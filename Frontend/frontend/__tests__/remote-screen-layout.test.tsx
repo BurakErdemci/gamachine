@@ -138,3 +138,12 @@ describe('remote screen · approval text and device kinds', () => {
     expect(await screen.findByText('Eşleşmiş cihaz yok.')).toBeTruthy()
   })
 })
+
+describe('instructions that name the pairing button', () => {
+  it('use the button\'s current name in every language', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { resolve } = await import('node:path')
+    const src = readFileSync(resolve(__dirname, '../renderer/lib/i18n.tsx'), 'utf8')
+    expect(src).not.toMatch(/Telefon eşleştir|Pair phone/)
+  })
+})

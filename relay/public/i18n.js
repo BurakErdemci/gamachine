@@ -1,7 +1,7 @@
 // Same-origin translations for the phone UI.
 export const STRINGS = {
   "en": {
-    "pair.removed": "This phone was removed from the PC. To pair again, open Gamachine on the PC, go to AI Configuration > Remote control > Pair phone, and scan the QR code with your phone camera.",
+    "pair.removed": "This phone was removed from the PC. To pair again, open Gamachine on the PC, go to AI Configuration > Remote control > Pair a device, and scan the QR code with your phone camera.",
     "pair.noWaitingPc": "No PC is waiting for this pairing code. Enable remote control on the PC and create a new QR code.",
     "pair.pcOffline": "The PC is offline. Is Gamachine open and connected to the internet?",
     "pair.connectionRefused": "Connection refused. There may have been too many attempts; wait a moment.",
@@ -220,7 +220,7 @@ export const STRINGS = {
     "attr.219": "Commands"
   },
   "tr": {
-    "pair.removed": "Bu telefon bilgisayardan kaldırıldı. Yeniden eşleştirmek için bilgisayarda Gamachine'de AI Yapılandırması > Uzaktan kontrol > Telefon eşleştir ile QR kodunu aç ve telefonun kamerasıyla okut.",
+    "pair.removed": "Bu telefon bilgisayardan kaldırıldı. Yeniden eşleştirmek için bilgisayarda Gamachine'de AI Yapılandırması > Uzaktan kontrol > Cihaz eşleştir ile QR kodunu aç ve telefonun kamerasıyla okut.",
     "pair.noWaitingPc": "Bu eşleştirme kodu için bekleyen bir bilgisayar yok. Bilgisayarda uzaktan kontrolü açıp yeni QR oluştur.",
     "pair.pcOffline": "Bilgisayar şu an bağlı değil. Gamachine açık mı, internet var mı?",
     "pair.connectionRefused": "Bağlantı kabul edilmedi. Kısa sürede çok fazla deneme yapılmış olabilir; biraz bekle.",
