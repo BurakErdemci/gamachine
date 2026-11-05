@@ -10,6 +10,9 @@ import pytest
 
 from connectors import catalog, installer as inst, settings, views
 
+# kill_tree hands proc.pid to killpg, and an unset MagicMock pid converts to 1 (the init group).
+NO_SUCH_PID = 99999999
+
 ADDON = ('bl_info = {{\n    "name": "MCP for Blender",\n    "version": (1, 8),\n}}\n'
          'ADDON_PROTOCOL_VERSION = {protocol}\n# {tag}\n')
 APP = {"version": "5.2.0", "path": "C:/fake/blender.exe"}
@@ -36,11 +39,11 @@ class FakeRunner:
         self.calls.append((kind, argv, env, family))
         if kind == self.block:
             killed = threading.Event()
-            register(MagicMock(poll=lambda: None, kill=killed.set))
+            register(MagicMock(pid=NO_SUCH_PID, poll=lambda: None, kill=killed.set))
             self.blocked.set()
             killed.wait(10)
             return -9, "killed"
-        register(MagicMock(poll=lambda: 0))
+        register(MagicMock(pid=NO_SUCH_PID, poll=lambda: 0))
         if kind == self.fail:
             return 1, f"{kind} broke\nhash mismatch"
         if kind == "venv":

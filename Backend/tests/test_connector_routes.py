@@ -16,6 +16,9 @@ from error_i18n import localized_http_exception_handler
 from remote import ui_dispatch
 from routes.connector_routes import create_connector_router
 
+# kill_tree hands proc.pid to killpg, and an unset MagicMock pid converts to 1 (the init group).
+NO_SUCH_PID = 99999999
+
 TOKEN = "cd" * 32
 SECRET = "connectors-secret"
 AUTH = {"X-Session-Token": TOKEN}
@@ -42,7 +45,7 @@ class Runner:
         self.gate.set()
 
     def __call__(self, argv, family, env, cwd, register):
-        register(MagicMock(poll=lambda: None, kill=self.gate.set))
+        register(MagicMock(pid=NO_SUCH_PID, poll=lambda: None, kill=self.gate.set))
         if argv[1] == "venv":
             self.gate.wait(10)
             python = Path(argv[2]) / "Scripts" / "python.exe"
