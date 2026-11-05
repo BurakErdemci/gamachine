@@ -76,14 +76,17 @@ def default_uv() -> str:
 
 
 def kill_tree(proc: subprocess.Popen) -> None:
-    """Ends the child and everything it started (own process group on POSIX)."""
-    if proc.poll() is not None:
-        return
+    """Ends the child and everything it started (own process group on POSIX).
+
+    Runs even when the leader has exited: its group can still hold the output pipe."""
     if sys.platform == "win32":
+        # An exited process's id may already belong to another program.
+        if proc.poll() is not None:
+            return
         try:
             subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW,
-                           timeout=5, check=False)
+                           stderr=subprocess.DEVNULL, env=build_spawn_env(),
+                           creationflags=subprocess.CREATE_NO_WINDOW, timeout=5, check=False)
         except (OSError, subprocess.SubprocessError):
             pass
     else:
