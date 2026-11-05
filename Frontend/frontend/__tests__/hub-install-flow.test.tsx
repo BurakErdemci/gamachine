@@ -112,7 +112,10 @@ const toModules = async () => {
 }
 const nextBtn = () => screen.getByTestId('hub-install-next') as HTMLButtonElement
 
+const platform = (value: string) => vi.spyOn(window.navigator, 'platform', 'get').mockReturnValue(value)
+
 beforeEach(() => {
+  platform('Win32')
   resetHubStore()
   resetInstallStore()
   editors = [{ version: '6000.2.4f1', path: '/U/Unity' }, { version: '2022.3.55f1', path: '/U2/Unity' }]
@@ -213,6 +216,19 @@ describe('install: step 2, the modules', () => {
     expect(formatSize(4236703648, 'en')).toBe('3.9 GB')
     expect(formatSize(4236703648, 'tr')).toBe('3,9 GB')
     expect(formatSize(343770192, 'en')).toBe('327.8 MB')
+  })
+})
+
+describe('install: administrator note', () => {
+  it('is shown on Windows and hidden elsewhere', async () => {
+    view()
+    await toModules()
+    expect(screen.getByTestId('hub-install').textContent).toContain(en['hub.install.adminNote'])
+    cleanup()
+    platform('MacIntel')
+    view()
+    await toModules()
+    expect(screen.getByTestId('hub-install').textContent).not.toContain(en['hub.install.adminNote'])
   })
 })
 

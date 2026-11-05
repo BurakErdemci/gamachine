@@ -244,7 +244,9 @@ const Picker = ({ h, words, onGetUnity }: Omit<Props, 'className'>) => {
     return <>{head('modules')}<p className="hub-wait" role="alert" data-testid="hub-install-unknown">{t('hub.install.notInCatalog', { version })}</p></>;
   }
 
-  const adminNote = <p className="hub-hint hub-inst-admin">{t('hub.install.adminNote')}</p>;
+  // The note names Windows' permission prompt; other platforms never show it.
+  const onWindows = typeof navigator !== 'undefined' && /Win/i.test(navigator.platform || navigator.userAgent || '');
+  const adminNote = onWindows ? <p className="hub-hint hub-inst-admin">{t('hub.install.adminNote')}</p> : null;
 
   if (step === 'eulas' && plan?.ok) {
     const all = plan.eulas.every(e => ticked.has(e.url));
