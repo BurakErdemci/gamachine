@@ -6,6 +6,7 @@ would have seen in the terminal, and build the command that resumes it there.
 import json
 import os
 import re
+import unicodedata
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -156,12 +157,23 @@ def read_session(path: Path, limit: int = 300) -> Dict[str, Any]:
 
 # Allowlist, not a denylist: PowerShell also reads Unicode quotes (U+2018-U+201E)
 # and dashes as syntax, so anything outside letters, digits (str.isalnum, Turkish
-# letters included) and these few characters gets no cd part.
+# letters included), combining marks on a letter (Finder stores names decomposed)
+# and these few characters gets no cd part. A backslash is a path separator only
+# on Windows: elsewhere bash reads it as an escape inside "...".
 _CD_SAFE = frozenset(" \\/:._-()")
 
 
 def _cd_safe(cwd: str) -> bool:
-    return all(ch.isalnum() or ch in _CD_SAFE for ch in cwd)
+    if os.name != "nt" and "\\" in cwd:
+        return False
+    on_letter = False
+    for ch in cwd:
+        if on_letter and unicodedata.category(ch).startswith("M"):
+            continue
+        if not (ch.isalnum() or ch in _CD_SAFE):
+            return False
+        on_letter = ch.isalpha()
+    return True
 
 
 def command_for(cwd: Optional[str], session_id: str) -> str:
