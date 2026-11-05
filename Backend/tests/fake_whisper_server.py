@@ -15,6 +15,7 @@ import argparse
 import json
 import os
 import re
+import socketserver
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -155,7 +156,17 @@ def main():
     # The default accept queue of 5 overflows under the parallel dictation tests: macOS then
     # resets the connection and the client sees EPIPE, which a real child never caused.
     ThreadingHTTPServer.request_queue_size = 64
-    server = ThreadingHTTPServer((args.host, args.port), Handler)
+
+    class _Server(ThreadingHTTPServer):
+        # HTTPServer.server_bind asks socket.getfqdn() for the bound address, a reverse DNS
+        # lookup of 127.0.0.1. On a GitHub macOS runner it takes longer than the manager's
+        # 10 s startup deadline, so the socket opened too late and every test that starts
+        # this fake saw "whisper-server is not ready". The real server does no such lookup.
+        def server_bind(self):
+            socketserver.TCPServer.server_bind(self)
+            self.server_name, self.server_port = self.server_address[:2]
+
+    server = _Server((args.host, args.port), Handler)
     server.daemon_threads = True
     try:
         server.serve_forever(poll_interval=0.05)

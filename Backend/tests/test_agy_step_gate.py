@@ -279,7 +279,9 @@ class TestSpawnRefusedWithoutGate(unittest.IsolatedAsyncioTestCase):
                     p.stop()
             self.assertEqual(spawns, [])
             self.assertEqual([e["type"] for e in events], ["error"])
-            self.assertIn(hooks, events[0]["message"])
+            # The product names the file by its resolved path; the tempdir may be an 8.3 short
+            # name on Windows (RUNNER~1), a symlink on macOS.
+            self.assertIn(os.path.join(os.path.realpath(ws), ".agents", "hooks.json"), events[0]["message"])
             self.assertIn("agy başlatılmadı", events[0]["message"])
             with open(hooks, encoding="utf-8") as f:
                 self.assertEqual(f.read(), "{")

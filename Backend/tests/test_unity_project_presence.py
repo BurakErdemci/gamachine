@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+import sys
 
 import pytest
 
@@ -211,9 +212,11 @@ def test_ambiguous_candidates_recording_same_pid_are_refused(workspace, fake_pro
     assert presence.open_project_names() == []
 
 
+# The oversized case gets an explicit id: pytest copies the test id into the
+# PYTEST_CURRENT_TEST variable, and a 64 KiB id overflows Windows' 32767-character limit.
 @pytest.mark.parametrize("content", ["{", "[]", '{"process_id": true}',
                                      '{"process_id": 123.0}', '{"process_id": 456}',
-                                     '{"process_id": 123}' + " " * 65536])
+                                     pytest.param('{"process_id": 123}' + " " * 65536, id="oversized-metadata")])
 def test_project_candidate_requires_bounded_integer_pid_metadata(workspace, content):
     (workspace / "Library" / "EditorInstance.json").write_text(content, encoding="utf-8")
     assert presence._project_of(123, f"{UNITY} -projectPath {workspace}") is None
@@ -333,7 +336,13 @@ def test_active_scene_rejects_invalid_or_injected_paths(workspace, scene):
     if len(scene) < 200:
         path = workspace / scene
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("scene", encoding="utf-8")
+        try:
+            path.write_text("scene", encoding="utf-8")
+        except OSError:
+            # Windows cannot hold a file named with < > ; the path is then rejected either way,
+            # and it is still listed in the setup file below.
+            if sys.platform != "win32":
+                raise
     (workspace / "Library" / "LastSceneManagerSetup.txt").write_text(
         f"sceneSetups:\n- path: {scene}\n  isActive: 1\n", encoding="utf-8")
     assert presence.active_scene(str(workspace)) is None

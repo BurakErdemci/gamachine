@@ -36,7 +36,9 @@ describe('okuma kapısı: KARAR ile AÇILACAK YOL tek çözümden geliyor', () =
   let ws = ''
 
   beforeEach(() => {
-    kok = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dogrulama-')))
+    // `.native`: the gate resolves with it, and only it expands a Windows 8.3 short name
+    // (RUNNER~1) in the temp dir to the long one the gate returns.
+    kok = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'dogrulama-')))
     ws = path.join(kok, 'ws')
     fs.mkdirSync(path.join(ws, 'gercek'), { recursive: true })
     fs.writeFileSync(path.join(ws, 'gercek', 'note.txt'), 'icerideki')

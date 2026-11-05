@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events'
+import path from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ComputerLive, HALT_SHORTCUT, IDLE_MS, pickWindow, type ComputerLiveDeps } from '../main/helpers/computer-use-live'
 
@@ -179,7 +180,7 @@ describe('computer-use-live: active', () => {
       expect(['PATH', 'HOME', 'TMPDIR'].includes(key) || key.startsWith('CUA_DRIVER_') || key === 'DO_NOT_TRACK').toBe(true)
     }
     expect(JSON.stringify(env)).not.toContain('app-token-secret')
-    expect(env.CUA_DRIVER_RS_HOME).toBe('/user/cua/home')
+    expect(env.CUA_DRIVER_RS_HOME).toBe(path.join('/user', 'cua', 'home'))
     expect(f.rpc[0]).toMatchObject({ method: 'initialize' })
     expect(f.rpc[1]).toEqual({ jsonrpc: '2.0', method: 'notifications/initialized' })
     f.live.shutdown()
@@ -405,7 +406,7 @@ describe('computer-use-live: indicator position', () => {
     await vi.advanceTimersByTimeAsync(10)
     expect(f.indicators[0].options).toMatchObject({ x: 100, y: 200 })
     f.indicators[0].emit('moved')
-    expect(f.fs.writeFileSync).toHaveBeenCalledWith('/user/computer-live-indicator.json', JSON.stringify({ x: 400, y: 300 }), { mode: 0o600 })
+    expect(f.fs.writeFileSync).toHaveBeenCalledWith(path.join('/user', 'computer-live-indicator.json'), JSON.stringify({ x: 400, y: 300 }), { mode: 0o600 })
     f.live.shutdown()
   })
 

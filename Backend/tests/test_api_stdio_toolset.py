@@ -22,6 +22,12 @@ CHAT = 4242
 
 
 def _alive(pid):
+    if sys.platform == "win32":
+        # No ps on Windows (a Git-for-Windows ps answers for msys pids only); a living
+        # pid shows up as a CSV row, a dead one as an "INFO: No tasks" line.
+        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
+                             capture_output=True, text=True).stdout
+        return f'"{pid}"' in out
     out = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)],
                          capture_output=True, text=True).stdout.strip()
     return bool(out) and not out.startswith("Z")

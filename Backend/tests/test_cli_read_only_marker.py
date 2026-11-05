@@ -2,6 +2,8 @@
 import asyncio
 import os
 import stat
+import subprocess
+import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -96,6 +98,18 @@ def test_computer_server_refuses_only_with_the_marker(monkeypatch):
     assert other.content[0].text != read_only_refusal()
 
 
+def _assert_private(path):
+    """The file is reachable by its owner only. POSIX says it with mode 0600; Windows
+    chmod only toggles the read-only attribute (a private file reads back as 0666), so
+    there privacy is the ACL: no broad group may be listed on the file."""
+    if sys.platform != "win32":
+        assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+        return
+    acl = subprocess.run(["icacls", path], capture_output=True, text=True, check=True).stdout.lower()
+    for broad in ("everyone:", "\\users:", "authenticated users:"):
+        assert broad not in acl, acl
+
+
 def test_kimi_refresh_keeps_the_file_mode_and_leaves_no_temp_file(tmp_path, monkeypatch):
     monkeypatch.setenv("KIMI_CODE_HOME", str(tmp_path / "kimi-home"))
     provider = KimiProvider(binary_name="kimi-k3")
@@ -107,7 +121,7 @@ def test_kimi_refresh_keeps_the_file_mode_and_leaves_no_temp_file(tmp_path, monk
     os.chmod(path, 0o600)
     provider._write_kimi_permissions()
     assert "old = 1" not in open(path, encoding="utf-8").read()
-    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+    _assert_private(path)
     assert os.listdir(os.path.dirname(path)) == [os.path.basename(path)]
 
 
@@ -115,7 +129,7 @@ def test_kimi_first_write_creates_a_private_file(tmp_path, monkeypatch):
     monkeypatch.setenv("KIMI_CODE_HOME", str(tmp_path / "kimi-home"))
     provider = KimiProvider(binary_name="kimi-k3")
     provider._write_kimi_permissions()
-    assert stat.S_IMODE(os.stat(provider._kimi_config_path()).st_mode) == 0o600
+    _assert_private(provider._kimi_config_path())
 
 
 @pytest.mark.parametrize("chat,refused", [(None, True), ("abc", True), ("0", True), ("-3", True), ("5", False)])

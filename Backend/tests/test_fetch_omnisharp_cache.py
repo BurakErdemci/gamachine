@@ -16,6 +16,7 @@ import importlib.util
 import io
 import os
 import re
+import sys
 import tarfile
 import time
 import zipfile
@@ -436,7 +437,11 @@ class TestArsivHedefinDisinaYazamaz:
         dest = tmp_path / "osx-arm64"
         kurban = tmp_path / "kurban.txt"
         kurban.write_text("gizli")
-        os.chmod(kurban, 0o600)
+        # Windows' chmod only toggles the read-only attribute (0o600 reads back as 0o666
+        # and 0o755 would leave it unchanged), so the victim starts read-only there: a
+        # followed chmod then flips it writable and the comparison below sees it.
+        os.chmod(kurban, 0o400 if sys.platform == "win32" else 0o600)
+        once = os.stat(kurban).st_mode
 
         def _sahte_extract(_data, _url, staging):
             os.symlink(str(kurban), os.path.join(staging, "OmniSharp"))
@@ -444,7 +449,11 @@ class TestArsivHedefinDisinaYazamaz:
         monkeypatch.setattr(fetch_mod, "_extract", _sahte_extract)
         with pytest.raises(RuntimeError, match="sembolik bağ"):
             fetch_mod._install(b"", "x.tar.gz", str(dest), "v1", ["OmniSharp"], asset_key=None)
-        assert oct(os.stat(kurban).st_mode)[-3:] == "600"
+        sonra = os.stat(kurban).st_mode
+        os.chmod(kurban, 0o600)     # let the temp-dir cleanup delete a read-only file
+        assert sonra == once
+        if sys.platform != "win32":
+            assert oct(sonra)[-3:] == "600"
 
 class TestSembolikBagKuruluSayilmaz:
     """Sembolik bağ üzerinden kalıcı kod çalıştırma zincirini kapatan testler.

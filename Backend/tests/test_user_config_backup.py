@@ -101,7 +101,9 @@ def test_invalid_config_is_backed_up_before_replacement(provider_config, tmp_pat
     assert backup.read_bytes() == original
     assert rel_path + ".gamachine-backup-1" in (tmp_path / ".gitignore").read_text(encoding="utf-8")
     assert "unityai" in json.loads(path.read_text(encoding="utf-8"))[servers_key]
-    assert any(str(backup) in record.message and record.levelno == logging.WARNING
+    # The product logs the workspace joined to the posix-style relative name (".cursor/mcp.json"),
+    # so on Windows the message mixes separators; compare with them unified.
+    assert any(str(backup) in record.message.replace("/", os.sep) and record.levelno == logging.WARNING
                for record in caplog.records)
 
 

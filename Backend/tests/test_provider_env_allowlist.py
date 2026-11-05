@@ -36,6 +36,10 @@ from providers.cli_base import BaseCLIProvider, build_spawn_env, env_family
 from unity_ai_mcp import unity_mcp_manager as um
 
 
+# The variable a child finds the user's home directory through: Windows has no HOME,
+# its CLIs read USERPROFILE (both are on the allow-list).
+_HOME_VAR = "USERPROFILE" if sys.platform == "win32" else "HOME"
+
 # Ölçümde kullanılan altı canary. Değerler de kontrol ediliyor: bir sır ADI
 # elenip DEĞERİ başka bir adın içinde (örn. birleştirilmiş PATH) taşınmış olabilir.
 CANARIES = {
@@ -301,7 +305,7 @@ class TestUnityMcpSpawnOrtami:
         assert manager.start_server() is True
         env = box["env"]
         assert env.get("PATH")
-        assert env.get("HOME")
+        assert env.get(_HOME_VAR)
 
     def test_devralinan_telemetri_KAPALI_olarak_spawn_ediliyor(
         self, canaries, hazir_manager
@@ -546,7 +550,7 @@ class TestMcpKayitSpawnOrtami:
             monkeypatch, ClaudeCodeProvider("claude-opus-4-6"), tmp_path)
         for env in envler:
             assert env.get("PATH")
-            assert env.get("HOME")
+            assert env.get(_HOME_VAR)
             assert env.get("CLAUDE_CONFIG_DIR") == "/Users/test/.claude"
 
     def test_every_codex_mcp_registration_call_is_gated(self, canaries, monkeypatch, tmp_path):
