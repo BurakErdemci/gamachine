@@ -215,7 +215,11 @@ def harden_config_file(path: str) -> bool:
             [
                 "icacls", path,
                 "/inheritance:r",
+                # SYSTEM, Administrators and OWNER RIGHTS can survive /inheritance:r (measured on a
+                # GitHub Windows runner) and the check below then refuses the file. By SID: their
+                # names change with the Windows display language.
                 "/remove", "Everyone", "Users", "Authenticated Users",
+                "*S-1-5-18", "*S-1-5-32-544", "*S-1-3-4",
                 "/grant:r", f"{hesap}:F",
             ],
             capture_output=True, text=True, timeout=_GIT_TIMEOUT_S,
