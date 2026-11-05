@@ -10,6 +10,7 @@ import logging
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -74,11 +75,34 @@ def default_uv() -> str:
     return unity_mcp_manager._get_uv(unity_mcp_manager._get_uvx())
 
 
+def kill_tree(proc: subprocess.Popen) -> None:
+    """Ends the child and everything it started (own process group on POSIX)."""
+    if proc.poll() is not None:
+        return
+    if sys.platform == "win32":
+        try:
+            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW,
+                           timeout=5, check=False)
+        except (OSError, subprocess.SubprocessError):
+            pass
+    else:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+    try:
+        proc.kill()
+    except OSError:
+        pass
+
+
 def run_process(argv, family, overrides, cwd, register) -> Tuple[int, str]:
     env = build_spawn_env(family=family, overrides=overrides)
     proc = subprocess.Popen(argv, env=env, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
-                            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
+                            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+                            start_new_session=sys.platform != "win32")
     register(proc)
     out, _ = proc.communicate()
     return proc.returncode, out or ""
@@ -263,11 +287,8 @@ class Installer:
             return False
         job.cancel_event.set()
         proc = job.proc
-        if proc and proc.poll() is None:
-            try:
-                proc.kill()
-            except OSError:
-                pass
+        if proc:
+            kill_tree(proc)
         if job.thread:
             # The worker deletes the partial folder; answer after it has.
             job.thread.join(wait_s)
@@ -280,7 +301,7 @@ class Installer:
                 return
             job.proc = proc
             if job.cancel_event.is_set():
-                proc.kill()
+                kill_tree(proc)
         rc, out = self.runner(argv, family, overrides, cwd, register)
         if job is not None:
             job.proc = None
