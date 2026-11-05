@@ -152,6 +152,9 @@ def main():
             # than just passing the JSON through untouched.
             self._write_json(200, {"text": f" hello {lang_out} {len(file_bytes)}", "language": lang_out})
 
+    # The default accept queue of 5 overflows under the parallel dictation tests: macOS then
+    # resets the connection and the client sees EPIPE, which a real child never caused.
+    ThreadingHTTPServer.request_queue_size = 64
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     server.daemon_threads = True
     try:
