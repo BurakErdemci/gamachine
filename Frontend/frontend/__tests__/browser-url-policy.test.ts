@@ -184,12 +184,60 @@ describe('file: pages', () => {
     expect(isAllowedNavigation(url(process.execPath), ctxFor(workspace))).toBe(false)
   })
 
-  it('is refused for climbing, hidden separators, streams, UNC, devices and trailing dots', () => {
+  it('is refused for climbing, hidden separators, UNC and device paths', () => {
     const root = url(workspace)
     const bad = [`${root}/../other/secret.html`, `${root}/%2e%2e/other/secret.html`, `${root}/..%2fother/secret.html`, `${root}/..%5cother`, `${root}/a%00.html`,
-      `${root}/index.html:stream`, `${root}/index.html::$DATA`, `${root}/trailing./x`, `${root}/trailing%20/x`, `${root}/CON`, `${root}/nul.txt`,
+      `${root}/a%5cb.html`, `${root}/a%2fb.html`,
       'file://server/share/x.html', 'file:////server/share/x.html', `file:///${sep}${sep}server${sep}share`, `file:///${sep}${sep}?${sep}C:${sep}x`]
     for (const target of bad) expect(isAllowedNavigation(target, ctxFor(workspace)), target).toBe(false)
+  })
+
+  it.runIf(process.platform === 'win32')('is refused on Windows for streams, device names and trailing dots', () => {
+    const root = url(workspace)
+    for (const target of [`${root}/index.html:stream`, `${root}/index.html::$DATA`, `${root}/trailing./x`, `${root}/trailing%20/x`, `${root}/CON`, `${root}/nul.txt`])
+      expect(isAllowedNavigation(target, ctxFor(workspace)), target).toBe(false)
+  })
+
+  it.skipIf(process.platform === 'win32').each(['scene:preview.html', 'aux.html', 'aux/index.html', 'preview.html ', 'trail./index.html', 'con.d/x.html'])(
+    'opens the legal POSIX name %s', (name) => {
+      const file = path.join(workspace, 'posix-names', name)
+      fs.mkdirSync(path.dirname(file), { recursive: true })
+      fs.writeFileSync(file, '<p>hi</p>')
+      expect(isAllowedNavigation(url(file), ctxFor(workspace))).toBe(true)
+    })
+
+  describe.runIf(process.platform === 'darwin')('on a volume that folds names', () => {
+    const nfc = 'Çalışma'.normalize('NFC')
+    const nfd = 'Çalışma'.normalize('NFD')
+    // Not toUpperCase(): that turns the dotless ı into I, which APFS keeps a different name.
+    const cased = nfd.replace('ma', 'MA')
+    const here = () => {
+      fs.mkdirSync(path.join(base, nfd, 'sub'), { recursive: true })
+      fs.writeFileSync(path.join(base, nfd, 'index.html'), '<p>hi</p>')
+      if (!fs.existsSync(path.join(base, nfc)) || !fs.existsSync(path.join(base, cased))) return null
+      return [path.join(base, nfd), path.join(base, nfc), path.join(base, cased)]
+    }
+
+    it('opens a file whatever spelling the root and the URL use', () => {
+      const spellings = here()
+      if (!spellings) return
+      for (const root of spellings) for (const inner of spellings) {
+        expect(isAllowedNavigation(url(path.join(inner, 'index.html')), ctxFor(root)), `${inner} in ${root}`).toBe(true)
+        expect(isAllowedNavigation(url(path.join(inner, 'sub', 'not-yet.html')), ctxFor(root)), `${inner} in ${root}`).toBe(true)
+      }
+    })
+
+    it('keeps a similar sibling and a leaving link outside every spelling', () => {
+      const spellings = here()
+      if (!spellings) return
+      fs.mkdirSync(path.join(base, `${nfd}2`), { recursive: true })
+      const link = path.join(base, nfd, 'escape')
+      if (!fs.existsSync(link)) fs.symlinkSync(outside, link)
+      for (const root of spellings) {
+        expect(isAllowedNavigation(url(path.join(base, `${nfd}2`, 'x.html')), ctxFor(root))).toBe(false)
+        for (const inner of spellings) expect(isAllowedNavigation(url(path.join(inner, 'ESCAPE', 'secret.html')), ctxFor(root))).toBe(false)
+      }
+    })
   })
 
   it('is refused for a link that points out of the workspace', () => {
@@ -250,6 +298,7 @@ describe('shared file cases', () => {
   }
   it.each(CASES.file.map((c) => [JSON.stringify(c.url), c] as const))('%s', (_name, c) => {
     if (c.os === 'nt' && process.platform !== 'win32') return
+    if (c.os === 'posix' && process.platform === 'win32') return
     if (c.needs === 'link' && !linked) return
     const target = fill(c.url)
     expect(isAllowedNavigation(target, { ports: gamachinePorts(), fileRoots: [workspace, tempRoot()] }), target).toBe(c.allow)

@@ -159,10 +159,12 @@ def test_file_paths_that_climb_or_hide_a_separator_are_refused(workspace, tmp_pa
 def test_file_paths_with_streams_unc_or_device_names_are_refused(workspace):
     backslash = chr(92)
     base = uri(workspace)
-    urls = [f"{base}/index.html:stream", f"{base}/index.html::$DATA", f"{base}/trailing./x", f"{base}/trailing /x",
-            f"{base}/CON", f"{base}/nul.txt", "file://server/share/x.html", "file:////server/share/x.html",
+    urls = ["file://server/share/x.html", "file:////server/share/x.html",
             f"file:///{backslash}{backslash}server{backslash}share", f"file://localhost{backslash}x",
             "file:///" + backslash * 2 + "?" + backslash + "C:" + backslash + "x"]
+    if os.name == "nt":
+        urls += [f"{base}/index.html:stream", f"{base}/index.html::$DATA", f"{base}/trailing./x", f"{base}/trailing /x",
+                 f"{base}/CON", f"{base}/nul.txt"]
     for url in urls:
         assert policy.navigation_refusal(url, [str(workspace)]), url
 
@@ -230,6 +232,8 @@ def test_shared_file_cases(case, case_tree):
     base, ws, temp = case_tree
     if case.get("os") == "nt" and os.name != "nt":
         pytest.skip("Windows paths")
+    if case.get("os") == "posix" and os.name == "nt":
+        pytest.skip("names Windows reads differently")
     if case.get("needs") == "link" and not _make_link(ws / "link", base / "outside_long_name_dir"):
         pytest.skip("cannot create a link here")
     url = fill_case_url(case["url"], base, ws, temp)

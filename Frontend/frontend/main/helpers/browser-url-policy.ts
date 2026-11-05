@@ -200,10 +200,13 @@ export function isFileInRoots(url: string, roots: readonly string[] | null | und
   if (win && /^file:(\/\/(localhost)?)?\/[A-Za-z]\|/i.test(url)) return false
   if (/[\x00-\x1f\x7f]/.test(target) || target.startsWith('\\\\') || target.startsWith('//')) return false
   if (win && !/^[A-Za-z]:[\\/]/.test(target)) return false
-  const rest = win ? target.slice(2) : target
-  if (rest.includes(':')) return false
-  const names = rest.split(/[\\/]/).filter((name) => name !== '' && name !== '.' && name !== '..')
-  if (names.some((name) => /[. ]$/.test(name) || RESERVED_FILE_NAMES.test(name.split('.')[0]))) return false
+  if (win) {
+    // Streams, trailing dots or spaces and device names mean something only to Windows.
+    const rest = target.slice(2)
+    if (rest.includes(':')) return false
+    const names = rest.split(/[\\/]/).filter((name) => name !== '' && name !== '.' && name !== '..')
+    if (names.some((name) => /[. ]$/.test(name) || RESERVED_FILE_NAMES.test(name.split('.')[0]))) return false
+  }
   const real = realPathLoose(target)
   const inside = (root: string) => typeof root === 'string' && root !== '' && insideDir(real, realPathLoose(root))
   if (!roots.some(inside)) return false

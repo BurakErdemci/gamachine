@@ -676,35 +676,83 @@
   },
   {
    "url": "file://{ws}/ok.html.",
-   "allow": false
+   "allow": false,
+   "os": "nt"
   },
   {
    "url": "file://{ws}/ok.html%20",
-   "allow": false
+   "allow": false,
+   "os": "nt"
   },
   {
    "url": "file://{ws}/ok.html:stream",
-   "allow": false
+   "allow": false,
+   "os": "nt"
   },
   {
    "url": "file://{ws}/ok.html::$DATA",
-   "allow": false
+   "allow": false,
+   "os": "nt"
   },
   {
    "url": "file://{ws}/CON",
-   "allow": false
+   "allow": false,
+   "os": "nt"
   },
   {
    "url": "file://{ws}/nul.txt",
-   "allow": false
+   "allow": false,
+   "os": "nt"
   },
   {
    "url": "file://{ws}/COM1.html",
-   "allow": false
+   "allow": false,
+   "os": "nt"
   },
   {
    "url": "file://{ws}/con.html/x",
-   "allow": false
+   "allow": false,
+   "os": "nt"
+  },
+  {
+   "url": "file://{ws}/ok.html.",
+   "allow": true,
+   "os": "posix"
+  },
+  {
+   "url": "file://{ws}/ok.html%20",
+   "allow": true,
+   "os": "posix"
+  },
+  {
+   "url": "file://{ws}/ok.html:stream",
+   "allow": true,
+   "os": "posix"
+  },
+  {
+   "url": "file://{ws}/ok.html::$DATA",
+   "allow": true,
+   "os": "posix"
+  },
+  {
+   "url": "file://{ws}/CON",
+   "allow": true,
+   "os": "posix"
+  },
+  {
+   "url": "file://{ws}/nul.txt",
+   "allow": true,
+   "os": "posix"
+  },
+  {
+   "url": "file://{ws}/COM1.html",
+   "allow": true,
+   "os": "posix"
+  },
+  {
+   "url": "file://{ws}/con.html/x",
+   "allow": true,
+   "os": "posix"
   },
   {
    "url": "file://{ws}/a%5cb",

@@ -167,6 +167,11 @@ def _blocked_address(ip) -> bool:
             or getattr(ip, "is_site_local", False) or not ip.is_global)
 
 
+def _is_temp(root, temp) -> bool:
+    real = os.path.realpath(root)
+    return real == temp or (os.name != "nt" and is_within(real, temp) and is_within(temp, real))
+
+
 def _file_refusal(parts, roots) -> str:
     """'' when the file: URL names a path inside one of `roots` (the chat's workspace, the OS temp dir)."""
     if not roots:
@@ -189,18 +194,17 @@ def _file_refusal(parts, roots) -> str:
             return "The file address is not a plain local path."
         path = drive.group(1) + path[len(drive.group(0)):]
         rest = path[2:]
-    else:
-        rest = path
-    names = [name for name in rest.split("/") if name not in ("", ".", "..")]
-    if ":" in rest or any(name.endswith((".", " ")) or name.split(".")[0].casefold() in _FILE_RESERVED_NAMES
-                          for name in names):
-        return "The file address is not a plain local path."
+        # Streams, trailing dots or spaces and device names mean something only to Windows.
+        names = [name for name in rest.split("/") if name not in ("", ".", "..")]
+        if ":" in rest or any(name.endswith((".", " ")) or name.split(".")[0].casefold() in _FILE_RESERVED_NAMES
+                              for name in names):
+            return "The file address is not a plain local path."
     roots = [root for root in roots if isinstance(root, str) and root]
     if not any(is_within(path, root) for root in roots):
         return "Only files inside this chat's project or the temp folder can be opened."
     # Inside the temp folder only: Gamachine's own files (gamachine.log, its temp folders) stay closed.
     temp = os.path.realpath(tempfile.gettempdir())
-    if not any(is_within(path, root) for root in roots if os.path.realpath(root) != temp):
+    if not any(is_within(path, root) for root in roots if not _is_temp(root, temp)):
         real = os.path.realpath(path)
         if is_within(real, temp) and any(name.casefold().startswith("gamachine")
                                          for name in os.path.relpath(real, temp).replace("\\", "/").split("/")):
