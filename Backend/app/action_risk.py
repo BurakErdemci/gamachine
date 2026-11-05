@@ -36,9 +36,12 @@ import os
 import re
 import shlex
 import socket
+import sys
+import unicodedata
 from typing import Any, Iterable, Mapping, NamedTuple, Optional
 
 from agentic import command_safety
+from path_containment import parts_below
 
 ROUTINE = "routine"
 CRITICAL = "critical"
@@ -163,7 +166,11 @@ _SHORT_NAME = re.compile(r"^[^~]{1,6}~\d+(\.[^.]{0,3})?$")
 
 def _part(name: str) -> str:
     # Windows drops trailing dots and spaces and reads `x::$DATA` as x.
-    return name.split(":", 1)[0].rstrip(" .").lower()
+    name = name.split(":", 1)[0].rstrip(" .")
+    if sys.platform == "darwin":
+        # Measured on APFS: `Projectſettings` opens ProjectSettings and .lower() leaves the ſ.
+        return unicodedata.normalize("NFD", unicodedata.normalize("NFD", name).casefold())
+    return name.lower()
 
 
 def _real(path: str) -> str:
@@ -203,7 +210,7 @@ def _relative_parts(path: Any, base: str, workspace: str) -> Optional[list]:
         return []
     prefix = root if root.endswith(os.sep) else root + os.sep
     if not target.startswith(prefix):
-        return None
+        return parts_below(target, root)
     return [p for p in re.split(r"[\\/]", target[len(prefix):]) if p]
 
 
@@ -292,11 +299,30 @@ def _file_id(path: str) -> Optional[tuple]:
     return (st.st_dev, st.st_ino) if st.st_ino else None
 
 
+def _same_folder(first: str, second: str) -> bool:
+    """Whether two realpaths are one folder; identical strings decide it on Windows.
+
+    A folder that does not exist yet is the one its folded name would open
+    under the same parent: creating it may create the secret's folder.
+    """
+    if first == second:
+        return True
+    if os.name == "nt":
+        return False
+    first_id, second_id = _file_id(first), _file_id(second)
+    if first_id or second_id:
+        return first_id == second_id
+    first_up, first_name = os.path.split(first)
+    second_up, second_name = os.path.split(second)
+    return (first_up != first and second_up != second and _part(first_name) == _part(second_name)
+            and _same_folder(first_up, second_up))
+
+
 def gamachine_secret_target(path: Any, base: str = "") -> Optional[str]:
     """The resolved target when `path` names one of Gamachine's secret files, else None.
 
-    Compared by directory realpath plus the Windows-folded file name (covers a
-    secret that does not exist yet), and by file identity (volume + file id) of
+    Compared by folder identity plus the folded file name (covers a secret that
+    does not exist yet), and by file identity (volume + file id) of
     the existing secrets, so no spelling, hard link or 8.3 name can slip past.
     """
     target = _resolve(_local_admin_share(path.strip()) if isinstance(path, str) else path, base)
@@ -306,7 +332,7 @@ def gamachine_secret_target(path: Any, base: str = "") -> Optional[str]:
     secrets = _secret_files()
     for secret in secrets:
         s_head, s_name = os.path.split(_real(os.path.abspath(secret)))
-        if head == s_head and _part(name) == _part(s_name):
+        if _part(name) == _part(s_name) and _same_folder(head, s_head):
             return target
     raw = os.path.expanduser(path.strip())
     if not os.path.isabs(raw) and base:

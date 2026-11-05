@@ -467,7 +467,7 @@ def test_action_risk_imports_no_provider_package():
 
 def test_action_risk_source_imports_only_stdlib_and_known_local_modules():
     tree = ast.parse((APP_DIR / "action_risk.py").read_text(encoding="utf-8"))
-    local = {"agentic", "unity_tool_policy"}
+    local = {"agentic", "path_containment", "unity_tool_policy"}
     for node in ast.walk(tree):
         names = []
         if isinstance(node, ast.Import):
