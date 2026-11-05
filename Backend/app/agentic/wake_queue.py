@@ -275,6 +275,7 @@ def reset(conv_id: int) -> None:
         _QUEUES.pop(conv_id, None)
     _WAKE_TICKETS.pop(conv_id, None)
     _TICKET_NOTICES.pop(conv_id, None)
+    _DEFERRED.discard(conv_id)
 
 
 def release(conv_id: int) -> None:
