@@ -7,6 +7,7 @@ import time
 
 import pytest
 
+from connectors import installer as installer_module
 from connectors.installer import Cancelled, Installer, Job
 
 posix_only = pytest.mark.skipif(os.name == "nt", reason="uses fork and pid checks")
@@ -96,3 +97,30 @@ def test_connector_cancel_ends_a_child_that_outlives_the_leader(tmp_path):
         if _alive(child):
             os.kill(child, signal.SIGKILL)
         job.thread.join(3)
+
+
+class _FinishedOrRunning:
+    pid = 424242
+
+    def __init__(self, exit_code):
+        self.exit_code = exit_code
+
+    def poll(self):
+        return self.exit_code
+
+    def kill(self):
+        pass
+
+
+@pytest.mark.parametrize("exit_code,calls", [(None, 1), (0, 0)])
+def test_windows_taskkill_runs_only_for_a_live_process(monkeypatch, exit_code, calls):
+    # An exited process's id may already belong to another program.
+    seen = []
+    monkeypatch.setattr(installer_module.sys, "platform", "win32")
+    monkeypatch.setattr(installer_module.subprocess, "CREATE_NO_WINDOW", 0, raising=False)
+    monkeypatch.setattr(installer_module.subprocess, "run", lambda argv, **_: seen.append(argv))
+
+    installer_module.kill_tree(_FinishedOrRunning(exit_code))
+
+    assert len(seen) == calls
+    assert all(argv[:3] == ["taskkill", "/PID", "424242"] and "/T" in argv for argv in seen)

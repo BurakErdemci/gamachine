@@ -2,6 +2,7 @@
 import asyncio
 import os
 import subprocess
+import sys
 
 import pytest
 
@@ -155,3 +156,11 @@ def test_bash_file_write_goes_through_write_file_approval(bash, spawned, ws):
     assert spawned == []
     with open(ws + "/notes.txt", encoding="utf-8") as f:
         assert f.read() == "hi"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")
+def test_a_job_stays_in_the_callers_process_group(tmp_path):
+    # App quit and provider Stop end the caller's group; a private session would outlive both.
+    result = shell_exec.run("", [sys.executable, "-c", "import os; print(os.getpgrp())"], str(tmp_path))
+
+    assert int(result.stdout) == os.getpgrp()
