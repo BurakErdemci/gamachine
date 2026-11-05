@@ -9,7 +9,6 @@ to be applied in three places.
 """
 import os
 import re
-import signal
 import subprocess
 from typing import NamedTuple
 
@@ -44,47 +43,15 @@ def run(command: str, argv: list[str] | None, workspace: str) -> subprocess.Comp
     exactly that string and approved it (the caller got the approval BEFORE this
     call). `GIT_TERMINAL_PROMPT=0` keeps git and similar tools from prompting.
     """
-    proc = subprocess.Popen(
+    return subprocess.run(
         command if argv is None else argv,
         shell=argv is None,
         cwd=workspace,
-        stdin=None,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
+        timeout=300,
         env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
-        start_new_session=os.name != "nt",
     )
-    try:
-        out, err = proc.communicate(timeout=300)
-    except subprocess.TimeoutExpired:
-        _kill_tree(proc)
-        proc.communicate()
-        raise
-    except BaseException:
-        _kill_tree(proc)
-        raise
-    return subprocess.CompletedProcess(proc.args, proc.returncode, out, err)
-
-
-def _kill_tree(proc: subprocess.Popen) -> None:
-    """Ends the shell and every process it started, not just the shell."""
-    if os.name == "nt":
-        try:
-            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW,
-                           timeout=5, check=False)
-        except (OSError, subprocess.SubprocessError):
-            pass
-    else:
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            pass
-    try:
-        proc.kill()
-    except OSError:
-        pass
 
 
 def _parse_file_write(command: str):

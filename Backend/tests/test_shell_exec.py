@@ -29,20 +29,11 @@ def ws(tmp_path):
 def spawned(monkeypatch):
     calls = []
 
-    class FakePopen:
-        pid = 0
-        returncode = 0
+    def fake_run(target, **kw):
+        calls.append({"target": target, **kw})
+        return _Done()
 
-        def __init__(self, target, **kw):
-            self.args = target
-            self.call = {"target": target, **kw}
-            calls.append(self.call)
-
-        def communicate(self, timeout=None):
-            self.call["timeout"] = timeout
-            return "out", ""
-
-    monkeypatch.setattr(subprocess, "Popen", FakePopen)
+    monkeypatch.setattr(subprocess, "run", fake_run)
     return calls
 
 
