@@ -153,6 +153,14 @@ def test_a_secret_that_does_not_exist_yet_is_refused_at_its_plain_path(home):
     assert action_risk.gamachine_secret_target(str(app / "unity_master_v3.db-wal"))
 
 
+def test_a_secret_file_name_in_an_unrelated_missing_folder_is_not_refused(home, base):
+    # Same folder name and file name, but under another parent; neither folder exists,
+    # so only the comparison of the parents tells them apart.
+    for name in ("local-app-token", "unity_master_v3.db-wal"):
+        assert action_risk.gamachine_secret_target(str(base / "elsewhere" / ".unity_architect_ai" / name)) is None
+    assert action_risk.gamachine_secret_target(str(home / ".unity_architect_ai" / "local-app-token"))
+
+
 @darwin_only
 def test_a_future_secret_is_refused_through_any_spelling_of_its_folder(home):
     app = home / ".unity_architect_ai"
