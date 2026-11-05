@@ -254,7 +254,8 @@ describe('createProject', () => {
   })
 
   it('leaves another folder intact when the parent symlink is re-pointed during the run', async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gm-create-'))
+    // macOS: os.tmpdir() is itself under a symlink, and the expected path below is the resolved one.
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gm-create-')))
     try {
       const realA = path.join(root, 'a')
       const realB = path.join(root, 'b')
