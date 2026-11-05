@@ -119,7 +119,7 @@ export const ComputerUsePage = ({ saved, showToast }: { saved: () => void; showT
   const cardsOff = status?.settings.cardsOff === true;
   const toggleCards = async () => {
     if (busy || !enabled) return;
-    if (!cardsOff && !(await confirmDialog(t('cu.set.cardsConfirm'), t('cu.set.cardsConfirmBtn'), t('confirm.cancel')))) return;
+    if (!cardsOff && !(await confirmDialog(t(mac ? 'cu.set.cardsConfirmMac' : 'cu.set.cardsConfirm'), t('cu.set.cardsConfirmBtn'), t('confirm.cancel')))) return;
     await run('cards', () => setComputerUseCardsOff(!cardsOff), r => {
       const off = (r as { cardsOff?: unknown })?.cardsOff;
       if (typeof off !== 'boolean' || off === cardsOff) { fail(); return; }

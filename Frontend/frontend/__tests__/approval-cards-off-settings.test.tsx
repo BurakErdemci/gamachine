@@ -126,6 +126,29 @@ describe.each(cases)('approval cards switch · $name', ({ p, invoke, mount, msg 
   })
 })
 
+describe('computer use confirm text on macOS', () => {
+  it('names the macOS halt shortcut and apps, not the Windows ones', async () => {
+    const mac = cevir('cu.set.cardsConfirmMac')
+    expect(mac).toContain('Cmd+Shift+Esc')
+    expect(mac).not.toMatch(/Ctrl\+Alt\+Esc|Görev Yöneticisi|Dosya Gezgini/)
+    aktifDilAyarla('en')
+    expect(cevir('cu.set.cardsConfirmMac')).not.toMatch(/Task Manager|File Explorer|Ctrl\+Alt\+Esc/)
+    aktifDilAyarla('tr')
+    computerInvoke.mockImplementationOnce(async (_c: string, req: any) => {
+      ops.push(req.op)
+      return { available: true, running: true, platform: 'darwin',
+        settings: { enabled: true, active: true, grants: [], cardsOff: false },
+        permissions: { accessibility: true, screen: 'granted' } }
+    })
+    confirm.mockResolvedValue(false)
+    ;(window as any).ipc = { invoke: computerInvoke }
+    render(<ComputerUsePage saved={vi.fn()} showToast={vi.fn()} />)
+    await waitFor(() => expect((screen.getByTestId('cu-cards-switch') as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(screen.getByTestId('cu-cards-switch'))
+    await waitFor(() => expect(confirm).toHaveBeenCalledWith(mac, cevir('cu.set.cardsConfirmBtn'), cevir('confirm.cancel')))
+  })
+})
+
 describe('risk texts', () => {
   it('keep the fixed bans in both languages', () => {
     expect(cevir('bp.set.cardsConfirm')).toContain('Durdur düğmesi her zaman çalışır')
