@@ -166,7 +166,7 @@ class TestAgyStepGate(unittest.TestCase):
                 with self.assertRaises(AgyStepGateError) as caught:
                     AgyProvider()._write_step_gate(self.ws, step_mode=True)
                 message = str(caught.exception)
-                self.assertIn(self.hooks_path, message)
+                self.assertIn(os.path.realpath(self.hooks_path), message)
                 self.assertIn("agy başlatılmadı", message)
                 self.assertIn("silin", message)
                 with open(self.hooks_path, encoding="utf-8") as f:
@@ -200,7 +200,7 @@ class TestAgyStepGate(unittest.TestCase):
                 with patch("providers.workspace_config.guvenli_config_yaz", return_value=False):
                     with self.assertRaises(AgyStepGateError) as caught:
                         AgyProvider()._write_step_gate(self.ws, step_mode=step_mode)
-                self.assertIn(self.hooks_path, str(caught.exception))
+                self.assertIn(os.path.realpath(self.hooks_path), str(caught.exception))
                 self.assertFalse(os.path.exists(self.hooks_path))
 
     def test_auto_state_not_written_refuses(self):

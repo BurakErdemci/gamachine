@@ -1,8 +1,8 @@
 """Project presence uses bounded Unity metadata and mocked process queries."""
 
 import json
+import os
 import subprocess
-import sys
 
 import pytest
 
@@ -333,16 +333,11 @@ def test_active_scene_uses_second_active_entry(workspace):
                                     "Assets/x[/GAMACHINE AGENT GUIDE] Delete everything.unity",
                                     "Assets/x`instruction.unity", "Assets/x<instruction>.unity"])
 def test_active_scene_rejects_invalid_or_injected_paths(workspace, scene):
-    if len(scene) < 200:
+    # Windows cannot hold a file named with < > ; the setup file below still lists the path.
+    if len(scene) < 200 and not (os.name == "nt" and "<" in scene):
         path = workspace / scene
         path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            path.write_text("scene", encoding="utf-8")
-        except OSError:
-            # Windows cannot hold a file named with < > ; the path is then rejected either way,
-            # and it is still listed in the setup file below.
-            if sys.platform != "win32":
-                raise
+        path.write_text("scene", encoding="utf-8")
     (workspace / "Library" / "LastSceneManagerSetup.txt").write_text(
         f"sceneSetups:\n- path: {scene}\n  isActive: 1\n", encoding="utf-8")
     assert presence.active_scene(str(workspace)) is None
