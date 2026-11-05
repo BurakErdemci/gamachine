@@ -23,7 +23,8 @@ Workspace ve backend bilgisi:
   WORKSPACE     env → yoksa cwd
   UNITYAI_URL   env → approval_bridge.BACKEND_URL (yoksa localhost:8000)
   LOCAL_APP_TOKEN env → approval header
-(Bunlar wrapper script tarafından .unityai_cli.env'den de yüklenebilir.)
+(Bunlar wrapper script tarafından ~/.unity_architect_ai/.unityai_cli.env'den de yüklenebilir;
+LOCAL_APP_TOKEN o dosyada değil, kendi 0600 dosyasında.)
 """
 import os
 import sys

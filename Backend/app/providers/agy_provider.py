@@ -557,16 +557,20 @@ class AgyProvider(BaseCLIProvider):
         logger.info(f"[CLIProvider] agy trusted → {workspace}")
 
     def _write_cli_env(self, launcher: str, workspace: str, backend_url: str):
-        """Backend/.unityai_cli.env yazar — 'unityai' wrapper bu dosyayı source eder.
-        launcher = .../Backend/run_mcp_server.sh → backend_dir = .../Backend."""
-        backend_dir = os.path.dirname(launcher)
-        env_path = os.path.join(backend_dir, ".unityai_cli.env")
+        """Writes ~/.unity_architect_ai/.unityai_cli.env, which the 'unityai' wrapper reads.
+
+        Not beside the launcher: in the packaged macOS app that folder is inside
+        the signed bundle, and a new file there breaks `codesign --verify`.
+        `launcher` is kept for the callers' signature."""
+        env_dir = os.path.join(os.path.expanduser("~"), ".unity_architect_ai")
+        env_path = os.path.join(env_dir, ".unityai_cli.env")
         lines = [
             f"UNITYAI_URL={backend_url}",
             f"WORKSPACE={workspace}",
         ]
         # LOCAL_APP_TOKEN bu env dosyasına yazılmıyor; 0600 dosyadan okunuyor.
         try:
+            os.makedirs(env_dir, exist_ok=True)
             with open(env_path, "w") as f:
                 f.write("\n".join(lines) + "\n")
             logger.info(f"[CLIProvider] unityai CLI env yazıldı: {env_path}")

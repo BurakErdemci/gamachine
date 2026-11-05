@@ -9,9 +9,11 @@ REM Turkce karakterler icin UTF-8 stdio (cp1252 UnicodeEncodeError fix).
 set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
 
-REM Backend'in yazdigi env dosyasi (UNITYAI_URL, LOCAL_APP_TOKEN, WORKSPACE).
-if exist "%SCRIPT_DIR%.unityai_cli.env" (
-  for /f "usebackq eol=# tokens=1* delims==" %%a in ("%SCRIPT_DIR%.unityai_cli.env") do set "%%a=%%b"
+REM Backend's env file (UNITYAI_URL, WORKSPACE; the token has its own file),
+REM kept in the per-user data folder, not beside this script.
+set "ENV_FILE=%USERPROFILE%\.unity_architect_ai\.unityai_cli.env"
+if exist "%ENV_FILE%" (
+  for /f "usebackq eol=# tokens=1* delims==" %%a in ("%ENV_FILE%") do set "%%a=%%b"
 )
 if not defined WORKSPACE set "WORKSPACE=%ORIG_PWD%"
 
