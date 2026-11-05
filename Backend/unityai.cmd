@@ -13,7 +13,10 @@ REM Backend's env file (UNITYAI_URL, WORKSPACE; the token has its own file),
 REM kept in the per-user data folder, not beside this script.
 set "ENV_FILE=%USERPROFILE%\.unity_architect_ai\.unityai_cli.env"
 if exist "%ENV_FILE%" (
-  for /f "usebackq eol=# tokens=1* delims==" %%a in ("%ENV_FILE%") do set "%%a=%%b"
+  for /f "usebackq eol=# tokens=1* delims==" %%a in ("%ENV_FILE%") do (
+    if /i "%%a"=="UNITYAI_URL" set "%%a=%%b"
+    if /i "%%a"=="WORKSPACE" set "%%a=%%b"
+  )
 )
 if not defined WORKSPACE set "WORKSPACE=%ORIG_PWD%"
 

@@ -564,10 +564,12 @@ class AgyProvider(BaseCLIProvider):
         `launcher` is kept for the callers' signature."""
         env_dir = os.path.join(os.path.expanduser("~"), ".unity_architect_ai")
         env_path = os.path.join(env_dir, ".unityai_cli.env")
-        lines = [
-            f"UNITYAI_URL={backend_url}",
-            f"WORKSPACE={workspace}",
-        ]
+        lines = [f"UNITYAI_URL={backend_url}"]
+        if "\n" in workspace or "\r" in workspace:
+            # A line break would start a second assignment; the wrapper falls back to its cwd.
+            logger.warning("[CLIProvider] workspace contains a line break; WORKSPACE not written to the CLI env")
+        else:
+            lines.append(f"WORKSPACE={workspace}")
         # LOCAL_APP_TOKEN bu env dosyasına yazılmıyor; 0600 dosyadan okunuyor.
         try:
             os.makedirs(env_dir, exist_ok=True)

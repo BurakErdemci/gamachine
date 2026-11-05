@@ -49,3 +49,40 @@ def test_wrapper_reads_a_hostile_path_literally(dirs):
                        env={"HOME": str(home), "PATH": os.environ["PATH"]}, cwd=str(home))
     assert r.stderr == ""
     assert r.stdout == f"{HOSTILE}|http://127.0.0.1:8888"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="bash wrapper")
+def test_a_line_break_in_the_folder_name_cannot_set_another_variable(dirs):
+    home, launcher = dirs
+    _write(home, launcher, "/Users/x/proj\nPATH=/nonexistent-evil")
+    shutil.copy(BACKEND / "unityai", launcher / "unityai")
+    fake = launcher / "backend"
+    fake.write_text('#!/bin/bash\nprintf "%s|%s" "$PATH" "$WORKSPACE"\n')
+    fake.chmod(0o755)
+    cwd = home / "cwd"
+    cwd.mkdir()
+    r = subprocess.run(["bash", str(launcher / "unityai")], capture_output=True, text=True,
+                       env={"HOME": str(home), "PATH": os.environ["PATH"]}, cwd=str(cwd))
+    assert r.stderr == ""
+    path, workspace = r.stdout.split("|")
+    assert "nonexistent-evil" not in path
+    assert workspace == str(cwd)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="bash wrapper")
+def test_the_wrapper_ignores_a_key_it_does_not_own(dirs):
+    home, launcher = dirs
+    _write(home, launcher, "/Users/x/proj")
+    env_file = home / ".unity_architect_ai" / ".unityai_cli.env"
+    env_file.write_text(env_file.read_text() + "PATH=/nonexistent-evil\nEXTRA_KEY=1\n")
+    shutil.copy(BACKEND / "unityai", launcher / "unityai")
+    fake = launcher / "backend"
+    fake.write_text('#!/bin/bash\nprintf "%s|%s|%s" "$PATH" "${EXTRA_KEY-unset}" "$WORKSPACE"\n')
+    fake.chmod(0o755)
+    r = subprocess.run(["bash", str(launcher / "unityai")], capture_output=True, text=True,
+                       env={"HOME": str(home), "PATH": os.environ["PATH"]}, cwd=str(home))
+    assert r.stderr == ""
+    path, extra, workspace = r.stdout.split("|")
+    assert "nonexistent-evil" not in path
+    assert extra == "unset"
+    assert workspace == "/Users/x/proj"
