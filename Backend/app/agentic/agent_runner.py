@@ -2491,7 +2491,8 @@ class AgentRunner:
             parts.append(f"[Earlier conversation summary]\n{self.api_memory}")
         system = "\n\n".join(parts)
         guide = toolset.with_guide(self._agent_guide) if toolset is not None else self._agent_guide
-        return (system + "\n\n" + guide
+        note = getattr(self, "_unity_note", "")
+        return (system + "\n\n" + guide + (f"\n\n{note}" if note else "")
                 + self._get_architect_wisdom() + self._identity_note())
 
     async def _api_loop(self, adapter, user_message):
@@ -2822,6 +2823,8 @@ class AgentRunner:
             provider._agent_guide = self._agent_guide
             provider._language = getattr(self, "language", "tr")
 
+            if getattr(self, "_unity_note", ""):
+                user_message = f"{self._unity_note}\n\n{user_message}"
             prompt = f"{_PRODUCT_PROMPT}\n\n[BAĞLAM]\n{self.context}\n\n[KULLANICI]\n{user_message}"
 
             if self.provider_type == "subscription":
@@ -2904,6 +2907,8 @@ class AgentRunner:
         if image_paths:
             message += "\n\nAttached images; open these files to inspect them:\n"
             message += "\n".join(f"- {path}" for path in image_paths)
+        if getattr(self, "_unity_note", ""):
+            message = f"{self._unity_note}\n\n{message}"
         turn_complete = False
         session.agent_guide = self._agent_guide
         try:
@@ -2984,7 +2989,8 @@ class AgentRunner:
                 _cli_guide = agent_guide.with_browser_use(_cli_guide)
             if _connectors_reg.stdio_entry() is not None:
                 _cli_guide = agent_guide.with_connectors(_cli_guide)
-        _guide_units = len((_cli_guide or "").encode("utf-16-le")) // 2
+        _unity_note = getattr(self, "_unity_note", "")
+        _guide_units = len(((_cli_guide or "") + _unity_note).encode("utf-16-le")) // 2
         _prompt_cap = 24000 - _guide_units
         if _prompt_cap < _MIN_ONESHOT_PROMPT_UNITS or (
                 getattr(self, "side_turn", None) is not None and not self.side_turn.fits(_prompt_cap)):
@@ -3038,6 +3044,9 @@ class AgentRunner:
             _lines = "\n".join(f"- {p}" for p in _img_paths)
             enriched_prompt += ("\n\n[EKLİ GÖRSELLER] Kullanıcı bu turda görsel ekledi. "
                                 "İncelemen için (read aracıyla aç):\n" + _lines)
+
+        if _unity_note:
+            enriched_prompt = f"{_unity_note}\n\n{enriched_prompt}"
 
         # Effort seviyesi provider'a attr olarak geçer (agy _resume_uuid deseni):
         # copilot _build_cmd --effort'a, opencode _register_mcp opencode.json'a çevirir.

@@ -52,7 +52,7 @@ export const LESSER: GuideTopic[] = [
       },
       { anchor: "settings-dictation-lang", side: "below", align: "start", prepare: ["settings:general"],
         title: T("Hangi dilde konuşuyorsun", "Which language you speak"),
-        text: T("Ekran kartı varsa dili kendim bulurum. Yoksa arayüz dilini dinlerim; başka dilde konuşacaksan bunu aç.", "With a graphics card I find the language myself. Without one I listen for the interface language; turn this on if you speak another."),
+        text: T("Uygulama Türkçeyse Türkçe dinlerim; İngilizceyse hangi dili konuştuğunu kendim bulurum. Türkçe arayüzde başka dilde konuşacaksan bunu aç.", "With a Turkish app I listen for Turkish; with English I find the language myself. Turn this on if you speak another language with the Turkish app."),
       },
     ],
   },

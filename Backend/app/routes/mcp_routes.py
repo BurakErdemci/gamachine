@@ -52,7 +52,7 @@ async def start_mcp_for(workspace_path, background_tasks, language=None):
         status = await unity_mcp_manager.get_status()
         return {"status": "already_running", **status}
 
-    success = unity_mcp_manager.start_server()
+    success = unity_mcp_manager.start_server(reason="toggle_on")
     if not success:
         # Sebebi olduğu gibi geçir: en sık vaka 8080'in başka bir süreçte
         # olması ve o süreci öldürmek artık seçenek değil, dolayısıyla
@@ -92,7 +92,7 @@ async def start_mcp_for(workspace_path, background_tasks, language=None):
 
 
 def stop_mcp(workspace_path=None):
-    unity_mcp_manager.stop_server()
+    unity_mcp_manager.stop_server(reason="toggle_off")
     unity_mcp_manager.enabled = False
     unity_mcp_manager.generation += 1
     unity_mcp_manager.active_workspace = None

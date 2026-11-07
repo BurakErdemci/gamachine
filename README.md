@@ -151,7 +151,7 @@ keeps pixel art sharp.
 **Dictation that never leaves the machine** — click the microphone in the chat box,
 speak, click again: what you said lands in the box, and you read it, fix it, press
 Enter. With a graphics card the words appear while you are still speaking and the
-language is detected by itself. The recogniser (whisper.cpp with Whisper
+language follows the app: Turkish when the app is Turkish, detected otherwise. The recogniser (whisper.cpp with Whisper
 large-v3-turbo) ships inside the installer, so it works offline and no audio is
 uploaded anywhere. Windows only for now.
 

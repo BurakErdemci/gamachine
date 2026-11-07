@@ -342,7 +342,7 @@ async def lifespan(app: FastAPI):
         from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
         from tools.unity_mcp_tools import unload_unity_tools
         if not no_unity_mcp:
-            unity_mcp_manager.stop_server()
+            unity_mcp_manager.stop_server(reason="shutdown")
         unload_unity_tools()
         logger.info("[Shutdown] Unity MCP sunucusu durduruldu.")
     except Exception as e:
