@@ -119,13 +119,14 @@ def test_engine_root_dev_layout_resolves_into_the_repo_vendor_tree(monkeypatch):
 @pytest.mark.parametrize(
     "gpu, ui_lang, auto_on_cpu, expected",
     [
-        (True, "tr", False, "auto"),
+        (True, "tr", False, "tr"),
         (True, "en", False, "auto"),
-        (True, "tr", True, "auto"),      # GPU wins regardless of the CPU setting
+        (True, "tr", True, "auto"),      # the auto opt-in wins everywhere
         (False, "tr", False, "tr"),
-        (False, "en", False, "en"),
-        (False, "tr", True, "auto"),     # the CPU opt-in
-        (None, "en", False, "en"),       # unknown GPU state counts as CPU
+        (False, "en", False, "auto"),
+        (False, "tr", True, "auto"),
+        (None, "en", False, "auto"),
+        (None, "tr", False, "tr"),
     ],
 )
 def test_choose_language_table(gpu, ui_lang, auto_on_cpu, expected):
@@ -671,7 +672,7 @@ def test_the_next_dictation_after_an_unload_restarts_with_live_text(server_facto
 
     monkeypatch.setattr(server, "transcribe", spy)
     stt_whisper.feed(session_id, b"\x00\x00" * (stt_whisper.LIVE_MIN_AUDIO_BYTES // 2 + 10))
-    assert languages == ["auto"], "no live decode on the restarted server"
+    assert languages == ["tr"], "no live decode on the restarted server"
 
     result = stt_whisper.finish(session_id)
     assert result["gpu"] is True and "hello" in result["text"]

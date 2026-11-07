@@ -463,8 +463,9 @@ export const useVoiceInput = ({ api, lang, onText }: VoiceInputParams) => {
       }
 
       try {
+        // Raw audio: Whisper does better without it, and browser suppression can swallow word endings.
         stream = await media.getUserMedia({
-          audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+          audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
         });
       } catch (err: any) {
         // A cancel that landed while this promise was pending has nothing to

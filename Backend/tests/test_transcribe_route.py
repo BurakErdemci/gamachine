@@ -175,14 +175,14 @@ def test_an_empty_recognition_is_a_200_not_an_error(client, fake_server):
 @pytest.mark.parametrize(
     "gpu, auto_cpu_setting, ui_lang, server_reports, expected_call_lang, expected_mode, expected_lang_code",
     [
-        (True, None, "tr", "turkish", "auto", "auto", "tr"),
+        (True, None, "tr", "turkish", "tr", "fixed", "tr"),
         (True, None, "en", "english", "auto", "auto", "en"),
         (False, None, "tr", "turkish", "tr", "fixed", "tr"),
-        (False, None, "en", "english", "en", "fixed", "en"),
+        (False, None, "en", "english", "auto", "auto", "en"),
         (False, "1", "tr", "turkish", "auto", "auto", "tr"),
         (None, None, "tr", "turkish", "tr", "fixed", "tr"),
     ],
-    ids=["gpu-auto-tr", "gpu-auto-en", "cpu-fixed-tr", "cpu-fixed-en", "cpu-setting-auto", "gpu-unknown-is-cpu"],
+    ids=["gpu-fixed-tr", "gpu-auto-en", "cpu-fixed-tr", "cpu-auto-en", "cpu-setting-auto", "gpu-unknown-is-cpu"],
 )
 def test_language_choice_end_to_end(
     client, fake_server, db, gpu, auto_cpu_setting, ui_lang, server_reports,

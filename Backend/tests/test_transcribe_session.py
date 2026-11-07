@@ -299,10 +299,10 @@ def test_live_text_pins_the_language_only_after_a_supported_detection_on_2_5s_of
     the owner's clips were right at 1.5 s, 12/12 at 2.5 s). Every decode below
     that reuses "auto"; only one made on >= 2.5 s of audio may pin."""
     fake_server.gpu = True
-    fake_server.response_language = "turkish"
+    fake_server.response_language = "english"
     clock = _Clock()
     monkeypatch.setattr(stt_whisper, "_now", clock)
-    session_id = _new_session(ready, lang="tr")
+    session_id = _new_session(ready, lang="en")
 
     # Crosses LIVE_MIN_AUDIO_BYTES (1.5 s = 48000 bytes) but stays under
     # LIVE_PIN_MIN_BYTES (2.5 s = 80000 bytes): decodes with "auto", updates
@@ -332,11 +332,11 @@ def test_live_text_pins_the_language_only_after_a_supported_detection_on_2_5s_of
     assert fake_server.calls[2]["language"] == "auto"
 
     # Now pinned: the next decode reuses the raw language name the engine
-    # reported ("turkish"), not "auto".
+    # reported ("english"), not "auto".
     clock.value += stt_whisper.LIVE_INTERVAL_S + 0.1
     assert _chunk(ready, session_id, b"\x00\x00" * 50).status_code == 200
     assert len(fake_server.calls) == 4
-    assert fake_server.calls[3]["language"] == "turkish"
+    assert fake_server.calls[3]["language"] == "english"
 
 
 def test_an_early_misdetection_is_discarded_and_does_not_pin(ready, fake_server, monkeypatch):
@@ -347,7 +347,7 @@ def test_an_early_misdetection_is_discarded_and_does_not_pin(ready, fake_server,
     fake_server.response_language = "japanese"   # not in SUPPORTED_LANGS ("tr", "en")
     clock = _Clock()
     monkeypatch.setattr(stt_whisper, "_now", clock)
-    session_id = _new_session(ready, lang="tr")
+    session_id = _new_session(ready, lang="en")
 
     crossing = b"\x00\x00" * (stt_whisper.LIVE_MIN_AUDIO_BYTES // 2 + 10)
     response = _chunk(ready, session_id, crossing)

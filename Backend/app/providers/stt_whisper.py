@@ -195,13 +195,14 @@ def _linux_physical_cores() -> int:
 
 
 def choose_language(gpu, ui_lang: str, auto_on_cpu: bool) -> str:
-    """Owner decision, 28 Sep 2026. GPU: auto (~1.0 s). CPU: the UI language
-    (~5.8 s) unless the user switched auto on (~11.6 s — auto runs the encoder
-    twice). An unknown GPU state counts as CPU: the fixed language is the one
-    that stays fast either way."""
-    if gpu is True or auto_on_cpu:
+    """Owner decision, 8 Nov 2026 (replaces 28 Sep 2026). Turkish UI: always
+    "tr". Any other UI language: "auto" (detect). The user's auto opt-in forces
+    "auto" in every case. Measured on the owner's bench: detection misread
+    Turkish on short clips and auto runs the encoder twice (1.03 s vs 0.55 s
+    on the GPU). `gpu` no longer changes the result."""
+    if auto_on_cpu or language_code(ui_lang) != "tr":
         return "auto"
-    return ui_lang
+    return "tr"
 
 
 def language_code(name) -> "str | None":
@@ -1033,6 +1034,12 @@ def feed(session_id: str, pcm: bytes, cap: "int | None" = None, auto_on_cpu: boo
         session.pcm.extend(pcm)
         session.total_bytes += len(pcm)
         session.last_seen = _now()
+        if session.live_lang is None:
+            # A fixed language needs no detection pass: partials use it from
+            # the first one. "auto" keeps the detect-then-pin behaviour.
+            fixed = choose_language(None, session.lang, auto_on_cpu)
+            if fixed != "auto":
+                session.live_lang = fixed
         window = _take_window(session)
         snapshot = _live_snapshot(session)
         epoch = session.epoch
