@@ -1,4 +1,4 @@
-"""Codex settings-rebuild path closes a session whose turn is still streaming (running_work empty)."""
+"""A Codex settings rebuild is deferred while the session's turn is still streaming, even with no running work."""
 import sys, pathlib, asyncio
 R = pathlib.Path(__file__).resolve().parents[2] / "Backend"
 for p in (R / "tests", R / "app", R):
