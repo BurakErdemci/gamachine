@@ -9,6 +9,8 @@ No cookies, credentials, netrc or proxy settings are ever used.
 """
 import ipaddress
 import socket
+import threading
+import time
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlsplit
 
@@ -17,6 +19,10 @@ import httpx
 from browser_use import policy
 
 TIMEOUT_S = 20.0
+# The whole fetch (every redirect hop and the body). The per-read timeout alone
+# never fires on a server that sends one byte at a time (measured: held 6 s by a
+# 12-byte drip, and open-ended with a longer one).
+TOTAL_TIMEOUT_S = 30.0
 MAX_REDIRECTS = 5
 MAX_BODY_BYTES = 2 * 1024 * 1024
 DEFAULT_MAX_CHARS = 20_000
@@ -131,7 +137,17 @@ def html_to_text(html: str) -> str:
     return f"Title: {title}\n\n{text}" if title else text
 
 
-def _fetch_once(url: str) -> tuple[httpx.Response, bytes]:
+def _remaining(deadline: float | None) -> float:
+    """Seconds left before `deadline` (a time.monotonic() value); FetchError once it has passed."""
+    if deadline is None:
+        return TIMEOUT_S
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise FetchError(f"The page took longer than {TOTAL_TIMEOUT_S:g} seconds to load.")
+    return left
+
+
+def _fetch_once(url: str, deadline: float | None = None) -> tuple[httpx.Response, bytes]:
     """One GET to a checked, pinned address; redirects are not followed. Returns the response and its body."""
     refusal = policy.navigation_refusal(url)
     if refusal:
@@ -144,7 +160,7 @@ def _fetch_once(url: str) -> tuple[httpx.Response, bytes]:
     target = parts._replace(netloc=f"{shown_host}:{port}").geturl()
     host_header = host if parts.port is None else f"{host}:{parts.port}"
     # A fresh client per hop: no cookie jar carries a Set-Cookie to the next request.
-    with httpx.Client(transport=_transport(), timeout=TIMEOUT_S, follow_redirects=False, trust_env=False,
+    with httpx.Client(transport=_transport(), timeout=min(TIMEOUT_S, _remaining(deadline)), follow_redirects=False, trust_env=False,
                       headers={"User-Agent": _USER_AGENT, "Accept": "text/html,text/plain,*/*;q=0.5",
                                "Host": host_header}) as client:
         request = client.build_request("GET", target, extensions={"sni_hostname": host})
@@ -155,6 +171,7 @@ def _fetch_once(url: str) -> tuple[httpx.Response, bytes]:
             body = bytearray()
             for chunk in response.iter_bytes():
                 body += chunk
+                _remaining(deadline)
                 if len(body) >= MAX_BODY_BYTES:
                     del body[MAX_BODY_BYTES:]
                     break
@@ -171,7 +188,29 @@ def _readable_type(content_type: str, body: bytes) -> bool:
 
 
 def web_fetch(url: str, max_chars=DEFAULT_MAX_CHARS) -> dict:
-    """Fetches a public http(s) page and returns it as text (HTML is converted, other text kept as is)."""
+    """Fetches a public http(s) page and returns it as text (HTML is converted, other text kept as is).
+
+    The answer is back within TOTAL_TIMEOUT_S: the work runs in a helper thread
+    that is left behind when the deadline passes (it ends at its next read, which
+    checks the same deadline)."""
+    deadline = time.monotonic() + TOTAL_TIMEOUT_S
+    box: list = []
+
+    def work():
+        try:
+            box.append(_web_fetch(url, max_chars, deadline))
+        except Exception as e:  # noqa: BLE001 - the model gets a refusal, never a stack trace
+            box.append({"success": False, "error": f"Fetch failed: {type(e).__name__}: {e}"})
+
+    worker = threading.Thread(target=work, name="web-fetch", daemon=True)
+    worker.start()
+    worker.join(TOTAL_TIMEOUT_S)
+    if box:
+        return box[0]
+    return {"success": False, "error": f"The page took longer than {TOTAL_TIMEOUT_S:g} seconds to load."}
+
+
+def _web_fetch(url: str, max_chars, deadline: float) -> dict:
     try:
         limit = max(1, min(int(max_chars), MAX_CHARS_LIMIT))
     except (TypeError, ValueError):
@@ -179,7 +218,7 @@ def web_fetch(url: str, max_chars=DEFAULT_MAX_CHARS) -> dict:
     try:
         current = url
         for _ in range(MAX_REDIRECTS + 1):
-            response, body = _fetch_once(current)
+            response, body = _fetch_once(current, deadline)
             if 300 <= response.status_code < 400:
                 location = response.headers.get("location")
                 if not location:

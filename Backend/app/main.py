@@ -295,6 +295,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"[Shutdown] remote control not stopped: {e}")
 
+    # Background shell jobs of the API agent must not outlive the backend.
+    try:
+        from agentic import shell_jobs
+        await asyncio.to_thread(shell_jobs.stop_all)
+    except Exception as e:
+        logger.warning(f"[Shutdown] background jobs not stopped: {e}")
+
     # Only our own URL: a newer backend may have replaced the file already.
     try:
         if read_backend_url() == os.environ.get("ANTIGRAVITY_URL"):

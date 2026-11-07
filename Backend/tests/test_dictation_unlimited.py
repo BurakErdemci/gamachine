@@ -257,9 +257,14 @@ def test_a_sentence_that_merely_contains_altyazi_is_kept():
 
 
 def test_credit_phrases_in_other_languages_are_dropped_as_whole_segments():
-    for text in ("Abone ol!", "Thank you for watching.", "Subtitles by the Amara.org community",
-                 "Untertitel der Amara.org-Community"):
+    for text in ("Subtitles by the Amara.org community", "Untertitel der Amara.org-Community",
+                 "Untertitel im Auftrag des ZDF, 2020"):
         assert stt_whisper.clean_text({"text": " " + text, "segments": [_segment(" " + text)]}) == ""
+
+
+def test_ordinary_phrases_that_credits_also_use_are_kept():
+    for text in ("Abone ol!", "Untertitel", "Subtitles by default are off"):
+        assert stt_whisper.clean_text({"text": " " + text, "segments": [_segment(" " + text)]}) == text
 
 
 def test_without_segments_the_whole_text_gets_the_phrase_filter():

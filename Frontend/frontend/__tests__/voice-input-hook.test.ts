@@ -266,6 +266,14 @@ describe('useVoiceInput answers from the backend', () => {
     expect(result.current.error?.kind).toBe('engine')
   })
 
+  it('a failed finish still inserts the text the backend had already transcribed, with the error as the note', async () => {
+    const { result, onText } = await run(() => {
+      throw { response: { status: 503, data: { detail: 'stt_engine_failed', committed_text: ' first part ' } } }
+    })
+    expect(onText).toHaveBeenCalledWith('first part')
+    expect(result.current.error?.kind).toBe('engine')
+  })
+
   it('no response at all is `server`', async () => {
     const { result } = await run(() => { throw new Error('Network Error') })
     expect(result.current.error?.kind).toBe('server')

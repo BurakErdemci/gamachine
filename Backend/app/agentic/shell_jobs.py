@@ -24,6 +24,10 @@ OUTPUT_KEEP_BYTES = 256 * 1024
 DEFAULT_TAIL_CHARS = 4000
 MAX_TAIL_CHARS = 50_000
 _READER_JOIN_S = 1.0
+STOP_WAIT_S = 3.0
+# Descendants are sampled while the job runs: once the shell is gone nothing
+# links a grandchild to it on POSIX, and a stop would find nothing to end.
+TRACK_FAST_S, TRACK_FAST_INTERVAL_S, TRACK_INTERVAL_S = 10.0, 0.2, 2.0
 
 RUNNING, EXITED, STOPPED = "running", "exited", "stopped"
 
@@ -50,6 +54,11 @@ class _Job:
         self.stop_requested = False
         self.buffer = bytearray()
         self.buffer_lock = threading.Lock()
+        self.descendants: dict = {}
+        self.track_lock = threading.Lock()
+        self.done = threading.Event()
+        # Windows: holds the shell and everything it starts, even after the shell is gone.
+        self.group = process_tree.new_job_object_for(proc)
 
     def snapshot(self) -> dict:
         end = self.ended or time.time()
@@ -91,10 +100,29 @@ def _read_output(job: _Job) -> None:
         pass
 
 
+def _record(job: _Job) -> None:
+    with job.track_lock:
+        process_tree.record_descendants(getattr(job.proc, "pid", None), job.descendants)
+
+
+def _end_recorded(job: _Job) -> None:
+    with job.track_lock:
+        process_tree.end_recorded_sync(job.descendants)
+
+
+def _track(job: _Job) -> None:
+    while not job.done.is_set() and job.status == RUNNING:
+        _record(job)
+        fast = time.time() - job.started < TRACK_FAST_S
+        job.done.wait(TRACK_FAST_INTERVAL_S if fast else TRACK_INTERVAL_S)
+
+
 def _watch(job: _Job) -> None:
     reader = threading.Thread(target=_read_output, args=(job,), daemon=True)
     reader.start()
     code = job.proc.wait()
+    # Windows keeps the parent link of an orphan: the table still shows what the shell started.
+    _record(job)
     # A grandchild that outlives the shell keeps the pipe open; the tail read so far is enough.
     reader.join(_READER_JOIN_S)
     with _lock:
@@ -103,6 +131,7 @@ def _watch(job: _Job) -> None:
         job.status = STOPPED if job.stop_requested else EXITED
         listeners = list(_listeners)
     snapshot = job.snapshot()
+    job.done.set()
     for fn in listeners:
         try:
             fn(snapshot)
@@ -116,6 +145,8 @@ def _prune(conversation_id) -> None:
     for job in mine[:max(0, len(mine) - MAX_JOBS_PER_CONVERSATION)]:
         if job.status != RUNNING:
             del _jobs[job.id]
+            if job.group is not None:
+                job.group.close()
 
 
 def start(command: str, cwd: str, conversation_id=None) -> str:
@@ -139,6 +170,7 @@ def start(command: str, cwd: str, conversation_id=None) -> str:
         _jobs[job_id] = job
         _prune(conversation_id)
     threading.Thread(target=_watch, args=(job,), daemon=True).start()
+    threading.Thread(target=_track, args=(job,), daemon=True).start()
     return job_id
 
 
@@ -152,6 +184,8 @@ def _get(job_id, conversation_id) -> _Job:
 
 def status(job_id: str, conversation_id=None) -> dict:
     job = _get(job_id, conversation_id)
+    if job.status == RUNNING:
+        _record(job)
     with _lock:
         return job.snapshot()
 
@@ -159,25 +193,54 @@ def status(job_id: str, conversation_id=None) -> dict:
 def output(job_id: str, conversation_id=None, tail: int = DEFAULT_TAIL_CHARS) -> str:
     """The last `tail` characters of the job's merged output."""
     job = _get(job_id, conversation_id)
+    if job.status == RUNNING:
+        _record(job)
     tail = max(1, min(int(tail), MAX_TAIL_CHARS))
     with job.buffer_lock:
         text = bytes(job.buffer).decode("utf-8", errors="replace")
     return text[-tail:]
 
 
-def stop(job_id: str, conversation_id=None) -> dict:
-    """Ends the job's whole process tree; a job that already ended is returned as it is."""
-    job = _get(job_id, conversation_id)
+def _stop(job: _Job) -> dict:
     with _lock:
-        if job.status == RUNNING:
+        live = job.status == RUNNING
+        if live:
             job.stop_requested = True
-            live = True
-        else:
-            live = False
     if live:
+        _record(job)
         process_tree.end_tree_sync(job.proc)
+        job.done.wait(STOP_WAIT_S)
+    # Also for a job that already ended: what its shell left behind is still ours to end.
+    if job.group is not None:
+        job.group.terminate()
+    _end_recorded(job)
     with _lock:
         return job.snapshot()
+
+
+def stop(job_id: str, conversation_id=None) -> dict:
+    """Ends the job's whole process tree, including descendants the shell left
+    running; the answer is the status after the kill (`stopped` for a job that
+    was running, as it is for one that already ended)."""
+    return _stop(_get(job_id, conversation_id))
+
+
+def stop_conversation(conversation_id) -> list:
+    """Ends every job of one chat (for when the chat is deleted)."""
+    with _lock:
+        mine = [j for j in _jobs.values() if j.conversation_id == conversation_id]
+    return [_stop(job) for job in mine]
+
+
+def stop_all() -> None:
+    """Ends every job of every chat (backend shutdown)."""
+    with _lock:
+        everyone = list(_jobs.values())
+    for job in everyone:
+        try:
+            _stop(job)
+        except Exception:
+            logger.exception("[shell-jobs] stop at shutdown failed for %s", job.id)
 
 
 def list_jobs(conversation_id=None) -> list:

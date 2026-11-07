@@ -192,3 +192,127 @@ def end_tree_sync(proc, *, strict: bool = False) -> bool:
         return False
     _kill_pids_sync(descendants)
     return True
+
+
+def creation_time(pid: int):
+    """An opaque start-time stamp of a live process, None when it is gone or
+    unreadable. Two processes that had the same pid never share one."""
+    try:
+        if sys.platform == "win32":
+            import ctypes
+            from ctypes import wintypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.OpenProcess.restype = wintypes.HANDLE
+            kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            kernel32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+            if not handle:
+                return None
+            try:
+                created, exited, kernel, user = (wintypes.FILETIME() for _ in range(4))
+                if not kernel32.GetProcessTimes(handle, *(ctypes.byref(t) for t in (created, exited, kernel, user))):
+                    return None
+                return (created.dwHighDateTime << 32) | created.dwLowDateTime
+            finally:
+                kernel32.CloseHandle(handle)
+        from spawn_env import build_spawn_env
+
+        out = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True,
+                             timeout=KILL_WAIT_S, env=build_spawn_env()).stdout.strip()
+        return out or None
+    except Exception as exc:
+        logger.debug("[process-tree] creation time of pid=%s unreadable: %s", pid, exc)
+        return None
+
+
+def record_descendants(root_pid: Optional[int], known: dict) -> None:
+    """Adds the live descendants of `root_pid` to `known` (pid -> creation_time).
+    A descendant whose start time cannot be read is not recorded: it could not
+    be told apart from a later process with the same pid. Never raises."""
+    for pid in collect_descendants(root_pid):
+        if pid not in known:
+            stamp = creation_time(pid)
+            if stamp is not None:
+                known[pid] = stamp
+
+
+def end_recorded_sync(known: dict) -> None:
+    """Ends every recorded process that is still the same process (same start
+    time), plus anything it started. Never raises."""
+    _kill_pids_sync([pid for pid, stamp in list(known.items()) if creation_time(pid) == stamp])
+
+
+class JobObject:
+    """Windows job object with KILL_ON_JOB_CLOSE holding a process and everything
+    it starts, however deep and even after the process itself has exited: a
+    grandchild whose parent is gone is still in the job, where the process
+    table no longer links it to anything. `terminate()` ends all of them; closing
+    the handle (or the backend dying) does the same. Windows only."""
+
+    def __init__(self):
+        import ctypes
+        from ctypes import wintypes
+
+        class _Basic(ctypes.Structure):
+            _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64), ("PerJobUserTimeLimit", ctypes.c_int64),
+                        ("LimitFlags", wintypes.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
+                        ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wintypes.DWORD),
+                        ("Affinity", ctypes.c_size_t), ("PriorityClass", wintypes.DWORD),
+                        ("SchedulingClass", wintypes.DWORD)]
+
+        class _Extended(ctypes.Structure):
+            _fields_ = [("BasicLimitInformation", _Basic),
+                        ("IoInfo", ctypes.c_uint64 * 6),
+                        ("ProcessMemoryLimit", ctypes.c_size_t), ("JobMemoryLimit", ctypes.c_size_t),
+                        ("PeakProcessMemoryUsed", ctypes.c_size_t), ("PeakJobMemoryUsed", ctypes.c_size_t)]
+
+        self._ctypes = ctypes
+        self._k32 = k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateJobObjectW.restype = wintypes.HANDLE
+        k32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+        k32.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+        k32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        k32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
+        self.handle = k32.CreateJobObjectW(None, None)
+        if not self.handle:
+            raise OSError(ctypes.get_last_error(), "CreateJobObjectW failed")
+        info = _Extended()
+        info.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not k32.SetInformationJobObject(self.handle, 9, ctypes.byref(info), ctypes.sizeof(info)):
+            err = ctypes.get_last_error()
+            self.close()
+            raise OSError(err, "SetInformationJobObject failed")
+
+    def assign(self, proc) -> None:
+        if not self._k32.AssignProcessToJobObject(self.handle, int(proc._handle)):
+            raise OSError(self._ctypes.get_last_error(), "AssignProcessToJobObject failed")
+
+    def terminate(self) -> None:
+        if self.handle:
+            self._k32.TerminateJobObject(self.handle, 1)
+
+    def close(self) -> None:
+        if self.handle:
+            self._k32.CloseHandle(self.handle)
+            self.handle = None
+
+
+def new_job_object_for(proc):
+    """A JobObject holding `proc`, or None when this is not Windows or the OS refuses."""
+    if sys.platform != "win32":
+        return None
+    try:
+        job = JobObject()
+    except Exception as exc:
+        logger.debug("[process-tree] job object unavailable: %s", exc)
+        return None
+    try:
+        job.assign(proc)
+    except Exception as exc:
+        logger.debug("[process-tree] pid=%s not assigned to a job object: %s", _pid_of(proc), exc)
+        job.close()
+        return None
+    return job

@@ -15,6 +15,7 @@ import re
 import wave
 
 from fastapi import APIRouter, Header, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, StrictBool
 
 from auth_utils import _check_token
@@ -220,7 +221,12 @@ def create_transcribe_router(db=None):
         except stt_whisper.SttNoSession:
             raise HTTPException(404, detail="stt_no_session")
         except (stt_whisper.SttEngineMissing, stt_whisper.SttEngineFailed) as exc:
-            raise _engine_error(exc)
+            # The session is still alive (a retry can succeed); the answer also
+            # carries the text already transcribed so the renderer can insert it.
+            error = _engine_error(exc)
+            return JSONResponse(
+                status_code=error.status_code,
+                content={"detail": error.detail, "committed_text": getattr(exc, "committed_text", "")})
 
         return result
 

@@ -769,6 +769,13 @@ export const useVoiceInput = ({ api, lang, onText }: VoiceInputParams) => {
       // alive frees its slot now instead of at the 90 s idle TTL.
       discardSessionId(id);
       const status = err?.response?.status;
+      // A failed finish still carries the windows the backend had already
+      // transcribed: insert them, the error below is the visible note that the
+      // last part is missing.
+      const committed = err?.response?.data?.committed_text;
+      if (typeof committed === 'string' && committed.trim() !== '') {
+        onTextRef.current(committed.trim());
+      }
       if (status === 503) {
         setError({ kind: engineErrorKind(err?.response?.data?.detail), detail: apiHataMesaji(err, '') || undefined });
       } else if (!err?.response) {

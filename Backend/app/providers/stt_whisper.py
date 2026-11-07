@@ -91,7 +91,12 @@ class SttEngineMissing(Exception):
 
 
 class SttEngineFailed(Exception):
-    """The server could not start, died, or answered something unusable."""
+    """The server could not start, died, or answered something unusable.
+
+    `committed_text` is set by finish() when the failure left a session alive:
+    the text of the windows already decoded, for the caller to hand back."""
+
+    committed_text = ""
 
 
 # ── Paths ────────────────────────────────────────────────────────────────────
@@ -230,42 +235,74 @@ def inference_fields(language: str) -> dict:
 # ── Hallucination filter ─────────────────────────────────────────────────────
 #
 # On silence or noise Whisper writes subtitle credits it saw in its training
-# data ("Altyazı M.K." at the end of a Turkish dictation, 7 Nov 2026). Two
-# layers: a segment the model itself doubts is dropped, and a segment that is
-# nothing but a known credit phrase is dropped. Both work on whole segments
-# only, never inside a sentence.
+# data ("Altyazı M.K." at the end of a Turkish dictation, 7 Nov 2026). Three
+# layers: a short segment the model itself doubts is dropped, a segment that is
+# nothing but a known credit line is dropped, and a credit line at the very end
+# of a segment's text is cut off (with no_timestamps the whole answer can be one
+# segment). Ordinary phrases ("Abone ol", "Untertitel", "Subtitles by default")
+# are real speech and are never matched.
 
 NO_SPEECH_PROB_MAX = 0.6
 AVG_LOGPROB_MIN = -1.0
+DOUBTED_MAX_WORDS = 3
 
-# Matched against a whole segment, after stripping spaces and surrounding
-# punctuation. "Altyazı" may only be followed by capital initials ("M.K."), so a
-# real sentence that merely starts with the word is kept.
-_CREDIT_PHRASES = re.compile(
+# Credit lines that are never ordinary speech: dropped as a whole segment and
+# cut from the end of a segment.
+_CREDIT_LINE = (
     r"(?:"
-    r"altyaz[ıi](?:\s*[:\-–])?(?:\s*(?-i:[A-ZÇĞİÖŞÜ])\.?){0,4}"
-    r"|abone\s+ol(?:un|mayı\s+unutmayın)?"
+    r"altyaz[ıi]\s*(?:"
+    r":\s*(?-i:[A-ZÇĞİÖŞÜ])\S*(?:\s+(?-i:[A-ZÇĞİÖŞÜ])\S*){0,2}"
+    r"|(?-i:M)\.?\s*(?-i:K)\.?"
+    r"|(?:(?-i:[A-ZÇĞİÖŞÜ])\.\s*){1,4}"
+    r")"
+    r"|(?:subtitles?|captions?)\s+by\s+(?!(?:the\s+)?default\b)\S+(?:\s+\S+){0,5}"
+    r"|untertitel(?:ung)?\s+(?:von|im\s+auftrag)\b.{0,60}"
+    r"|untertitel\s+der\s+amara\.org-community"
+    r")"
+)
+_CREDIT_LINE_RE = re.compile(_CREDIT_LINE, re.IGNORECASE)
+# Credit lines that can also be said for real in the middle of a dictation:
+# dropped only when they are all that is left at the very end of a session.
+_CLOSING_LINE_RE = re.compile(
+    r"(?:abone\s+olmayı\s+unutmayın"
     r"|izlediğiniz\s+için\s+teşekkür(?:ler|\s+ederim)"
     r"|thank\s+you\s+for\s+watching"
-    r"|thanks\s+for\s+watching"
-    r"|(?:subtitles?|captions?)\s+by\b.{0,60}"
-    r"|untertitel\b.{0,60}"
-    r")",
+    r"|thanks\s+for\s+watching)",
     re.IGNORECASE,
 )
+_TRAILING_CREDIT_RE = re.compile(r"(?:^|(?<=[.!?…])\s+)" + _CREDIT_LINE + r"[\s.!?…]*$", re.IGNORECASE)
 _SEGMENT_EDGE = " \t\r\n.,;:!?-–—…\"'«»()[]♪"
 
 
 def is_credit_phrase(text: str) -> bool:
     core = text.strip(_SEGMENT_EDGE)
-    return bool(core) and _CREDIT_PHRASES.fullmatch(core) is not None
+    return bool(core) and _CREDIT_LINE_RE.fullmatch(core) is not None
+
+
+def _is_closing_credit(text: str) -> bool:
+    core = text.strip(_SEGMENT_EDGE)
+    return bool(core) and _CLOSING_LINE_RE.fullmatch(core) is not None
+
+
+def strip_closing_credit(text: str) -> str:
+    """The text of a session's last answer without a closing "thanks for
+    watching" line. Only for the final decode: mid-dictation windows are
+    followed by more speech, where the same words are real."""
+    if _is_closing_credit(text):
+        return ""
+    return text
+
+
+def _strip_trailing_credit(text: str) -> str:
+    return _TRAILING_CREDIT_RE.sub("", text).strip()
 
 
 def _is_doubted(segment: dict) -> bool:
     no_speech = segment.get("no_speech_prob")
     logprob = segment.get("avg_logprob")
     return (isinstance(no_speech, (int, float)) and isinstance(logprob, (int, float))
-            and no_speech > NO_SPEECH_PROB_MAX and logprob < AVG_LOGPROB_MIN)
+            and no_speech > NO_SPEECH_PROB_MAX and logprob < AVG_LOGPROB_MIN
+            and len(segment["text"].split()) <= DOUBTED_MAX_WORDS)
 
 
 def clean_text(data: dict) -> str:
@@ -277,12 +314,12 @@ def clean_text(data: dict) -> str:
     segments = data.get("segments")
     if isinstance(segments, list) and segments and all(
             isinstance(seg, dict) and isinstance(seg.get("text"), str) for seg in segments):
-        kept = [seg["text"].strip() for seg in segments
+        kept = [_strip_trailing_credit(seg["text"].strip()) for seg in segments
                 if not _is_doubted(seg) and not is_credit_phrase(seg["text"])]
-        if len(kept) == len(segments):
+        if len(kept) == len(segments) and all(part == seg["text"].strip() for part, seg in zip(kept, segments)):
             return text
         return " ".join(part for part in kept if part)
-    return "" if is_credit_phrase(text) else text
+    return "" if is_credit_phrase(text) else _strip_trailing_credit(text)
 
 
 def build_multipart(wav: bytes, fields: dict) -> "tuple[bytes, str]":
@@ -821,9 +858,10 @@ def shutdown() -> None:
 atexit.register(shutdown)
 
 
-def transcribe_final(pcm: bytes, ui_lang: str, auto_on_cpu: bool) -> dict:
+def transcribe_final(pcm: bytes, ui_lang: str, auto_on_cpu: bool, closing: bool = True) -> dict:
     """The whole recording, with the owner's language rule. One restart and
-    retry if the server died under the request: the user cannot re-speak."""
+    retry if the server died under the request: the user cannot re-speak.
+    `closing=False` marks a mid-dictation window that more speech follows."""
     server = get_server()
     # One lease over start, wait and request, so an idle unload cannot land
     # between wait_ready() and the POST.
@@ -841,7 +879,7 @@ def transcribe_final(pcm: bytes, ui_lang: str, auto_on_cpu: bool) -> dict:
                     continue
                 raise
             return {
-                "text": result["text"],
+                "text": strip_closing_credit(result["text"]) if closing else result["text"],
                 "language": language_code(result["language"]) if language == "auto" else language,
                 "language_mode": "auto" if language == "auto" else "fixed",
                 "gpu": gpu is True,
@@ -1053,7 +1091,7 @@ def _start_commit(session: _Session, window: bytes, auto_on_cpu: bool) -> None:
 def _commit_window(session: _Session, window: bytes, auto_on_cpu: bool) -> None:
     result = None
     try:
-        result = transcribe_final(window, session.lang, auto_on_cpu)
+        result = transcribe_final(window, session.lang, auto_on_cpu, closing=False)
     except Exception as exc:                         # noqa: BLE001 — the audio must survive any failure
         logger.warning("[stt] window decode failed, keeping its audio for the next try: %s", exc)
     with session.lock:
@@ -1112,24 +1150,42 @@ def _decode_partial(session: _Session, pcm: bytes, epoch: int) -> None:
 
 
 def finish(session_id: str, auto_on_cpu: bool = False, discard: bool = False) -> dict:
-    """Removes the session and transcribes everything it heard: the windows
-    already committed plus the tail no window has taken."""
-    with _sessions_lock:
-        session = _sessions.pop(session_id, None)
-    if session is None:
-        raise SttNoSession(session_id)
+    """Transcribes everything the session heard: the windows already committed
+    plus the tail no window has taken. The session is removed only once its text
+    is in hand: a failed decode leaves it (windows and tail audio) for a retry,
+    and the error carries the committed text. The idle TTL ends an abandoned one."""
+    session = _get(session_id)
     if discard:
+        _drop(session)
         get_server().touch()
         return {"text": "", "duration_ms": 0}
     thread = session.commit_thread
     if thread is not None:
         thread.join(FINAL_TIMEOUT_S)
         if thread.is_alive():
-            raise SttEngineFailed("a window decode did not finish in time")
+            raise _finish_failed(session, SttEngineFailed("a window decode did not finish in time"))
     with session.lock:
         pcm = bytes(session.pcm)
         committed = list(session.committed)
-    result = transcribe_final(pcm, session.lang, auto_on_cpu)
+    try:
+        result = transcribe_final(pcm, session.lang, auto_on_cpu)
+    except (SttEngineFailed, SttEngineMissing) as exc:
+        raise _finish_failed(session, exc)
+    _drop(session)
     result["text"] = _join_text(committed + [result["text"]])
     result["duration_ms"] = session.total_bytes // 2 * 1000 // SAMPLE_RATE
     return result
+
+
+def _drop(session: _Session) -> None:
+    with _sessions_lock:
+        if _sessions.get(session.id) is session:
+            del _sessions[session.id]
+
+
+def _finish_failed(session: _Session, exc: Exception) -> Exception:
+    """Keeps the session for a retry (a fresh idle TTL) and attaches what is already transcribed."""
+    with session.lock:
+        session.last_seen = _now()
+        exc.committed_text = _join_text(session.committed)
+    return exc
