@@ -966,7 +966,8 @@
 .strip-usage[data-state="stale"] .strip-use-part { opacity: .6; }
 /* the measured memory's used/window (also in its title) only fits beside an absent usage group */
 .strip:has(.strip-usage) .strip-mem-detail { display: none; }
-/* as the chat column narrows: the usage bars go (numbers stay), then the week, then the group
+/* as the chat column narrows: the usage bars go (numbers stay), then the fainter window, then the
+   "Kota" label (the fuller window keeps its short label + number), then the group
    (breakpoints measured in Electron with each theme's font, tr + en; Ozel's mono has its own) */
 @container stage (max-width: 800px) {
   .strip-mem-detail { display: none; }
@@ -975,9 +976,12 @@
   .strip-use-meter { display: none; }
 }
 @container stage (max-width: 680px) {
-  .strip-use-week, .strip-use-dot { display: none; }
+  .strip-use-part:not([data-primary]), .strip-use-dot { display: none; }
 }
 @container stage (max-width: 600px) {
+  .strip-use-label { display: none; }
+}
+@container stage (max-width: 420px) {
   .strip-usage, .strip-sep-use { display: none; }
 }
 /* popovers above the strip: effort levels, more settings */

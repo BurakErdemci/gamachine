@@ -4,6 +4,8 @@
  * left the strip (it was cut off) and now lives on the send button, where the guide points.
  */
 import React from 'react'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 
@@ -93,6 +95,25 @@ describe('Kota group', () => {
     expect(g.querySelector('.strip-use-week .energy')?.classList.contains('is-hot')).toBe(false)
   })
 
+  it('marks the fuller window primary: week when alone, the higher one, week on a tie', () => {
+    const primaries = (windows: any[]) => {
+      strip({ usage: limits(fam('claude', { windows })), usageFamily: 'claude' })
+      const g = screen.getByTestId('strip-usage')
+      const got = Array.from(g.querySelectorAll('.strip-use-part[data-primary]')).map(e => e.className)
+      cleanup()
+      return got
+    }
+    expect(primaries([win('week', 'week', 63)])).toEqual(['strip-use-part strip-use-week'])
+    expect(primaries([win('five_hour', '5h', 90), win('week', 'week', 27)])).toEqual(['strip-use-part strip-use-5h'])
+    expect(primaries([win('five_hour', '5h', 10), win('week', 'week', 27)])).toEqual(['strip-use-part strip-use-week'])
+    expect(primaries([win('five_hour', '5h', 40), win('week', 'week', 40)])).toEqual(['strip-use-part strip-use-week'])
+  })
+
+  it('wraps the group label in its own span', () => {
+    strip({ usage: limits(fam('claude')), usageFamily: 'claude' })
+    expect(screen.getByTestId('strip-usage').querySelector('.strip-use-label')?.textContent).toBe('Kota')
+  })
+
   it('the memory value is short; its meaning stays in the title', () => {
     strip({})
     expect(screen.getByTestId('context-percent').textContent).toBe('~%5')
@@ -133,5 +154,24 @@ describe('key hint', () => {
     )
     expect(container.querySelector('[data-send-button]')).toBeNull()
     expect(container.querySelector('[data-guide="composer-send"]')).toBe(container.querySelector('[data-stop-button]'))
+  })
+})
+
+describe('Kota group in a narrow column (thread.css)', () => {
+  const css = readFileSync(resolve(__dirname, '../renderer/styles/gm/thread.css'), 'utf-8')
+  const rules = [...css.matchAll(/@container stage \(max-width:\s*(\d+)px\)\s*\{([^}]*)\}/g)]
+    .map(m => ({ width: Number(m[1]), body: m[2] }))
+
+  it('the 680px step hides the non-primary part, never the week or 5h part as such', () => {
+    const body = rules.find(r => r.width === 680)!.body
+    expect(body).toContain('.strip-use-part:not([data-primary])')
+    expect(body).not.toMatch(/\.strip-use-(week|5h)/)
+  })
+
+  it('no rule hides the whole group above 420px', () => {
+    for (const r of rules) {
+      if (r.width > 420) expect(r.body).not.toMatch(/\.strip-usage\s*[,{]/)
+    }
+    expect(rules.some(r => r.width === 420 && /\.strip-usage\s*[,{]/.test(r.body))).toBe(true)
   })
 })

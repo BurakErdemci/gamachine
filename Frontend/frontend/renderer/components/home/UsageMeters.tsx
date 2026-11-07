@@ -139,10 +139,12 @@ export const StripUse = ({ limits, family, modelId, nowIso, withSep = false }: {
     week && line(t('use.week'), week),
     state === 'stale' && t('use.stale'),
   ].filter(Boolean).join('\n');
+  // The fuller window (week on a tie, the only one when alone) stays when the strip narrows.
+  const primary: '5h' | 'week' = five && week && clampPct(five.used_pct) > clampPct(week.used_pct) ? '5h' : week ? 'week' : '5h';
   const part = (key: '5h' | 'week', label: string, w: UsageWindow) => {
     const v = clampPct(w.used_pct);
     return (
-      <span className={`strip-use-part strip-use-${key}`} data-hot={v >= HOT_PCT || undefined}>
+      <span className={`strip-use-part strip-use-${key}`} data-hot={v >= HOT_PCT || undefined} data-primary={key === primary || undefined}>
         {label}
         <Meter value={v} base="energy" segments={5} className="strip-use-meter" />
         <b className="num">{t('strip.pct', { yuzde: v })}</b>
@@ -161,7 +163,7 @@ export const StripUse = ({ limits, family, modelId, nowIso, withSep = false }: {
         title={title}
         aria-label={`${t('strip.usage')}. ${title}`}
       >
-        {t('strip.usage')}
+        <span className="strip-use-label">{t('strip.usage')}</span>
         {five && part('5h', t('strip.usage5h'), five)}
         {five && week && <span className="strip-use-dot" aria-hidden="true">·</span>}
         {week && part('week', t('strip.usageWeek'), week)}
