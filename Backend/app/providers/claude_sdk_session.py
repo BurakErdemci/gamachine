@@ -1064,6 +1064,7 @@ class ClaudeSDKSession:
         self._pending_injects: List[Dict[str, Any]] = []
         # The opening query of the stream's turn: its echo is not an injection.
         self._opening_echo: Optional[str] = None
+        self._early_result_ok = False  # the first Result before the echo may be an earlier turn's
         # The turn's text was split at an injected message: the Result text
         # (the whole turn's last block) is no fallback for the rest.
         self._injected_this_turn = False
@@ -2120,6 +2121,20 @@ class ClaudeSDKSession:
                 # The /compact's own Result: it ends no turn and owes nothing.
                 self._compact_result_owed = False
                 return
+            early, self._early_result_ok = self._early_result_ok, False
+            if (early and self._opening_echo is not None and self._out_q is not None
+                    and self._turn_active and not self._cancel_requested
+                    and self._owed_results <= 1
+                    and not self._final_text and not getattr(msg, "result", None)
+                    and not self._opening_echo.lstrip().startswith("/")):
+                # The CLI has not echoed this stream's query yet, so this Result
+                # closes an earlier CLI turn (a background-task notification
+                # turn that was pending when the user sent). Only an empty Result
+                # counts: one with text could be the answer of a CLI that does
+                # not echo. Owed stays: the idle fallback in stream() bounds a
+                # missing echo.
+                self._absorbed_result_at = time.time()
+                return
             for entry in getattr(self, "_pending_injects", None) or []:
                 entry["answered"] = True
             self._owed_results = max(0, self._owed_results - 1)
@@ -2257,6 +2272,7 @@ class ClaudeSDKSession:
             try:
                 self._owed_results += 1
                 self._opening_echo = message
+                self._early_result_ok = self._owed_results == 1
                 await self._client.query(message)
             except BaseException:
                 self._owed_results = max(0, self._owed_results - 1)
