@@ -1218,7 +1218,8 @@ class _GeminiAdapter(_APIHistory):
                                        parameters=d["parameters"])
             for d in declarations
         ])]
-        self.search = _gemini_search_supported(runner.model_name)
+        # A read-only runner gets no network tool, web_fetch included.
+        self.search = not runner.read_only and _gemini_search_supported(runner.model_name)
         if self.search:
             self.config.tools.append(gtypes.Tool(google_search=gtypes.GoogleSearch()))
             self.config.tool_config = gtypes.ToolConfig(include_server_side_tool_invocations=True)
@@ -1384,7 +1385,8 @@ class _AnthropicAdapter(_APIHistory):
                                  ).get("anthropic_extra_body")
 
     def refresh_tools(self, runner):
-        self.tools = [_anthropic_web_search_tool(runner.model_name)]
+        # A read-only runner gets no network tool, web_fetch included.
+        self.tools = [] if runner.read_only else [_anthropic_web_search_tool(runner.model_name)]
         self.tools += [{"name": t["name"], "description": t["description"],
                         "input_schema": t["parameters"]} for t in runner._tool_definitions()]
         self.tools[-1]["cache_control"] = {"type": "ephemeral"}

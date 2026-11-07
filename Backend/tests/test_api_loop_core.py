@@ -466,6 +466,17 @@ def test_gemini_3_offers_google_search_next_to_function_tools(run):
     assert config.tool_config.include_server_side_tool_invocations is True
 
 
+def test_a_read_only_runner_is_offered_no_provider_web_search(run):
+    # Read-only side chats get no network tool (web_fetch is held back too).
+    _, client, _, _ = run("anthropic", [anthropic_reply()], read_only=True)
+    assert all(t.get("name") != "web_search" for t in client.requests[0]["tools"])
+    _, client, _, _ = run("google", [gemini_stream(["hi"])], model="gemini-3.8-flash",
+                          read_only=True)
+    config = client.requests[0]["config"]
+    assert all(getattr(t, "google_search", None) is None for t in config.tools)
+    assert config.tool_config is None
+
+
 # ── 9. GPT-6 through the Responses API ───────────────────────────────────────
 
 def responses_stream(texts=(), call=None):
