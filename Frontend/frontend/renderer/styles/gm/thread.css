@@ -120,7 +120,7 @@
 
 /* M3: room under the header; content scrolling up fades out instead of touching it */
 .thread {
-  position: relative; z-index: 1; flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin;
+  position: relative; z-index: 1; flex: 1; min-height: 0; overflow-y: auto;
   -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 16px);
   mask-image: linear-gradient(to bottom, transparent 0, black 16px);
 }
@@ -585,6 +585,35 @@
   font-size: var(--fs-meta); font-weight: 600; box-shadow: var(--shadow-card);
 }
 .new-below:hover { background: var(--btn-hover); }
+
+/* Previous / next message: bottom-right of the thread, clear of the scrollbar and of the centred
+   new-below chip. The phone shell does not render them (home.tsx threadWrap). */
+.chat-nav {
+  position: absolute; right: 22px; bottom: 12px; z-index: 20;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.chat-nav-btn {
+  display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px;
+  border-radius: 15px; background: var(--btn-bg); color: var(--btn-text);
+  box-shadow: var(--shadow-card); opacity: 0.85;
+}
+.chat-nav-btn:hover, .chat-nav-btn:focus-visible { background: var(--btn-hover); opacity: 1; }
+
+/* Chat scrollbar: wider than the 4px global one and never shorter than 48px, so a long chat's
+   thumb stays grabbable. The standard scrollbar-width/-color (globals.css `*`, the `.stage *`
+   rule below) switch Chromium's ::-webkit-scrollbar off, so they are reset to auto here; the
+   selector is stronger than `.stage *`. Scoped to `.app-main`, which the phone shell does not have,
+   so the phone keeps its touch scrolling. */
+.app-main .thread.custom-scrollbar { scrollbar-width: auto; scrollbar-color: auto; }
+.app-main .thread.custom-scrollbar::-webkit-scrollbar { width: 10px; }
+.app-main .thread.custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+.app-main .thread.custom-scrollbar::-webkit-scrollbar-thumb {
+  min-height: 48px; background: var(--paper-line-strong); border-radius: 5px;
+  border: 2px solid transparent; background-clip: padding-box;
+}
+.app-main .thread.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--ink-faint); background-clip: padding-box;
+}
 
 /* ---------- thread: app pieces the mockup never drew ---------- */
 .thread-end { height: 4px; flex: none; }

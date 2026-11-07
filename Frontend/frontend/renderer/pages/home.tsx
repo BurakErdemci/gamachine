@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import Head from 'next/head';
 import dynamic from 'next/dynamic';
 import axios from 'axios';
-import { ArrowDown } from 'lucide-react';
+import { ArrowDown, ChevronDown, ChevronUp } from 'lucide-react';
 import { LangContext, aktifDilAyarla, ceviriUygula, type Lang, type TValues } from '../lib/i18n';
 import { sohbetKilitliMi } from '../lib/providerGate';
 import { getUnsavedEditorContext } from '../lib/editor-context';
@@ -51,6 +51,7 @@ import { useAIConfig } from '../hooks/home/useAIConfig';
 import { useMCPApproval } from '../hooks/home/useMCPApproval';
 import { useChatNotifications } from '../hooks/home/useChatNotifications';
 import { useAutoScroll } from '../hooks/home/useAutoScroll';
+import { chatNavShortcutDirection, stepChatMessage, type ChatNavDirection } from '../lib/chatNav';
 import { useLiveDiagnostics } from '../hooks/home/useLiveDiagnostics';
 import { McpApprovalCards } from '../components/home/McpApprovalCards';
 import { McpUnknownTray } from '../components/home/McpUnknownTray';
@@ -497,6 +498,7 @@ export default function Home() {
   }, [API, chat.loading, slashProvider]);  // mesaj bitince session dolar + provider değişince yeniden çek
   const chatScroll = useAutoScroll();
   const chatEndRef = chatScroll.endRef;
+  const threadRef = useRef<HTMLDivElement>(null);
   // "There is something new below" badge. Separate from `isPinned`: the button
   // is only worth showing when content actually arrived while the user was up
   // there — scrolling up in an idle chat should not pop a call to action.
@@ -861,6 +863,20 @@ export default function Home() {
   }, [sceneEditor.select, closeProfile, closeGuide, wsReveal]);
   // Another screen (settings, profile) or another chat replaces the guide.
   useEffect(() => { if (ai.showSettings || profileOpen) closeGuide(); }, [ai.showSettings, profileOpen, closeGuide]);
+
+  // --- Alt+Up / Alt+Down: previous / next message (see lib/chatNav.ts for where it stays out) ---
+  useEffect(() => {
+    if (ai.showSettings || profileOpen || guide.guideOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      const direction = chatNavShortcutDirection(e);
+      if (!direction) return;
+      if (stepChatMessage(threadRef.current, direction, () => { chatScroll.scrollToBottom(); setHasUnreadBelow(false); })) {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [ai.showSettings, profileOpen, guide.guideOpen, chatScroll.scrollToBottom]);
   useEffect(() => {
     if (guideNavRef.current !== undefined && guideNavRef.current === chat.activeConvId) { guideNavRef.current = undefined; return; }
     guideNavRef.current = undefined;
@@ -1031,12 +1047,16 @@ export default function Home() {
     mcpOpenWorkspacePath: mcp.openWorkspacePath, onMcpResolved: mcp.resolveActiveGate,
     phonePaired,
   };
-  const threadWrap = (panel: React.ReactNode) => (
+  // Past the last message "next" is the jump-to-latest (re-arms auto-follow too).
+  const stepMessage = (direction: ChatNavDirection) => stepChatMessage(threadRef.current, direction, () => {
+    chatScroll.scrollToBottom(); setHasUnreadBelow(false);
+  });
+  const threadWrap = (panel: React.ReactNode, showNav = true) => (
     <div className="thread-wrap">
       {chatEmpty ? (
         <EmptyChat userName={me.name} projectName={projectName} onPick={pickQuest} approvalMode={chat.generationMode} onImportSession={isClaudeSub ? () => setImportOpen(true) : undefined} />
       ) : (
-        <div className="thread custom-scrollbar" onScroll={chatScroll.onScroll}>
+        <div className="thread custom-scrollbar" ref={threadRef} onScroll={chatScroll.onScroll}>
           {panel}
         </div>
       )}
@@ -1049,6 +1069,18 @@ export default function Home() {
           <ArrowDown size={13} aria-hidden="true" />
           {t('chat.newBelow')}
         </button>
+      )}
+      {showNav && !chatEmpty && (
+        <div className="chat-nav">
+          <button type="button" className="chat-nav-btn" onClick={() => stepMessage('prev')}
+            aria-label={t('chat.prevMessage')} title={t('chat.prevMessage')}>
+            <ChevronUp size={16} aria-hidden="true" />
+          </button>
+          <button type="button" className="chat-nav-btn" onClick={() => stepMessage('next')}
+            aria-label={t('chat.nextMessage')} title={t('chat.nextMessage')}>
+            <ChevronDown size={16} aria-hidden="true" />
+          </button>
+        </div>
       )}
       {/* Over the chat, outside ChatPanel: nothing it shows is part of
           the main chat until the user adds it to the message box. */}
@@ -1137,7 +1169,7 @@ export default function Home() {
           selectConversation={chat.selectConversation}
           createNewConversation={() => chat.createNewConversation()}
           chat={{
-            thread: threadWrap(<ChatPanel {...chatPanelProps} mcpWorkspaceCheckPending={mcp.gateWorkspaceCheckPending} />), tray: <McpUnknownTray {...unknownTrayProps} />,
+            thread: threadWrap(<ChatPanel {...chatPanelProps} mcpWorkspaceCheckPending={mcp.gateWorkspaceCheckPending} />, false), tray: <McpUnknownTray {...unknownTrayProps} />,
             composer, contextUsage: chat.contextUsage,
             // Back from the Ekran tab: follow the stream if the user was at the bottom, else offer the jump.
             onThreadShown: () => { if (chatScroll.isPinned) chatScroll.scrollToBottom('auto'); else setHasUnreadBelow(true); },

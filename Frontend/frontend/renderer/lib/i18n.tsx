@@ -423,6 +423,8 @@ export const tr = {
   'chat.stepByStep': 'Adım Adım',
   'chat.agyNotice': 'Antigravity CLI: dosya yazma ve terminal komutları onay alınmadan otomatik çalışır (Google MCP onay entegrasyonu henüz hazır değil).',
   'chat.newBelow': 'Yeni mesaj — aşağı in',
+  'chat.prevMessage': 'Önceki mesaj',
+  'chat.nextMessage': 'Sonraki mesaj',
   // --- Mesaj altı bildirimleri (hata DEĞİL) ---
   'notice.warningTitle': 'Uyarı',
   'notice.stoppedTitle': 'Koşum yarıda durdu',
@@ -2544,6 +2546,8 @@ export const en: Record<keyof typeof tr, string> = {
   'chat.stepByStep': 'Step by Step',
   'chat.agyNotice': 'Antigravity CLI: file writes and terminal commands run automatically without approval (Google MCP approval integration not yet available).',
   'chat.newBelow': 'New messages — jump down',
+  'chat.prevMessage': 'Previous message',
+  'chat.nextMessage': 'Next message',
   // --- Message notices (NOT errors) ---
   'notice.warningTitle': 'Warning',
   'notice.stoppedTitle': 'Run stopped early',
