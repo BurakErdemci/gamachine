@@ -293,12 +293,14 @@ def _fmt_tokens(n: int) -> str:
     return str(n)
 
 
-def _live_context_reading(conv_id: int, family: str | None) -> dict | None:
+def _live_context_reading(conv_id: int, family: str | None, provider_type: str | None = None,
+                          model_name: str | None = None) -> dict | None:
     """Reading of the session the chat runs on NOW, without starting a CLI.
 
     A CLI switch leaves the old provider's session alive with its last reading,
     so only the current family's session may answer; an unknown family gets
-    None (the estimate) rather than a guess.
+    None (the estimate) rather than a guess. An API chat's reading answers only
+    for the provider and model that recorded it.
     """
     try:
         if family == "claude":
@@ -313,7 +315,12 @@ def _live_context_reading(conv_id: int, family: str | None) -> dict | None:
         elif family is None:
             # API-key chats: the provider's usage of the chat's last request.
             from agentic.agent_runner import api_context_reading
-            return api_context_reading(conv_id)
+            reading = api_context_reading(conv_id)
+            if (isinstance(reading, dict) and provider_type
+                    and reading.get("provider") == provider_type
+                    and reading.get("model") == model_name):
+                return reading
+            return None
         else:
             return None
         reading = getattr(session, "context_reading", None)
@@ -322,11 +329,22 @@ def _live_context_reading(conv_id: int, family: str | None) -> dict | None:
         return None
 
 
-def _current_family(db, user_id, conv_id: int) -> str | None:
-    """CLI family of the chat's current model, None when it cannot be resolved."""
+def _current_pair(db, user_id, conv_id: int) -> tuple:
+    """The chat's current (provider_type, model_name), (None, None) when unresolved."""
     try:
         chat = chat_model.chat_model(db, user_id, conv_id)
-        return chat_model.cli_family(chat["provider_type"], chat["model_name"])
+        return chat["provider_type"], chat["model_name"]
+    except Exception:
+        return None, None
+
+
+def _current_family(db, user_id, conv_id: int) -> str | None:
+    """CLI family of the chat's current model, None when it cannot be resolved."""
+    provider_type, model_name = _current_pair(db, user_id, conv_id)
+    if provider_type is None:
+        return None
+    try:
+        return chat_model.cli_family(provider_type, model_name)
     except Exception:
         return None
 
@@ -1778,8 +1796,10 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
         tüketicisi öyle bekliyor.
         """
         user_id, _ = require_conversation_owner(db, x_session_token, conv_id)
+        provider_type, model_name = _current_pair(db, user_id, conv_id)
+        family = chat_model.cli_family(provider_type, model_name) if provider_type else None
         return _context_usage_payload(
-            db, conv_id, reading=_live_context_reading(conv_id, _current_family(db, user_id, conv_id)))
+            db, conv_id, reading=_live_context_reading(conv_id, family, provider_type, model_name))
 
     @router.get("/session-report/{conv_id}/{kind}")
     async def session_report(conv_id: int, kind: str,
@@ -1840,7 +1860,8 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
             return _usage_cache_read(user_id, family or "-", empty)
 
         if provider_type != "subscription":
-            reading = _live_context_reading(conv_id, None) if kind == "context" else None
+            reading = (_live_context_reading(conv_id, None, provider_type, model_name)
+                       if kind == "context" else None)
             if isinstance(reading, dict) and reading.get("window", 0) > 0:
                 # Measured from the provider's own usage of the last request.
                 return {"status": "ok", "kind": "context",
@@ -1955,6 +1976,8 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
             except Exception as e:
                 logger.warning(f"[delete] {name} session kapatma hatası: {e}")
         from agentic import wake_queue
+        from agentic.agent_runner import _API_CONTEXT_READINGS
+        _API_CONTEXT_READINGS.pop(conv_id, None)
         wake_queue.reset(conv_id)
         _reply_owed.pop(conv_id, None)
         _abandon_detached_turn_reply(conv_id)
@@ -2638,7 +2661,8 @@ Max 300 kelime. Türkçe yaz.
 
                 # Context usage hesapla ve frontend'e ilet
                 _usage = _context_usage_payload(db, request.conversation_id, last_usage,
-                                                _live_context_reading(request.conversation_id, chat_model.cli_family(provider_type, model_name)))
+                                                _live_context_reading(request.conversation_id, chat_model.cli_family(provider_type, model_name),
+                                                                      provider_type, model_name))
                 yield f"data: {json.dumps(_usage)}\n\n"
 
             except Exception:
@@ -2670,7 +2694,8 @@ Max 300 kelime. Türkçe yaz.
                 # dondurur — sigortanın en çok gerektiği an tam olarak orası.
                 try:
                     _usage = _context_usage_payload(db, request.conversation_id, last_usage,
-                                                    _live_context_reading(request.conversation_id, chat_model.cli_family(provider_type, model_name)))
+                                                    _live_context_reading(request.conversation_id, chat_model.cli_family(provider_type, model_name),
+                                                                      provider_type, model_name))
                     yield f"data: {json.dumps(_usage)}\n\n"
                 except Exception:
                     logger.exception("Context usage hesaplanamadı (hata yolu)")

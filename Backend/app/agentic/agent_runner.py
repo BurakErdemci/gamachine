@@ -344,6 +344,8 @@ _BUSY_HANDED_DETAIL = "Ajan duruyor, mesajın ona iletildi"
 _BUSY_WAITING_DETAIL = "Ajan duruyor, mesajın sırada"
 _BUSY_GAVE_UP = ("Ajan hâlâ çalışıyor; arka plan işleri korunsun diye oturum sıfırlanmadı. "
                  "Mesajın gönderilmedi, biraz sonra yeniden gönder.")
+_BG_KEPT_SUFFIX = (" — arka plan işleri korunsun diye oturum sıfırlanmadı; "
+                   "mesajını yeniden gönder.")
 
 
 def _oturum_karari(gerekceler: List[str], mevcut) -> str:
@@ -931,6 +933,18 @@ class _ProgressGuard:
 # bir sonraki turda tam transcript yeniden enjekte edilir (kaldığı yerden devam).
 _LAST_SUB_PROVIDER: Dict[int, str] = {}
 
+
+def _session_has_running_work(session) -> bool:
+    """Work a close would kill: Claude background tasks, Codex commands or
+    subagents, or a Codex turn still streaming."""
+    if session is None or not getattr(session, "is_live", True):
+        return False
+    if getattr(session, "_active_tasks", None):
+        return True
+    running_work = getattr(session, "running_work", None)
+    return bool(callable(running_work) and running_work()) or bool(getattr(session, "turn_live", False))
+
+
 # Yeni CLI'a geçmiş enjekte edilirken kullanılan başlık (context = tam transcript).
 # Guardrail cümlesi ÖZELLİKLE agy için önemli: agy --dangerously-skip-permissions ile
 # tam otonom çalışıyor ve sistem prompt append kanalı yok (Claude'daki _APP_SYSTEM_APPEND
@@ -1227,20 +1241,32 @@ class _GeminiAdapter(_APIHistory):
             self.config.tool_config = None
 
     async def request(self, runner):
+        try:
+            return await self._send(runner)
+        except Exception as exc:
+            if not self.search:
+                raise
+            if _gemini_search_refused(exc):
+                why = "refused google_search next to function tools"
+            elif provider_retry_code(str(exc)) == "429":
+                # A free-tier key has no google_search quota (measured 8 Nov
+                # 2026: plain requests pass, every request with search gets
+                # 429): without this every turn ends in the quota retry.
+                why = "has no google_search quota"
+            else:
+                raise
+            _GEMINI_SEARCH_OFF.add(runner.model_name)
+            logger.warning("[provider] %s %s; continuing without web search: %s",
+                           runner.model_name, why, exc)
+            self.refresh_tools(runner)
+            return await self._send(runner)
+
+    async def _send(self, runner):
         if not self.streaming:
             return await asyncio.to_thread(self.client.models.generate_content,
                                            model=runner.model_name, contents=self.contents,
                                            config=self.config)
-        try:
-            return await self._stream(runner)
-        except Exception as exc:
-            if not self.search or not _gemini_search_refused(exc):
-                raise
-            _GEMINI_SEARCH_OFF.add(runner.model_name)
-            logger.warning("[provider] %s refused google_search next to function tools; "
-                           "continuing without web search: %s", runner.model_name, exc)
-            self.refresh_tools(runner)
-            return await self._stream(runner)
+        return await self._stream(runner)
 
     async def _stream(self, runner):
         stream = await self.client.aio.models.generate_content_stream(
@@ -1598,8 +1624,12 @@ class _OpenAIAdapter(_APIHistory):
         return await self._collect(result)
 
     async def _collect(self, stream):
-        """Chunks -> one completion: text joined, tool calls assembled by index."""
-        content, calls, finish, usage, seen = [], {}, None, None, False
+        """Chunks -> one completion: text joined, tool calls assembled by index.
+
+        A delta with a new id on an index already in use starts another call:
+        some OpenAI-compatible servers send every parallel call as index 0.
+        """
+        content, slots, current, finish, usage, seen = [], [], {}, None, None, False
         try:
             async for chunk in stream:
                 usage = getattr(chunk, "usage", None) or usage
@@ -1612,9 +1642,14 @@ class _OpenAIAdapter(_APIHistory):
                         content.append(piece)
                         self._emit(piece)
                     for call in getattr(delta, "tool_calls", None) or []:
-                        slot = calls.setdefault(getattr(call, "index", 0) or 0,
-                                                {"id": None, "name": "", "arguments": ""})
-                        slot["id"] = getattr(call, "id", None) or slot["id"]
+                        index = getattr(call, "index", 0) or 0
+                        call_id = getattr(call, "id", None)
+                        slot = current.get(index)
+                        if slot is None or (call_id and slot["id"] and call_id != slot["id"]):
+                            slot = {"index": index, "id": None, "name": "", "arguments": ""}
+                            slots.append(slot)
+                            current[index] = slot
+                        slot["id"] = call_id or slot["id"]
                         function = getattr(call, "function", None)
                         if function is not None:
                             slot["name"] = slot["name"] or (getattr(function, "name", None) or "")
@@ -1622,9 +1657,9 @@ class _OpenAIAdapter(_APIHistory):
         finally:
             await _close_stream(stream)
         tool_calls = [types.SimpleNamespace(
-            id=slot["id"] or f"call_{index}", type="function",
+            id=slot["id"] or f"call_{slot['index']}", type="function",
             function=types.SimpleNamespace(name=slot["name"], arguments=slot["arguments"] or "{}"))
-            for index, slot in sorted(calls.items())]
+            for slot in sorted(slots, key=lambda s: s["index"])]
         message = types.SimpleNamespace(content="".join(content) or None,
                                         tool_calls=tool_calls or None)
         choices = [types.SimpleNamespace(message=message, finish_reason=finish)] if seen else []
@@ -1935,12 +1970,27 @@ class AgentRunner:
                 await _close_oneshot(provider, self.conversation_id)
                 logger.info(f"[handoff] {provider} session resetlendi (CLI değişimi)")
                 return
+            live = None
             if provider == "codex":
-                from providers.codex_session import close_session
+                from providers.codex_session import close_session, _SESSIONS
+                live = _SESSIONS.get(self.conversation_id)
             elif provider == "agy":
                 from providers.agy_session import close_session
             else:
-                from providers.claude_sdk_session import close_session
+                from providers.claude_sdk_session import close_session, _SESSIONS
+                live = _SESSIONS.get(self.conversation_id)
+            if _session_has_running_work(live):
+                # Closing would kill the background work (owner red line): keep
+                # the session and hand it the transcript on its next message.
+                live._handoff_pending = True
+                name = "Codex" if provider == "codex" else "Claude"
+                self.session_defer_notice = "\n".join(filter(None, (
+                    self.session_defer_notice,
+                    f"Arka plan işleri sürdüğü için önceki {name} oturumu kapatılmadı; "
+                    f"aradaki konuşma ona bu mesajla iletildi.")))
+                logger.info(f"[handoff] {provider} session korunuyor (arka plan işi sürüyor) "
+                            f"→ tam transcript bir sonraki mesajla verilecek")
+                return
             await close_session(self.conversation_id)
             logger.info(f"[handoff] {provider} session resetlendi (CLI değişimi) → tam transcript yeniden enjekte edilecek")
         except Exception as e:
@@ -2455,7 +2505,7 @@ class AgentRunner:
         if self.conversation_id is not None and window > 0:
             _API_CONTEXT_READINGS[self.conversation_id] = {
                 "used": used, "window": window, "percent": 100.0 * used / window,
-                "model": self.model_name}
+                "model": self.model_name, "provider": self.provider_type}
 
     async def _before_request(self, adapter, iteration: int, window: int):
         """Per-iteration hook, run before every provider request of the API loop.
@@ -2476,7 +2526,10 @@ class AgentRunner:
             return
         yield AgentEvent("status", {"detail": "🗜️ Bağlam dolmak üzere — eski turlar özetleniyor"})
         rendered = [adapter.render(item) for item in adapter.items[adapter.first:cut]]
-        prompt = api_compaction.summary_prompt(rendered, budget_chars=int(window * 2))
+        # The stored summary is not among the items (it rides in the system
+        # instruction) and the new one replaces it: carry it, as /compact does.
+        prompt = api_compaction.summary_prompt(rendered, prior=getattr(self, "api_memory", ""),
+                                               budget_chars=int(window * 2))
         try:
             summary = await api_compaction.summarize(self.provider_type, self.api_key,
                                                      self.model_name, prompt)
@@ -3310,9 +3363,15 @@ class AgentRunner:
             # geçmişini zaten geri yüklüyor, üstüne bir de bizim özetimizi koymak
             # modele aynı konuşmayı İKİ KEZ gösterirdi (ve 20.000 karakteri boşa
             # harcardı). Kimlik yoksa eski yol aynen sürüyor.
+            # A session kept over a CLI switch (`_reset_session_for`) gets the
+            # transcript a fresh one would, once.
+            _handoff = getattr(session, "_handoff_pending", False)
+            if _handoff:
+                session._handoff_pending = False
+            _full = _handoff or (not session.session_id and not self.resume_id)
             if getattr(self, "side_turn", None) is not None:
-                message = self.side_turn.text(full=not session.session_id and not self.resume_id)
-            elif self.context and not session.session_id and not self.resume_id:
+                message = self.side_turn.text(full=_full)
+            elif self.context and _full:
                 message = f"{user_message}\n\n{_HANDOFF_HEADER}\n{self.context}"
             # Ultracode (Claude-only): SDK'da option YOK → tek yol mesaja keyword enjeksiyonu.
             # CLI bu kelimeyi görünce çok-ajanlı ultracode akışını tetikler (belgesiz; sürüme bağlı).
@@ -3355,9 +3414,12 @@ class AgentRunner:
                         yield ev
                     cleanup_dir(_att_dir)
                     return
+                # The reset below would kill background tasks: the turn ends with
+                # the error instead and the user resends.
+                _keep_bg = _yielded == 0 and bool(getattr(session, "_active_tasks", None))
                 # Event akmadan patladıysa (busy/kopuk) güvenle resetleyip tekrar dene;
                 # akış ortasında patladıysa retry çift metin basar → direkt hata göster.
-                if _attempt == 1 and _yielded == 0:
+                if _attempt == 1 and _yielded == 0 and not _keep_bg:
                     logger.warning(f"[ClaudeSession] session sıkışmış/kopuk ({e}) → reset + retry")
                     yield AgentEvent("status", {
                         "detail": "⚠️ Claude session yanıt vermedi — yeniden başlatılıyor…",
@@ -3375,7 +3437,10 @@ class AgentRunner:
                 # ama o filtre bu olay nesnesine uğramıyor — koruma sanılan yerde
                 # yoktu (denetim bulgusu, `raw-secret-exception-to-client`).
                 from secret_redaction import redact_secrets as _redact
-                yield AgentEvent("error", {"message": f"Claude session hatası: {_redact(str(e))}"})
+                _error = f"Claude session hatası: {_redact(str(e))}"
+                if _keep_bg:
+                    _error += _BG_KEPT_SUFFIX
+                yield AgentEvent("error", {"message": _error})
                 return
 
     async def _claude_busy_with_background(self, session, message: str) -> AsyncGenerator[AgentEvent, None]:
@@ -3418,8 +3483,10 @@ class AgentRunner:
         if _DEFERRED_REASONS.get(self.conversation_id) == _key:
             return ""
         _DEFERRED_REASONS[self.conversation_id] = _key
-        self.session_defer_notice = (f"Ayar değişikliği ({_gerekce_sozcukleri(reasons)}) "
-                                     f"arka plan işleri bitince uygulanacak.")
+        # Joined: a kept session's line from `_reset_session_for` may be there.
+        self.session_defer_notice = "\n".join(filter(None, (
+            self.session_defer_notice,
+            f"Ayar değişikliği ({_gerekce_sozcukleri(reasons)}) arka plan işleri bitince uygulanacak.")))
         return (f"[Sistem] Ayar değişikliği ({', '.join(reasons)}) "
                 f"arka plan işleri bitince uygulanacak.")
 
@@ -3597,13 +3664,18 @@ class AgentRunner:
         # İlk turda proje bağlamını ekle; sonraki turlarda thread zaten hatırlıyor.
         message = user_message
         first_turn = not (session._ctx_injected and getattr(session, "is_live", True))
+        # A session kept over a CLI switch (`_reset_session_for`) gets the
+        # transcript a fresh one would, once; its guide is already in place.
+        _handoff = getattr(session, "_handoff_pending", False)
+        if _handoff:
+            session._handoff_pending = False
         if getattr(self, "side_turn", None) is not None:
             # A dead or never-started app-server gets a brand-new thread on
             # this stream (start() only does thread/start), so the flag from
             # an earlier thread says nothing about it (Codex mentionaudit,
             # 27 Sep 2026).
-            message = self.side_turn.text(full=first_turn)
-        elif self.context and first_turn:
+            message = self.side_turn.text(full=first_turn or _handoff)
+        elif self.context and (first_turn or _handoff):
             message = f"{user_message}\n\n{_HANDOFF_HEADER}\n{self.context}"
         if first_turn:
             if self._agent_guide:
