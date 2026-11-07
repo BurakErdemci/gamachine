@@ -1597,7 +1597,7 @@ export const useChat = (
   const getMessages = async (convId: number): Promise<Message[] | null> => {
     try { return (await axios.get(`${API}/conversations/${convId}/messages`)).data; } catch { return null; }
   };
-  const beginFollow = async (convId: number, startSeq: number, text: string) => {
+  const beginFollow = async (convId: number, startSeq: number, text: string, agent?: { provider?: unknown; model?: unknown }) => {
     const f = followOf(convId);
     f.start = startSeq;
     f.own = false;
@@ -1611,6 +1611,9 @@ export const useChat = (
     const placeholder: Message = {
       id: f.aiId, role: 'assistant', content: text, smells: [], timestamp: new Date().toISOString(),
       thinking: null, tool_calls: [],
+      // The turn's agent, as `turn_meta` labels a normal turn's answer.
+      provider: typeof agent?.provider === 'string' ? agent.provider : null,
+      model: typeof agent?.model === 'string' ? agent.model : null,
     };
     patchConv(convId, r => ({
       messages: [...(list ?? r.messages), placeholder],
@@ -1622,6 +1625,46 @@ export const useChat = (
     patchConv(convId, r => ({
       messages: r.messages.map(m => (m.id === id ? { ...m, content: (m.content || '') + text } : m)),
     }));
+  };
+  // Tool and status ring events of a followed turn, shown as the normal
+  // stream shows them: tool cards on the bubble, the activity row's step and
+  // token count (its timer runs from `loading`).
+  const showFollowedLive = (convId: number, events: any[]) => {
+    const live = events.filter(e => e?.kind === 'tool_call' || e?.kind === 'tool_result' || e?.kind === 'status' || e?.kind === 'text');
+    if (live.length === 0) return;
+    const id = followOf(convId).aiId;
+    patchConv(convId, r => {
+      let activity = r.activity;
+      const messages = r.messages.map(m => {
+        if (m.id !== id) return m;
+        const calls = [...(m.tool_calls || [])];
+        for (const e of live) {
+          if (e.kind === 'tool_call') {
+            const name = String(e.name ?? '');
+            calls.push({ tool: name, args: undefined, summary: e.summary || undefined });
+            if (name !== 'TodoWrite') {
+              const s = e.summary ? ` — ${String(e.summary).slice(0, 60)}` : '';
+              activity = { detail: `🔧 ${name}${s}`, tokens: activity?.tokens };
+            }
+          } else if (e.kind === 'tool_result') {
+            const name = String(e.name ?? '');
+            let k = calls.length - 1;
+            while (k >= 0 && !(calls[k].tool === name && calls[k].success === undefined)) k--;
+            if (k >= 0) calls[k] = { ...calls[k], summary: e.summary ?? calls[k].summary, success: !!e.success };
+            else calls.push({ tool: name, summary: e.summary, success: !!e.success });
+          } else if (e.kind === 'status') {
+            activity = {
+              detail: e.detail || activity?.detail || cevir('activity.working'),
+              tokens: (typeof e.tokens === 'number' && e.tokens > 0) ? e.tokens : activity?.tokens,
+            };
+          } else {
+            activity = { detail: cevir('activity.writing'), tokens: activity?.tokens };
+          }
+        }
+        return { ...m, tool_calls: calls };
+      });
+      return { messages, activity };
+    });
   };
   // The backend records turn_end just before it stores the reply, so a read
   // at turn end can miss the reply: the streamed placeholder stays on screen
@@ -1701,9 +1744,11 @@ export const useChat = (
     if (i >= 0) {
       const startSeq = Number(events[i].seq);
       if (f.start === startSeq) { if (text) appendFollowed(convId, text); }
-      else await beginFollow(convId, startSeq, text);
-    } else if (f.start !== null && text) {
-      appendFollowed(convId, text);
+      else await beginFollow(convId, startSeq, text, events[i]);
+      if (f.start === startSeq && !end) showFollowedLive(convId, tail);
+    } else if (f.start !== null) {
+      if (text) appendFollowed(convId, text);
+      if (!end) showFollowedLive(convId, tail);
     }
     if (end) await endFollow(convId, String(end.status ?? 'done'), f.start !== null || wasFollowing, !resync);
     return i >= 0 || !!end;

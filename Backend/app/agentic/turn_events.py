@@ -40,7 +40,11 @@ DROPPED_TTL_S = 600.0
 # Enough for a tool call line on a phone; a write_file body is not a summary.
 SUMMARY_CHARS = 200
 
-KINDS = ("turn_start", "text", "tool_call", "card_opened", "card_closed", "turn_end")
+KINDS = ("turn_start", "text", "tool_call", "tool_result", "status", "card_opened",
+         "card_closed", "turn_end")
+# Heartbeats arrive every few hundred ms; a follower needs the token count and
+# the step label, not every tick, and each one would take a ring slot.
+STATUS_MIN_INTERVAL_S = 2.0
 TURN_END_STATUSES = ("done", "error", "stopped")
 
 EPOCH = secrets.token_hex(8)
@@ -479,6 +483,7 @@ class TurnTap:
         self._ring = ring or RING
         self._saw_text = False
         self._ended = False
+        self._last_status = float("-inf")
 
     @_swallow()
     def start(self) -> None:
@@ -501,6 +506,19 @@ class TurnTap:
             self._ring.append(self.conv_id, "tool_call",
                               name=str(data.get("tool") or data.get("name") or ""),
                               summary=summarize(detail))
+        elif etype == "tool_result":
+            self._ring.append(self.conv_id, "tool_result",
+                              name=str(data.get("tool") or data.get("name") or ""),
+                              success=bool(data.get("success")),
+                              summary=summarize(data.get("summary")))
+        elif etype == "status":
+            now = time.monotonic()
+            if now - self._last_status >= STATUS_MIN_INTERVAL_S:
+                self._last_status = now
+                tokens = data.get("tokens")
+                self._ring.append(self.conv_id, "status",
+                                  tokens=tokens if isinstance(tokens, int) and tokens > 0 else 0,
+                                  detail=summarize(data.get("detail")))
         elif etype == "response":
             # Some paths answer only with `response`; where `text` streamed,
             # `response` repeats it and is skipped.
