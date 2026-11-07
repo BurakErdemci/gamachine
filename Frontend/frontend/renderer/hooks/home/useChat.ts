@@ -103,10 +103,20 @@ export type QueuedMessage = {
   state?: 'sent';
   /** Names the message to the backend while it is 'sent'. */
   clientId?: string;
+  /** When it was handed to the turn (ms). */
+  sentAt?: number;
+  /** The turn it was handed to ended without taking it in: it may be deleted. */
+  turnEnded?: boolean;
 };
 
 /** Messages a running turn has not taken in: what drains and what blocks a wake. */
 const unsentOf = (queue: QueuedMessage[]) => queue.filter(q => q.state !== 'sent');
+
+/** A 'sent' message the agent never took in turns back into an ordinary queued
+ *  one this long after it was sent, once no turn runs (audit FE-1). */
+const SENT_REVERT_MS = 120_000;
+const unsend = (q: QueuedMessage): QueuedMessage =>
+  ({ ...q, state: undefined, clientId: undefined, sentAt: undefined, turnEnded: undefined });
 
 /** A message that came from a paired phone or a terminal agent (`remote_message` frame); no kind = phone. */
 export type RemoteOrigin = { device: string; kind?: 'phone' | 'agent' };
@@ -284,6 +294,32 @@ export const useChat = (
     const cur = runtimesRef.current[id] ?? EMPTY_RUNTIME;
     runtimesRef.current = { ...runtimesRef.current, [id]: { ...cur, ...fn(cur) } };
     setRuntimes(runtimesRef.current);
+  }, []);
+  // The turn a message was handed to ended without `user_injected`. It stays
+  // 'sent' (after a Stop the CLI may still run it), but it can be deleted now,
+  // and once old enough with no turn running it is an ordinary queued message
+  // again. Nothing here sends it: only the normal drain does, once.
+  const sentRevertTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+  const endSentTurn = useCallback((convId: number) => {
+    const sent = (runtimesRef.current[convId] ?? EMPTY_RUNTIME).queue.filter(q => q.state === 'sent');
+    if (!sent.length) return;
+    patchConv(convId, r => ({ queue: r.queue.map(q => (q.state === 'sent' ? { ...q, turnEnded: true } : q)) }));
+    for (const item of sent) {
+      const wait = Math.max(0, (item.sentAt ?? Date.now()) + SENT_REVERT_MS - Date.now());
+      const timer = setTimeout(() => {
+        sentRevertTimersRef.current.delete(timer);
+        // A turn runs again: its end calls this once more.
+        if ((runtimesRef.current[convId] ?? EMPTY_RUNTIME).loading) return;
+        patchConv(convId, r => ({
+          queue: r.queue.map(q => (q.id === item.id && q.state === 'sent' && q.clientId === item.clientId ? unsend(q) : q)),
+        }));
+      }, wait);
+      sentRevertTimersRef.current.add(timer);
+    }
+  }, [patchConv]);
+  useEffect(() => () => {
+    for (const timer of sentRevertTimersRef.current) clearTimeout(timer);
+    sentRevertTimersRef.current.clear();
   }, []);
   const dropConv = useCallback((id: number) => {
     const { [id]: _gone, ...rest } = runtimesRef.current;
@@ -1417,13 +1453,14 @@ export const useChat = (
           turnEnd: { seq: ++eventSeqRef.current, failed },
           queuePaused: r.queuePaused || (failed && r.queue.length > 0),
         }));
+        endSentTurn(targetConvId);
         // Synchronously, before this task yields: a wake frame handled after
         // this point finds the chat busy with the queued message.
         if (!failed) drainQueueRef.current(targetConvId);
         if (!visible && finishedCleanly && !lossy) void syncFinished(targetConvId);
       }
     }
-  }, [API, aiConfig.provider_type, aiConfig.model_name, createNewConversation, fetchConversations, patchConv, rt, suggestFilePath, syncFinished, user, workspacePath]);
+  }, [API, aiConfig.provider_type, aiConfig.model_name, createNewConversation, endSentTurn, fetchConversations, patchConv, rt, suggestFilePath, syncFinished, user, workspacePath]);
 
   // ── AUTO-WAKE channel ────────────────────────────────────────────────────
   // Once a background task finishes (or a note arrives), the backend sends ONE
@@ -1482,7 +1519,8 @@ export const useChat = (
     if (!user || !API || !convId || !item || item.state === 'sent' || !canInject(item)) return false;
     const clientId = `inj-${nextClientMsgId()}`;
     const mark = (state: 'sent' | undefined) => patchConv(convId, r => ({
-      queue: r.queue.map(q => (q.id === itemId ? { ...q, state, clientId: state ? clientId : undefined } : q)),
+      queue: r.queue.map(q => (q.id !== itemId ? q
+        : state ? { ...q, state, clientId, sentAt: Date.now(), turnEnded: undefined } : unsend(q))),
     }));
     mark('sent');
     let injected = false;
@@ -1510,7 +1548,7 @@ export const useChat = (
       const ids = new Set<string>(Array.isArray(data.client_ids) ? data.client_ids.map(String) : []);
       if (ids.size === 0) return null;
       patchConv(convId, r => ({
-        queue: r.queue.map(q => (q.clientId && ids.has(q.clientId) ? { ...q, state: undefined, clientId: undefined } : q)),
+        queue: r.queue.map(q => (q.clientId && ids.has(q.clientId) ? unsend(q) : q)),
       }));
       drainQueueRef.current(convId);
       return null;
@@ -2037,20 +2075,22 @@ export const useChat = (
       // unless that message is still there to go out.
       ...(drainAfter ? {} : { queuePaused: r.queue.length > 0 }),
     }));
+    endSentTurn(key);
     // Claude Code's Stop: "If you have messages queued, Claude Code sends them
     // next" - once the backend has cancelled the turn. 'sent' ones wait for
     // their `user_injected` (the CLI runs them itself after the interrupt).
     if (drainAfter) stopped = stopped.then(() => { drainQueueRef.current(key); });
     return stopped;
-  }, [API, patchConv, user]);
+  }, [API, endSentTurn, patchConv, user]);
   // No arguments: it is also a click handler, and the event is not a flag.
   const stopMessage = useCallback((): Promise<void> => stopTurn(true), [stopTurn]);
 
   // ── Message queue actions (the chat on screen) ──────────────────────────
-  const removeQueued = useCallback((key: number, itemId: number) => {
+  const removeQueued = useCallback((key: number, itemId: number, takeSent = false) => {
     const item = rt(key).queue.find(q => q.id === itemId) ?? null;
-    // A 'sent' message is the agent's already: it can be neither edited nor taken back.
-    if (item?.state === 'sent') return null;
+    // A 'sent' message is the agent's already: it can be neither edited nor
+    // taken back, only deleted once its turn ended without taking it in.
+    if (item?.state === 'sent' && !(takeSent && item.turnEnded)) return null;
     if (item) {
       patchConv(key, r => {
         const queue = r.queue.filter(q => q.id !== itemId);
@@ -2062,7 +2102,7 @@ export const useChat = (
 
   const deleteQueued = useCallback((itemId: number) => {
     const key = keyOf(activeConvIdRef.current);
-    const item = removeQueued(key, itemId);
+    const item = removeQueued(key, itemId, true);
     // A message that will never be sent takes its notes' pins with it.
     if (item?.chips?.length && key) clearBrowserPins(key, item.chips);
   }, [removeQueued]);

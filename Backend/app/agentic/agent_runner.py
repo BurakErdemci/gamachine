@@ -294,6 +294,30 @@ def _oturum_yeniden_kurma_gerekceleri(mevcut, *, model, effort, workspace, mcp_s
 # line the model already got, so a standing deferral is announced once.
 _DEFERRED_REASONS: Dict[Any, tuple] = {}
 
+# The user's words for a rebuild reason, by the reason's first word.
+_REASON_WORDS = {
+    "effort": "düşünme seviyesi", "model": "model", "workspace": "çalışma klasörü",
+    "unityMCP": "Unity bağlantısı", "read_only": "salt okunur mod", "agent": "ajan yönergesi",
+}
+
+
+def _gerekce_sozcukleri(gerekceler: List[str]) -> str:
+    """Pure: the rebuild reasons in plain words, each once, in order."""
+    words = [_REASON_WORDS.get(g.split(" ", 1)[0], g) for g in gerekceler]
+    return ", ".join(dict.fromkeys(words))
+
+
+# A plain send that finds the Claude session busy while its background tasks
+# run (audit RL-1): resetting would kill them. Follow the running turn this
+# long after handing it the message; or, when it cannot take one, wait this
+# long for the turn lock before giving up without a reset.
+_BUSY_FOLLOW_S = 30.0
+_BUSY_LOCK_WAIT_S = 60.0
+_BUSY_HANDED_DETAIL = "Ajan duruyor, mesajın ona iletildi"
+_BUSY_WAITING_DETAIL = "Ajan duruyor, mesajın sırada"
+_BUSY_GAVE_UP = ("Ajan hâlâ çalışıyor; arka plan işleri korunsun diye oturum sıfırlanmadı. "
+                 "Mesajın gönderilmedi, biraz sonra yeniden gönder.")
+
 
 def _oturum_karari(gerekceler: List[str], mevcut) -> str:
     """Pure: what to do with the cached session given the rebuild reasons.
@@ -1232,6 +1256,9 @@ class AgentRunner:
         # Background tasks a Claude session close took with it during this turn
         # (model/effort/workspace change, reset): the route stores it as a system row.
         self.session_reset_notice = ""
+        # A Claude rebuild waits for background tasks: the user's line about
+        # it, stored as a system row by the route like the reset notice.
+        self.session_defer_notice = ""
         # Side chat: no write of any kind on any path, whatever the approval
         # mode. The route derives it from the DB (`side_of`), never the client.
         self.read_only = bool(read_only)
@@ -2526,6 +2553,8 @@ Kullanıcı hangi dilde yazıyorsa o dilde cevap ver; mesajın dili belli değil
                 _DEFERRED_REASONS[self.conversation_id] = _key
                 _defer_note = (f"[Sistem] Ayar değişikliği ({', '.join(_reasons)}) "
                                f"arka plan işleri bitince uygulanacak.")
+                self.session_defer_notice = (f"Ayar değişikliği ({_gerekce_sozcukleri(_reasons)}) "
+                                             f"arka plan işleri bitince uygulanacak.")
         else:
             _DEFERRED_REASONS.pop(self.conversation_id, None)
             if _decision == "rebuild":
@@ -2629,6 +2658,15 @@ Kullanıcı hangi dilde yazıyorsa o dilde cevap ver; mesajın dili belli değil
                     cleanup_dir(_att_dir)
                     yield _done_event(0, "wake_deferred")
                     return
+                if (isinstance(e, SessionBusyError) and _attempt == 1 and _yielded == 0
+                        and getattr(session, "_active_tasks", None)
+                        and not getattr(session, "_broken", False)):
+                    # A reset here kills the background tasks (audit RL-1):
+                    # the message joins the running turn or waits for it.
+                    async for ev in self._claude_busy_with_background(session, message):
+                        yield ev
+                    cleanup_dir(_att_dir)
+                    return
                 # Event akmadan patladıysa (busy/kopuk) güvenle resetleyip tekrar dene;
                 # akış ortasında patladıysa retry çift metin basar → direkt hata göster.
                 if _attempt == 1 and _yielded == 0:
@@ -2651,6 +2689,39 @@ Kullanıcı hangi dilde yazıyorsa o dilde cevap ver; mesajın dili belli değil
                 from secret_redaction import redact_secrets as _redact
                 yield AgentEvent("error", {"message": f"Claude session hatası: {_redact(str(e))}"})
                 return
+
+    async def _claude_busy_with_background(self, session, message: str) -> AsyncGenerator[AgentEvent, None]:
+        """The turn lock is held and background tasks run: never reset.
+
+        A turn still running (a Stop with a background subagent lets it end by
+        itself) takes the message the way a mid-turn send goes in, and this
+        request ends with that turn. Otherwise the message waits for the lock
+        and runs as an ordinary turn; still busy, the user gets an error.
+        """
+        from providers.claude_sdk_session import SessionBusyError
+        from secret_redaction import redact_secrets as _redact
+        started = session._turn_started_at
+        if await session.hand_to_running_turn(message):
+            logger.info("[ClaudeSession] busy with background tasks; message handed to the running turn")
+            yield AgentEvent("status", {"detail": _BUSY_HANDED_DETAIL})
+            deadline = time.monotonic() + _BUSY_FOLLOW_S
+            # The stamp check: the CLI may start its own turn right after this one.
+            while (session._turn_active and session._turn_started_at == started
+                   and time.monotonic() < deadline):
+                await asyncio.sleep(0.25)
+            yield _done_event(0)
+            return
+        yield AgentEvent("status", {"detail": _BUSY_WAITING_DETAIL})
+        try:
+            async for ev in session.stream(message, lock_timeout=_BUSY_LOCK_WAIT_S):
+                etype = ev.pop("type", "text")
+                yield _normalize_session_event(etype, ev)
+        except SessionBusyError:
+            logger.warning("[ClaudeSession] still busy with background tasks; no reset")
+            yield AgentEvent("error", {"message": _BUSY_GAVE_UP})
+        except Exception as e:
+            logger.exception("[ClaudeSession] stream hatası")
+            yield AgentEvent("error", {"message": f"Claude session hatası: {_redact(str(e))}"})
 
     # ═══════════════════════════════════════════════
     # CODEX KALICI SESSION (codex app-server, native onay)

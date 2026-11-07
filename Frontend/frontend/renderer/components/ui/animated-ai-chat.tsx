@@ -726,7 +726,8 @@ export function AnimatedChatInput({
         } else if (e.key === 'Escape' && isLoading && onStop && !showSkillsGallery) {
             // Claude Code's Esc: stops the running turn (menus and dictation took theirs above).
             e.preventDefault();
-            onStop();
+            // A held key repeats keydown: one press is one Stop.
+            if (!e.repeat) onStop();
         }
     };
 

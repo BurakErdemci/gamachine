@@ -10,6 +10,8 @@ export type QueueItemView = {
     videos?: any[];
     /** 'sent': already handed to the running turn; read at its next step. */
     state?: 'sent';
+    /** That turn ended without reading it: it can be deleted. */
+    turnEnded?: boolean;
 };
 
 export type MessageQueueProps = {
@@ -61,6 +63,19 @@ export function MessageQueue({
                                 {extra > 0 && <span className="queue-extra"> · {t('queue.attachments', { sayi: extra })}</span>}
                                 {sent && <span className="queue-extra"> · {t('queue.sent')}</span>}
                             </span>
+                            {/* Its turn ended unread: it can go, but never a second send. */}
+                            {sent && item.turnEnded && (
+                                <button
+                                    type="button"
+                                    data-queue-delete
+                                    onClick={() => onDelete(item.id)}
+                                    className={iconButton}
+                                    title={t('queue.delete')}
+                                    aria-label={t('queue.delete')}
+                                >
+                                    <XIcon size={14} aria-hidden="true" />
+                                </button>
+                            )}
                             {/* The running agent has it: no edit, no second send, no taking it back. */}
                             {!sent && <>
                             <button

@@ -415,6 +415,12 @@ def claude_ikilisini_coz() -> Optional[str]:
 _TASKS_DONE_GRACE_S = 20.0
 # End an idle merged-prompt stream only after an earlier turn's Result was absorbed.
 _OWED_RESULT_IDLE_S = 120.0
+# An in-place /compact answers with compact_result in ~10-60 s (measured 7 Nov
+# 2026, haiku); a queued one waits for the running turn's Result first.
+_COMPACT_TIMEOUT_S = 180.0
+# A sent message the CLI has not echoed this long after it went in is taken as
+# never read: one that never matches would block every later echo (audit CC-2).
+_PENDING_INJECT_MAX_AGE_S = 120.0
 # A task that ends stopped/killed/failed this soon after a Stop was ended by it.
 _STOP_KILL_WINDOW_S = 15.0
 _STOP_KILLED_NOTICE = "[Sistem] Durdurma şu arka plan işlerini kesti: {names}. Gerekirse yeniden başlat."
@@ -1061,6 +1067,10 @@ class ClaudeSDKSession:
         # The turn's text was split at an injected message: the Result text
         # (the whole turn's last block) is no fallback for the rest.
         self._injected_this_turn = False
+        # An in-place /compact in flight: its compact_result resolves the
+        # waiter, and its num_turns=0 Result is no chat turn's.
+        self._compact_waiter: Optional[asyncio.Future] = None
+        self._compact_result_owed = False
 
     # ── Yaşam döngüsü ────────────────────────────────────────────────────
     @property
@@ -1380,6 +1390,11 @@ class ClaudeSDKSession:
         if not self._turn_active:
             logger.info(f"[ClaudeSDKSession:{self.conversation_id}] Durdur: model turu yok; arka plan gorevleri ve session korunuyor")
             return
+        if self._cancel_requested:
+            # One Stop is in flight already (double click, a held Esc, two
+            # clients): a second stop note would cost the CLI one more turn.
+            logger.info(f"[ClaudeSDKSession:{self.conversation_id}] Durdur: zaten durduruluyor; tekrar yok sayıldı")
+            return
         self._cancel_requested = True
         self._cancel_grace()
         for gid in list(self._active_gate_ids):
@@ -1431,6 +1446,15 @@ class ClaudeSDKSession:
                     return
                 await asyncio.sleep(0.25)
 
+        if any(not (self._task_meta.get(tid) or {}).get("foreground") for tid in self._active_tasks):
+            # A reset closes the CLI and every background task with it (a
+            # background Bash survives interrupt, not close): end this turn's
+            # stream instead and keep the session; the CLI's late Result is
+            # absorbed as an ended turn's.
+            logger.warning(f"[ClaudeSDKSession:{self.conversation_id}] interrupt işlemedi; arka plan "
+                           f"işleri çalıştığı için session korunuyor, yalnız akış bitiriliyor")
+            await self._finish_turn()
+            return
         # Interrupt başarısız ya da tur hâlâ aktif → sert reset. Sonraki mesaj taze
         # session açar (session_id None → DB transcript'i yeniden enjekte edilir).
         logger.warning(f"[ClaudeSDKSession:{self.conversation_id}] interrupt işlemedi → session zorla resetleniyor")
@@ -1488,6 +1512,49 @@ class ClaudeSDKSession:
         # getattr: a session built without __init__ (tests) has no list yet.
         return await self._send_inject(text, client_id)
 
+    async def compact(self, timeout: Optional[float] = None) -> bool:
+        """Compact the CLI's context in place, as terminal Claude Code's
+        /compact: only the main agent's context shrinks, the session stays and
+        background tasks keep running (measured 7 Nov 2026: status compacting,
+        compact_result, compact_boundary, a summary user message, "Compacted",
+        a Result with num_turns=0). Sent while a turn runs, the CLI queues it
+        until that turn's Result. None of its messages is a chat turn: its echo
+        and user messages match no sent message, and its Result is absorbed
+        here. True when the CLI reports success."""
+        if not self.is_live or self._client is None or self._broken:
+            return False
+        waiter = self._compact_waiter
+        if waiter is None or waiter.done():
+            waiter = self._compact_waiter = asyncio.get_running_loop().create_future()
+            self._compact_result_owed = True
+            try:
+                await self._client.query("/compact")
+            except Exception as e:
+                logger.warning(f"[ClaudeSDKSession:{self.conversation_id}] /compact gönderilemedi: {e}")
+                self._compact_result_owed = False
+                self._compact_waiter = None
+                return False
+        try:
+            return await asyncio.wait_for(asyncio.shield(waiter),
+                                          _COMPACT_TIMEOUT_S if timeout is None else timeout)
+        except asyncio.TimeoutError:
+            # Its Result may still come: it stays absorbed (_compact_result_owed).
+            logger.warning(f"[ClaudeSDKSession:{self.conversation_id}] /compact zaman aşımı")
+            return False
+
+    async def hand_to_running_turn(self, text: str) -> bool:
+        """A plain send that found the turn still running and its lock held (a
+        Stop with a background subagent lets the turn finish by itself): give
+        the message to that turn instead of resetting the session, which would
+        kill the subagent (audit RL-1). Unlike `inject` it does not need a
+        listening stream or an unstopped turn. The sending route has already
+        stored the user's row, so the message travels like the app's own note:
+        no user_injected frame, no second row. The CLI reads it in this turn or
+        runs it as its own turn after the stop (measured 7 Nov 2026)."""
+        if not self._turn_active or self._broken or self._client is None:
+            return False
+        return await self._send_inject(text, None)
+
     def _bg_subagents_running(self) -> bool:
         """A subagent runs that is not the tool the main turn waits on."""
         for tid in self._active_tasks:
@@ -1503,7 +1570,7 @@ class ClaudeSDKSession:
         pending = getattr(self, "_pending_injects", None)
         if pending is None:
             pending = self._pending_injects = []
-        entry = {"client_id": client_id, "text": text, "answered": False}
+        entry = {"client_id": client_id, "text": text, "answered": False, "at": time.time()}
         pending.append(entry)
         self._owed_results += 1
         try:
@@ -1516,11 +1583,21 @@ class ClaudeSDKSession:
             return False
         return True
 
-    async def _drop_pending_injects(self) -> None:
-        """The session goes away: injected messages the CLI never took in go
-        back to the sender's queue as unsent."""
+    async def _drop_pending_injects(self, stale_only: bool = False) -> None:
+        """Injected messages the CLI never took in go back to the sender's
+        queue as unsent: the session goes away, the turn they went into ended
+        owing nothing, or (stale_only) they waited past the age cap."""
         pending = getattr(self, "_pending_injects", None) or []
-        self._pending_injects = []
+        if stale_only:
+            cutoff = time.time() - _PENDING_INJECT_MAX_AGE_S
+            gone = [e for e in pending if e.get("at", cutoff) < cutoff]
+            self._pending_injects = [e for e in pending if e not in gone]
+            # No Result came since it went in: none will come for it now.
+            unanswered = sum(1 for e in gone if not e["answered"])
+            self._owed_results = max(0, self._owed_results - unanswered)
+            pending = gone
+        else:
+            self._pending_injects = []
         if not pending:
             return
         ids = [e["client_id"] for e in pending if e["client_id"] is not None]
@@ -1539,6 +1616,10 @@ class ClaudeSDKSession:
             self._opening_echo = None
             return
         pending = self._pending_injects
+        if pending and pending[0]["text"].strip() != key:
+            # A head the CLI skipped must not block every later echo.
+            await self._drop_pending_injects(stale_only=True)
+            pending = self._pending_injects
         if not pending or pending[0]["text"].strip() != key:
             return
         entry = pending.pop(0)
@@ -1711,6 +1792,11 @@ class ClaudeSDKSession:
         self._turn_active = False
         self._cancel_grace()
         await self._flush_deltas()
+        if self._owed_results == 0:
+            # The turn ended owing nothing: a message sent into it and never
+            # echoed was not read, and must not wait into a later turn (audit
+            # CC-2). With Results still owed (a Stop) the CLI runs it itself.
+            await self._drop_pending_injects()
         final = self._final_text or ("" if getattr(self, "_injected_this_turn", False)
                                      else self._last_result_text)
         q = self._out_q
@@ -1916,6 +2002,11 @@ class ClaudeSDKSession:
 
         if isinstance(msg, SystemMessage):
             data = getattr(msg, "data", None) or {}
+            if isinstance(data, dict) and data.get("compact_result"):
+                waiter = getattr(self, "_compact_waiter", None)
+                if waiter is not None and not waiter.done():
+                    waiter.set_result(data.get("compact_result") == "success")
+                return
             if getattr(msg, "subtype", None) == "init" and isinstance(data, dict):
                 self.session_id = data.get("session_id") or self.session_id
                 # Slash komutlarını + skill'leri cache'le ('/' autocomplete için).
@@ -2024,6 +2115,10 @@ class ClaudeSDKSession:
 
         if isinstance(msg, ResultMessage):
             if getattr(msg, "parent_tool_use_id", None):
+                return
+            if getattr(self, "_compact_result_owed", False) and getattr(msg, "num_turns", None) == 0:
+                # The /compact's own Result: it ends no turn and owes nothing.
+                self._compact_result_owed = False
                 return
             for entry in getattr(self, "_pending_injects", None) or []:
                 entry["answered"] = True
@@ -2137,6 +2232,7 @@ class ClaudeSDKSession:
                 raise SessionBusyError("Önceki tur kilidi bırakmadı.")
 
         try:
+            await self._drop_pending_injects(stale_only=True)
             # Read before this stream installs its queue: a turn running with no
             # queue is an autonomous one.
             autonomous = self._turn_active and self._out_q is None
@@ -2200,6 +2296,12 @@ class ClaudeSDKSession:
                     break
                 yield ev
         finally:
+            # Detach the queue BEFORE the context reading below (up to 5 s):
+            # anything the CLI sends after this request's Result (an echo, the
+            # CLI's own turn after a Stop) is unprompted output then, shown
+            # through the ring and stored, never put on a queue nobody reads
+            # (audit CC-1). The lock stays held until the reading is done.
+            self._out_q = None
             try:
                 if self.is_live and self._client is not None:
                     try:
@@ -2217,7 +2319,6 @@ class ClaudeSDKSession:
             finally:
                 # NOT: reader'ı BEKLEMEYİZ/iptal etmeyiz (eski 'await task' kilidi burdaydı).
                 # SSE koptuysa tur CLI'da sürer; reader biten turun metnini DB'ye kaydeder.
-                self._out_q = None
                 self._cancel_event = None
                 self._active_gate_ids.clear()
                 self._turn_lock.release()

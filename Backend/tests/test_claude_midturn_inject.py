@@ -359,3 +359,46 @@ def test_stream_stores_assistant_part_then_injected_message_then_the_rest(db, cl
         ("user", "use the red cube"),
         ("assistant", "red cube placed"),
     ]
+
+
+# ── /chat-inject's authorization (audit T-2) ────────────────────────────────
+
+class _CountingLive:
+    def __init__(self):
+        self.calls = []
+
+    async def inject(self, text, client_id):
+        self.calls.append((text, client_id))
+        return True
+
+
+@pytest.fixture
+def live(monkeypatch):
+    sess = _CountingLive()
+    monkeypatch.setattr(cs, "peek_session", lambda c: sess)
+    return sess
+
+
+@pytest.mark.parametrize("own_chat", [True, False])
+def test_chat_inject_with_a_wrong_token_is_refused_first(db, client, live, monkeypatch, own_chat):
+    # 401 even for an unknown chat: the token is checked before any lookup.
+    cid = db.create_conversation(1, "Yeni Sohbet") if own_chat else 999999
+    monkeypatch.setenv("LOCAL_APP_TOKEN", "the-app-token")
+    r = client.post(f"/chat-inject/{cid}", json={"message": "hi", "client_id": "c1"},
+                    headers={"X-Session-Token": "wrong"})
+    assert r.status_code == 401 and live.calls == []
+
+
+def test_chat_inject_needs_an_existing_chat_of_this_user(db, client, live):
+    other = db.create_conversation(2, "someone else's")
+    r = client.post(f"/chat-inject/{other}", json={"message": "hi", "client_id": "c1"}, headers=H)
+    assert r.status_code == 403
+    r = client.post("/chat-inject/999999", json={"message": "hi", "client_id": "c1"}, headers=H)
+    assert r.status_code == 404
+    assert live.calls == []
+
+
+def test_the_remote_may_post_chat_inject_and_nothing_else_there():
+    from remote import ui_dispatch
+    assert ui_dispatch.http_allowed("POST", "/chat-inject/1") is True
+    assert ui_dispatch.http_allowed("GET", "/chat-inject/1") is False

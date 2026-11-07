@@ -64,6 +64,7 @@ class Harness:
 
         events = asyncio.run(run())
         assert any(e.type == "done" for e in events)
+        return runner
 
 
 def test_reasons_with_running_background_tasks_defer_the_rebuild(monkeypatch):
@@ -118,3 +119,12 @@ def test_decision_helper_is_pure():
     assert ar._oturum_karari(["model a→b"], busy) == "switch_model"
     assert ar._oturum_karari(["model a→b", "effort a→b"], busy) == "defer"
     assert ar._oturum_karari(["model a→b", "effort a→b"], idle) == "rebuild"
+
+
+def test_a_deferred_rebuild_gives_the_user_one_plain_line(monkeypatch):
+    h = Harness(monkeypatch, _existing({"t1": "npm run dev"}),
+                ["workspace C:/a→C:/b", "read_only False→True"])
+    first = h.turn()
+    assert first.session_defer_notice == (
+        "Ayar değişikliği (çalışma klasörü, salt okunur mod) arka plan işleri bitince uygulanacak.")
+    assert h.turn("again").session_defer_notice == ""

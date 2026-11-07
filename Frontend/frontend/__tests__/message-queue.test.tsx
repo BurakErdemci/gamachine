@@ -773,6 +773,14 @@ describe('message queue · composer', () => {
     expect(onStop).toHaveBeenCalledTimes(1)
   })
 
+  it('a held Esc (repeated keydown) is one Stop', () => {
+    const { onStop, textarea } = mount(true)
+    fireEvent.keyDown(textarea, { key: 'Escape' })
+    fireEvent.keyDown(textarea, { key: 'Escape', repeat: true })
+    fireEvent.keyDown(textarea, { key: 'Escape', repeat: true })
+    expect(onStop).toHaveBeenCalledTimes(1)
+  })
+
   it('Esc with nothing running stops nothing', () => {
     const { onStop, textarea } = mount(false)
     fireEvent.keyDown(textarea, { key: 'Escape' })

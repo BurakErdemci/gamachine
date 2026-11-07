@@ -14,7 +14,7 @@ from time import time
 
 from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import action_risk
 import chat_files
@@ -235,7 +235,8 @@ class _TurnRecord:
 
 
 class ChatInjectRequest(BaseModel):
-    message: str
+    # The cap of the chat message routes (schemas.ChatRequest).
+    message: str = Field(max_length=200_000)
     client_id: str
 
 
@@ -438,6 +439,35 @@ def _context_fallback(db, conv_id: int, empty: dict) -> dict:
     return {"status": "estimate", "kind": "context",
             "reason": empty.get("reason") or empty.get("status"),
             "context_usage": payload}
+
+
+_COMPACT_FAILED_KEPT = ("Claude oturumu yerinde özetlenemedi; arka plan işleri çalıştığı "
+                       "için oturum yenilenmedi, bağlamı küçülmedi.")
+
+
+async def _cli_baglamini_kucult(db, conv_id: int) -> Optional[str]:
+    """Compaction's CLI side. A live Claude session compacts in place
+    (/compact, as in terminal Claude Code): it is never closed and its
+    background subagents keep running (Burak, 7 Nov 2026). With no live
+    session, or a failed in-place compaction and no background task, the
+    old reset runs. A failed one with background tasks keeps the session
+    and returns the line that tells the user."""
+    from providers.claude_sdk_session import peek_session as _peek_claude
+    sess = _peek_claude(conv_id)
+    if sess is not None:
+        try:
+            ok = await sess.compact()
+        except Exception:
+            logger.exception(f"[Compact] conv={conv_id} yerinde özetleme hatası")
+            ok = False
+        if ok:
+            logger.info(f"[Compact] conv={conv_id}: Claude oturumu yerinde özetlendi")
+            return None
+        if sess._active_tasks:
+            logger.warning(f"[Compact] conv={conv_id}: yerinde özetleme başarısız; arka plan işleri için oturum korunuyor")
+            return _COMPACT_FAILED_KEPT
+    await _cli_bagalamini_sifirla(db, conv_id)
+    return None
 
 
 async def _cli_bagalamini_sifirla(db, conv_id: int) -> None:
@@ -2123,7 +2153,9 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
             # CLI bağlamının da küçük olduğu ANLAMINA GELMİYOR: bir önceki compact
             # DB'yi temizlemiş olabilir ve CLI oturumu tıka basa dolu kalabilir —
             # canlı ölçülen arıza tam buydu (bkz `_cli_bagalamini_sifirla`).
-            await _cli_bagalamini_sifirla(db, conv_id)
+            _kept = await _cli_baglamini_kucult(db, conv_id)
+            if _kept:
+                db.add_message(conv_id, "system", _kept)
             logger.info(f"[Compact] Sohbet çok kısa ({msg_count} mesaj), "
                         "özet üretilmedi; CLI oturumu yine de sıfırlandı.")
             return {"status": "success",
@@ -2200,10 +2232,15 @@ Max 300 kelime. Türkçe yaz.
         if db.compact_conversation(conv_id, summary, through_id=through_id) is False:
             logger.info("[Compact] A newer compaction already covered this snapshot.")
 
-        # Sonraki tur, özetlenmiş küçük bağlamla ve TEMİZ bir CLI oturumuyla başlar.
-        await _cli_bagalamini_sifirla(db, conv_id)
+        # Sonraki tur, özetlenmiş küçük bağlamla başlar: canlı Claude oturumu
+        # yerinde özetlenir, yoksa TEMİZ bir CLI oturumu açılır.
+        _kept = await _cli_baglamini_kucult(db, conv_id)
+        if _kept:
+            # The client re-reads the messages after a summary: the row shows now.
+            db.add_message(conv_id, "system", _kept)
+            return {"status": "success", "summary": summary, "notice": _kept}
 
-        logger.info("[Compact] DB güncellendi + CLI bağlamı sıfırlandı.")
+        logger.info("[Compact] DB güncellendi + CLI bağlamı küçültüldü.")
         return {"status": "success", "summary": summary}
 
     @router.post("/chat-stream")
@@ -2487,13 +2524,16 @@ Max 300 kelime. Türkçe yaz.
                 # terminal olmayan bir olay, o yüzden sözleşmeyi bozmuyor.
                 # The runner replaced the Claude session mid-turn and that
                 # killed background tasks; its message to the model said so.
-                _reset_notice = getattr(runner, "session_reset_notice", "")
-                if _reset_notice:
-                    try:
-                        db.add_message(request.conversation_id, "system", _reset_notice)
-                    except Exception:
-                        logger.exception("[bg-tasks] conv=%s reset notice not stored",
-                                         request.conversation_id)
+                # A settings change that waits for background tasks (audit AD-2):
+                # the user gets the same kind of row, once per reason set.
+                for _notice in (getattr(runner, "session_reset_notice", ""),
+                                getattr(runner, "session_defer_notice", "")):
+                    if _notice:
+                        try:
+                            db.add_message(request.conversation_id, "system", _notice)
+                        except Exception:
+                            logger.exception("[bg-tasks] conv=%s notice not stored",
+                                             request.conversation_id)
                 full_response = entry.value()
                 _tr_row: Optional[int] = None
                 if full_response:
@@ -2706,7 +2746,9 @@ Max 300 kelime. Türkçe yaz.
         next tool boundary of the same turn, as in terminal Claude Code. Never
         stops the turn; `not_running` sends the client back to its queue."""
         _check_token(x_session_token)
-        require_conversation_owner(db, x_session_token, conversation_id)
+        user_id, _ = require_conversation_owner(db, x_session_token, conversation_id)
+        # Each inject is a CLI turn's worth of input, like a chat message.
+        _check_chat_rate_limit(user_id)
         from providers.claude_sdk_session import peek_session as _peek_claude
         sess = _peek_claude(conversation_id)
         if sess is None or not body.message.strip():
