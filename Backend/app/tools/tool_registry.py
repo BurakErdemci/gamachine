@@ -7,7 +7,10 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, Dict, Callable
 
-from tools.file_tools import read_file, write_file, list_directory, delete_file, run_command
+from tools import file_tools
+from tools.file_tools import read_file, write_file, list_directory, delete_file
+from agentic import shell_jobs, todo_list
+from agentic.web_fetch import web_fetch
 from tools.search_tools import search_in_project, find_files
 from tools.screenshot_tool import capture_unity_screenshot
 import harness_notes
@@ -124,16 +127,89 @@ TOOL_DEFINITIONS = [
     },
     {
         "name": "run_command",
-        "description": "Terminalde bir sistem komutu çalıştırır. Örn: git status, npm install, unity-build. DİKKAT: Bu işlem kullanıcı onayı gerektirir.",
+        "description": "Terminalde bir sistem komutu çalıştırır. Örn: git status, npm install, unity-build. DİKKAT: Bu işlem kullanıcı onayı gerektirir. background=true ise komut arka planda başlar ve hemen bir job_id döner (uzun sunucu/derleme için); sonucu job_status / job_output ile izle, job_stop ile bitir.",
         "parameters": {
             "type": "object",
             "properties": {
                 "command": {
                     "type": "string",
                     "description": "Çalıştırılacak terminal komutu"
+                },
+                "background": {
+                    "type": "boolean",
+                    "description": "true: komutu arka planda başlat, job_id ile hemen dön. Varsayılan false."
                 }
             },
             "required": ["command"]
+        }
+    },
+    {
+        "name": "job_status",
+        "description": "Arka plan işinin durumunu verir: running, exited (çıkış koduyla) veya stopped.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "job_id": {"type": "string", "description": "run_command(background=true) çıktısındaki job_id"}
+            },
+            "required": ["job_id"]
+        }
+    },
+    {
+        "name": "job_output",
+        "description": "Arka plan işinin çıktısının (stdout+stderr) son kısmını döndürür.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "job_id": {"type": "string", "description": "run_command(background=true) çıktısındaki job_id"},
+                "tail": {"type": "integer", "description": "Döndürülecek son karakter sayısı (varsayılan 4000, en çok 50000)"}
+            },
+            "required": ["job_id"]
+        }
+    },
+    {
+        "name": "job_stop",
+        "description": "Arka plan işini ve başlattığı tüm alt süreçleri durdurur.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "job_id": {"type": "string", "description": "Durdurulacak işin job_id'si"}
+            },
+            "required": ["job_id"]
+        }
+    },
+    {
+        "name": "web_fetch",
+        "description": "Herkese açık bir web sayfasını (http/https) metin olarak okur. HTML okunur metne çevrilir. Yerel/özel ağ adresleri reddedilir; çerez veya kimlik bilgisi gönderilmez.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "Okunacak tam adres (https://...)"},
+                "max_chars": {"type": "integer", "description": "Döndürülecek en çok karakter (varsayılan 20000, en çok 200000)"}
+            },
+            "required": ["url"]
+        }
+    },
+    {
+        "name": "todo_write",
+        "description": "Bu sohbetin görev listesini yazar (tüm listeyi her seferinde gönder). Çok adımlı işte ilerlemeyi izlemek için kullan. Aynı anda en çok bir madde in_progress olabilir.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "description": "Tam görev listesi",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "content": {"type": "string", "description": "Görevin kısa tanımı"},
+                            "status": {"type": "string", "enum": ["pending", "in_progress", "completed"],
+                                       "description": "pending, in_progress veya completed"}
+                        },
+                        "required": ["content", "status"]
+                    }
+                }
+            },
+            "required": ["items"]
         }
     },
     {
@@ -266,6 +342,47 @@ TOOL_DEFINITIONS = [
 # TOOL ÇALIŞTIRICI
 # ══════════════════════════════════════════════
 
+def _run_command(command: str, workspace_path: str, conversation_id=None, background=False) -> Dict[str, Any]:
+    """The blocking run_command, or a background job. Approval is decided by the loop on `command` alone,
+    before this runs, so both modes pass the same check; the refusal rule is shared through shell_exec."""
+    if background is not True and str(background).strip().lower() != "true":
+        return file_tools.run_command(command, workspace_path)
+    try:
+        job_id = shell_jobs.start(command, workspace_path, conversation_id)
+    except shell_jobs.JobError as e:
+        return {"success": False, "error": str(e)}
+    return {"success": True, "job_id": job_id, "status": shell_jobs.RUNNING,
+            "content": f"Started background job {job_id}. Use job_status / job_output / job_stop."}
+
+
+def _job_call(fn, job_id, conversation_id, **kwargs) -> Dict[str, Any]:
+    try:
+        return fn(job_id, conversation_id, **kwargs)
+    except shell_jobs.JobError as e:
+        return {"success": False, "error": str(e)}
+
+
+def _job_status(job_id: str, conversation_id=None) -> Dict[str, Any]:
+    return _job_call(lambda j, c: {"success": True, **shell_jobs.status(j, c)}, job_id, conversation_id)
+
+
+def _job_output(job_id: str, conversation_id=None, tail=shell_jobs.DEFAULT_TAIL_CHARS) -> Dict[str, Any]:
+    try:
+        tail = int(tail)
+    except (TypeError, ValueError):
+        tail = shell_jobs.DEFAULT_TAIL_CHARS
+    return _job_call(lambda j, c: {"success": True, **shell_jobs.status(j, c),
+                                   "content": shell_jobs.output(j, c, tail)}, job_id, conversation_id)
+
+
+def _job_stop(job_id: str, conversation_id=None) -> Dict[str, Any]:
+    return _job_call(lambda j, c: {"success": True, **shell_jobs.stop(j, c)}, job_id, conversation_id)
+
+
+def _todo_write(items=None, conversation_id=None) -> Dict[str, Any]:
+    return todo_list.set_todos(conversation_id, items)
+
+
 # Tool name → function mapping
 _TOOL_FUNCTIONS: Dict[str, Callable] = {
     "read_file": read_file,
@@ -274,7 +391,12 @@ _TOOL_FUNCTIONS: Dict[str, Callable] = {
     "list_directory": list_directory,
     "write_file": write_file,
     "delete_file": delete_file,
-    "run_command": run_command,
+    "run_command": _run_command,
+    "job_status": _job_status,
+    "job_output": _job_output,
+    "job_stop": _job_stop,
+    "web_fetch": web_fetch,
+    "todo_write": _todo_write,
     "capture_unity_screenshot": capture_unity_screenshot,
     "harness_search": lambda query: {
         "success": True, "content": harness_notes.format_search(harness_notes.search(query))},
@@ -282,7 +404,8 @@ _TOOL_FUNCTIONS: Dict[str, Callable] = {
 }
 
 # Hangi tool'lar conversation_id parametresi alıyor
-_TOOLS_NEEDING_CONV_ID = {"list_chats", "send_chat_message", "show_image"}
+_TOOLS_NEEDING_CONV_ID = {"list_chats", "send_chat_message", "show_image", "run_command", "job_status",
+                          "job_output", "job_stop", "todo_write"}
 
 
 async def _list_chats(conversation_id=None) -> Dict[str, Any]:

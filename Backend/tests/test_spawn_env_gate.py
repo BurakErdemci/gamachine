@@ -361,6 +361,8 @@ _EXEMPT: Dict[Tuple[str, str], Tuple[int, str]] = {
     #    GÖSTERİLİYOR ve çocuk zaten aynı kullanıcı olarak koşuyor.
     #    ⚠️ Bu, kapatılmış bir sızıntı değil KABUL EDİLMİŞ bir taviz: onaylanan
     #    bir komut `echo $ANTHROPIC_API_KEY` de olabilir.
+    ("app/agentic/shell_exec.py", "start_background"): (
+        1, "kullanıcı onaylı arka plan kabuk komutu — run ile aynı kasıtlı ortam devralması (taviz)"),
     ("app/agentic/shell_exec.py", "run"): (
         1, "kullanıcı onaylı kabuk komutu — ortam devralması kasıtlı (taviz)"),
 

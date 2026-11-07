@@ -34,6 +34,10 @@ def plan(command: str, workspace: str) -> list[str] | None:
     return auto_safe_argv(command, workspace)
 
 
+def _env() -> dict:
+    return {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+
+
 def run(command: str, argv: list[str] | None, workspace: str) -> subprocess.CompletedProcess:
     """Runs the command; `subprocess.TimeoutExpired` propagates.
 
@@ -50,7 +54,25 @@ def run(command: str, argv: list[str] | None, workspace: str) -> subprocess.Comp
         capture_output=True,
         text=True,
         timeout=300,
-        env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+        env=_env(),
+    )
+
+
+def start_background(command: str, argv: list[str] | None, workspace: str) -> subprocess.Popen:
+    """Starts the command like `run` does (same argv-or-shell rule, same env) but does not wait.
+
+    stdout and stderr arrive merged on `.stdout` (binary); stdin is closed so a
+    command that asks a question ends instead of hanging a job forever.
+    """
+    return subprocess.Popen(
+        command if argv is None else argv,
+        shell=argv is None,
+        cwd=workspace,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        env=_env(),
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
 
 
