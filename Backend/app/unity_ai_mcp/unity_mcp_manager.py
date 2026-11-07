@@ -1111,12 +1111,14 @@ class UnityMCPManager:
     async def write_autoconnect_when_ready(self, workspace_path: str, timeout: int = 60,
                                            generation: Optional[int] = None) -> bool:
         """
-        Server port'u açılana kadar bekler, sonra autoconnect scriptini yazar.
+        Server /health cevap verene kadar bekler, sonra autoconnect scriptini yazar.
         Bu sayede Unity plugin'i bağlanmaya çalıştığında server zaten hazırdır.
+        is_running() yalnız süreç canlı mı diye bakar; port henüz dinlemiyor olabilir ve Unity
+        erken yazılmış dosyada ServerReachable başarısız olup otomatik bağlanmayı kalıcı kapatır.
         """
         for _ in range(timeout * 2):
             await asyncio.sleep(0.5)
-            if self.is_running():
+            if self.is_running() and await self.check_health():
                 await asyncio.sleep(1)  # Port açık ama HTTP handler tam init olmamış olabilir
                 # A disable or project switch must not be undone by an older readiness task.
                 if not self.is_running() or (

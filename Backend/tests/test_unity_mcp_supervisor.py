@@ -380,3 +380,27 @@ def test_workspace_switch_resets_supervision(sup, monkeypatch, tmp_path):
     assert response.json() == {"status": "success", "mcp": {"state": "switched"}}
     assert seen == [False]  # reset before the stop, like the toggle
     assert manager._gave_up is False and manager._restart_times == []
+
+
+def test_autoconnect_is_written_only_after_health_answers(sup, monkeypatch):
+    manager, _, _ = sup
+    manager.process = _Proc(None)  # alive but not listening yet
+    manager.active_workspace = "proj"
+    health_calls = {"n": 0}
+
+    async def health():
+        health_calls["n"] += 1
+        return health_calls["n"] > 3
+
+    async def no_sleep(delay):
+        pass
+
+    writes = []
+    monkeypatch.setattr(manager, "is_running", lambda: True)
+    monkeypatch.setattr(manager, "check_health", health)
+    monkeypatch.setattr(um.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(um, "_bring_editor_forward", lambda ws: None)
+    monkeypatch.setattr(manager, "_write_autoconnect_settings",
+                        lambda ws, auto_start=True: writes.append((ws, auto_start, health_calls["n"])))
+    assert run(manager.write_autoconnect_when_ready("proj", timeout=10)) is True
+    assert writes == [("proj", True, 4)]  # not written during the three failing health passes

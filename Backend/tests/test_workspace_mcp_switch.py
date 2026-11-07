@@ -248,6 +248,7 @@ def test_old_readiness_task_cannot_reenable_previous_workspace(monkeypatch):
 
     monkeypatch.setattr(manager_module.asyncio, "sleep", sleep)
     monkeypatch.setattr(manager, "is_running", Mock(return_value=True))
+    monkeypatch.setattr(manager, "check_health", AsyncMock(return_value=True))
     writer = Mock()
     monkeypatch.setattr(manager, "_write_autoconnect_settings", writer)
     forward = Mock()
@@ -341,6 +342,7 @@ def test_readiness_task_from_before_a_restart_is_ignored(monkeypatch):
 
     monkeypatch.setattr(manager_module.asyncio, "sleep", sleep)
     monkeypatch.setattr(manager, "is_running", Mock(return_value=True))
+    monkeypatch.setattr(manager, "check_health", AsyncMock(return_value=True))
     writer = Mock()
     monkeypatch.setattr(manager, "_write_autoconnect_settings", writer)
     forward = Mock()
