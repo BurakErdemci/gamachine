@@ -2,6 +2,7 @@
 import asyncio
 import json
 import os
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -453,6 +454,8 @@ async def test_agy_command_env_and_cleanup(monkeypatch, mode):
         # agy runs on an empty home, so it starts none of the user's MCP servers.
         assert env["HOME"] == env["USERPROFILE"] != "real" and os.path.isdir(env["HOME"])
         assert not os.listdir(env["HOME"]) and "GEMINI_CONFIG_DIR" not in env
+        if sys.platform == "win32":  # agy's self-updater would flash a console
+            assert env["AGY_CLI_DISABLE_AUTO_UPDATE"] == "true"
         homes.append(env["HOME"])
         return proc
 

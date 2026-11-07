@@ -395,8 +395,12 @@ async def fetch_agy_usage():
     # 7 Nov 2026: the window 0.6 s after a usage run; with an empty home the
     # usage came back complete and no cmd.exe started). Same trick as titles.
     home = tempfile.mkdtemp(prefix="gamachine-agy-usage-")
+    from providers.agy_session import _updater_env
+
     env = build_spawn_env(family="agy")
-    env.update(HOME=home, USERPROFILE=home)
+    # agy's self-updater spawns a visible `agy --version` console at most every
+    # 15 min (measured again 7 Nov 2026: windows at 23:17:58 and 23:33:03).
+    env.update(HOME=home, USERPROFILE=home, **_updater_env())
     env.pop("GEMINI_CONFIG_DIR", None)  # would point agy back at the real config
     try:
         async with asyncio.timeout(FETCH_TIMEOUT_S):
