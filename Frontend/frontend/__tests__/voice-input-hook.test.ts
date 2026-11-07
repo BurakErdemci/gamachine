@@ -546,21 +546,38 @@ describe('useVoiceInput resource release', () => {
 })
 
 describe('useVoiceInput limits', () => {
-  it('a recording left running stops itself at 60 s and transcribes what it has', async () => {
+  it('a recording keeps running past 60 s and past 2 MiB until the user stops it', async () => {
     vi.useFakeTimers()
     finishRespond = () => ({ data: { text: 'uzun kayıt' } })
     const { result, onText } = setup()
     await act(async () => { await result.current.start() })
-    speak()
+
+    // 130 s of audio, 1 s per step: 4.16 MB of 16 kHz PCM, past both old limits.
+    for (let i = 0; i < 130; i++) {
+      speak(16000)
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
+    }
+
     expect(result.current.state).toBe('recording')
+    expect(calls().filter((c: any[]) => String(c[0]).endsWith('/finish'))).toHaveLength(0)
+    expect(track.stop).not.toHaveBeenCalled()
 
-    await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
-
+    await act(async () => { await result.current.stop() })
     expect(calls().filter((c: any[]) => String(c[0]).endsWith('/finish'))).toHaveLength(1)
-    // No `waitFor` here: fake timers are installed, so its polling would never
-    // advance and the test would hang rather than fail (measured).
-    await act(async () => { await Promise.resolve(); await Promise.resolve() })
     expect(onText).toHaveBeenCalledWith('uzun kayıt')
+  })
+
+  it('one block past the old 2 MiB budget does not stop the recording', async () => {
+    onHandlerAssigned = (handler) => {
+      handler({ data: new Float32Array(WAV_MAX_BYTES / 2) })
+    }
+    const { result } = setup()
+    await act(async () => { await result.current.start() })
+    await flush()
+
+    expect(result.current.state).toBe('recording')
+    expect(track.stop).not.toHaveBeenCalled()
+    expect(calls().filter((c: any[]) => String(c[0]).endsWith('/finish'))).toHaveLength(0)
   })
 
   it('a 48 kHz device is decimated, so the wire format stays 16 kHz mono', async () => {
@@ -755,28 +772,6 @@ describe('useVoiceInput release during an in-flight acquisition', () => {
     expect(result.current.state).toBe('idle')
     expect(track.stop).toHaveBeenCalled()
     expect(mockedAxios.post).not.toHaveBeenCalled()
-  })
-})
-
-describe('useVoiceInput state ordering', () => {
-  it('premature stop state race: a budget stop during handler install is not overwritten by recording', async () => {
-    // The byte-budget callback calls `stop()`. If the handler is installed
-    // BEFORE `setState('recording')`, the stop runs first and `start()` then
-    // announces `recording` for a graph it has already torn down — an active
-    // microphone indicator over a dead capture.
-    finishRespond = () => new Promise(() => {})  // never settles
-    onHandlerAssigned = (handler) => {
-      // One block past the 2 MiB budget (2 bytes per sample), at install time.
-      handler({ data: new Float32Array(WAV_MAX_BYTES / 2) })
-    }
-    const { result } = setup()
-    await act(async () => { await result.current.start() })
-    await flush()
-
-    expect(track.stop).toHaveBeenCalled()
-    expect(calls().filter((c: any[]) => String(c[0]).endsWith('/finish'))).toHaveLength(1)
-    expect(result.current.state).not.toBe('recording')
-    expect(result.current.state).toBe('transcribing')
   })
 })
 

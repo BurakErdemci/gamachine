@@ -26,10 +26,10 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from providers import stt_whisper
+from routes import transcribe_routes
 from routes.transcribe_routes import (
     MAX_CHUNK_B64_CHARS,
     MAX_CHUNK_BYTES,
-    MAX_SESSION_BYTES,
     create_transcribe_router,
 )
 
@@ -236,10 +236,13 @@ def test_a_chunk_over_the_per_chunk_cap_is_refused(ready):
     assert response.json()["detail"] == "stt_too_large"
 
 
-def test_the_session_total_cap_refuses_the_chunk_but_keeps_the_session(ready):
+def test_the_session_total_cap_refuses_the_chunk_but_keeps_the_session(ready, monkeypatch):
+    # The real cap is 60 minutes of audio; a small one keeps the test fast.
+    cap = 8 * MAX_CHUNK_BYTES
+    monkeypatch.setattr(transcribe_routes, "MAX_SESSION_BYTES", cap)
     session_id = _new_session(ready)
     block = b"\x00" * MAX_CHUNK_BYTES
-    for _ in range(MAX_SESSION_BYTES // MAX_CHUNK_BYTES):
+    for _ in range(cap // MAX_CHUNK_BYTES):
         assert _chunk(ready, session_id, block).status_code == 200
 
     response = _chunk(ready, session_id, block)

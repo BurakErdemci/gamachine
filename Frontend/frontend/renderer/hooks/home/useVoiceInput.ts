@@ -32,13 +32,10 @@ import { apiHataMesaji } from '../../lib/apiError';
 import { cevir } from '../../lib/i18n';
 import { withBase } from '../../lib/basePath';
 import {
-  MAX_RECORD_MS,
-  WAV_MAX_BYTES,
   WAV_SAMPLE_RATE,
   downsampleTo16k,
   floatTo16BitPcm,
   int16ToBase64,
-  wavByteLength,
 } from '../../lib/wav';
 
 export type VoiceState = 'idle' | 'recording' | 'transcribing';
@@ -160,10 +157,8 @@ export const useVoiceInput = ({ api, lang, onText }: VoiceInputParams) => {
   const nodeRef = useRef<AudioWorkletNode | null>(null);
   const sourceRef = useRef<AudioNode | null>(null);
   const chunksRef = useRef<Float32Array[]>([]);
-  const rawSampleCountRef = useRef(0);
   const inputRateRef = useRef(WAV_SAMPLE_RATE);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const autoStopRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const startedAtRef = useRef(0);
 
   /** Server-side recogniser id. Null means there is nothing to send or finish. */
@@ -258,7 +253,6 @@ export const useVoiceInput = ({ api, lang, onText }: VoiceInputParams) => {
   const teardown = useCallback(() => {
     if (tickRef.current) { clearInterval(tickRef.current); tickRef.current = null; }
     if (chunkTimerRef.current) { clearInterval(chunkTimerRef.current); chunkTimerRef.current = null; }
-    if (autoStopRef.current) { clearTimeout(autoStopRef.current); autoStopRef.current = null; }
     try { nodeRef.current?.port?.close?.(); } catch { /* already closed */ }
     try { nodeRef.current?.disconnect(); } catch { /* not connected */ }
     nodeRef.current = null;
@@ -645,7 +639,6 @@ export const useVoiceInput = ({ api, lang, onText }: VoiceInputParams) => {
       inFlightRef.current = null;
       setPartialText('');
       chunksRef.current = [];
-      rawSampleCountRef.current = 0;
       inputRateRef.current = ctx!.sampleRate || WAV_SAMPLE_RATE;
       streamRef.current = stream;
       ctxRef.current = ctx;
@@ -662,32 +655,22 @@ export const useVoiceInput = ({ api, lang, onText }: VoiceInputParams) => {
         setElapsedMs(Date.now() - startedAtRef.current);
       }, TICK_MS);
       // The scheduler holds the CURRENT `sendChunk` through a ref for the same
-      // reason the auto-stop holds the current `stop`: a stale closure would
+      // reason the 413 path holds the current `stop`: a stale closure would
       // keep sending against state that has moved on.
       chunkTimerRef.current = setInterval(() => { void sendChunkRef.current(); }, CHUNK_MS);
-      // Hard ceiling. Without it a forgotten recording runs until the byte budget
-      // trips, and the byte budget depends on the sample rate — i.e. the user
-      // would get a different maximum length on different machines.
-      autoStopRef.current = setTimeout(() => { stopRef.current(); }, MAX_RECORD_MS);
+      // No clock or byte ceiling here: a dictation ends on the user's stop, a
+      // cancel, an error, or the backend's own limit (413 `stt_too_large`,
+      // handled in `sendChunk`). The backend commits long audio in windows, so
+      // the final text does not get slower with length.
 
       // Handler installed LAST, after the recording state and the timers are
-      // committed. A real MessagePort delivers asynchronously so a message
-      // cannot interleave here, but the budget callback calls `stop()`, and with
-      // the handler installed first that stop could be immediately overwritten
-      // by this function's own `setState('recording')` - leaving the indicator
-      // lit over a graph already torn down. The ordering costs nothing and
-      // removes the possibility (audit round 2, `premature-stop-state-race`).
+      // committed, so nothing the handler does can be overwritten by this
+      // function's own `setState('recording')` (audit round 2,
+      // `premature-stop-state-race`). It only queues audio now.
       node.port.onmessage = (event: MessageEvent) => {
         const block = event.data as Float32Array;
         if (!block || !block.length) return;
         chunksRef.current.push(block);
-        rawSampleCountRef.current += block.length;
-        // Budget check in the 16 kHz domain, because that is what actually goes
-        // on the wire. Stopping early is better than posting a body the backend
-        // answers with 413 — a rejection the user cannot act on.
-        const ratio = inputRateRef.current / WAV_SAMPLE_RATE;
-        const projected = wavByteLength(Math.floor(rawSampleCountRef.current / ratio));
-        if (projected >= WAV_MAX_BYTES) stopRef.current();
       };
     } finally {
       startingRef.current = false;

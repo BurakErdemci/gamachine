@@ -7,7 +7,6 @@
  */
 import { describe, it, expect } from 'vitest'
 import {
-  MAX_RECORD_MS,
   WAV_MAX_BYTES,
   bytesToBase64,
   downsampleTo16k,
@@ -15,6 +14,7 @@ import {
   floatTo16BitPcm,
   int16ToBase64,
 } from '../renderer/lib/wav'
+import * as wavModule from '../renderer/lib/wav'
 
 const ascii = (bytes: Uint8Array, at: number, len: number) =>
   String.fromCharCode(...bytes.subarray(at, at + len))
@@ -127,12 +127,12 @@ describe('base64', () => {
 })
 
 describe('limits', () => {
-  it('a full-length recording fits inside the byte budget', () => {
-    // 60 s of 16 kHz mono 16-bit. If this ever exceeded the budget the clock
-    // limit would be unreachable and every long recording would end on the
-    // byte check instead, at a length that varies with the device sample rate.
-    const bytes = 44 + (MAX_RECORD_MS / 1000) * 16000 * 2
-    expect(bytes).toBeLessThan(WAV_MAX_BYTES)
+  it('has no clock limit for a recording: the chunked session ends on the user or the backend', () => {
+    expect(wavModule).not.toHaveProperty('MAX_RECORD_MS')
+  })
+
+  it('keeps the one-shot route budget at 2 MiB', () => {
+    expect(WAV_MAX_BYTES).toBe(2 * 1024 * 1024)
   })
 })
 

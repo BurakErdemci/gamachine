@@ -19,6 +19,7 @@ frozen: ``<app>/resources/whisper`` — the frozen backend is
 ``<app>/resources/Backend/backend.exe``, hence the ``..`` hop; dev:
 ``Backend/vendor/whisper`` (filled by ``Backend/vendor/build_whisper.ps1``).
 """
+import array
 import atexit
 import collections
 import contextlib
@@ -220,7 +221,68 @@ def inference_fields(language: str) -> dict:
         "response_format": "verbose_json",
         "no_timestamps": "true",
         "temperature": "0.0",
+        # Non-speech tokens ("[Music]", "♪", credit lines) are the model's usual
+        # answer to silence.
+        "suppress_nst": "true",
     }
+
+
+# ── Hallucination filter ─────────────────────────────────────────────────────
+#
+# On silence or noise Whisper writes subtitle credits it saw in its training
+# data ("Altyazı M.K." at the end of a Turkish dictation, 7 Nov 2026). Two
+# layers: a segment the model itself doubts is dropped, and a segment that is
+# nothing but a known credit phrase is dropped. Both work on whole segments
+# only, never inside a sentence.
+
+NO_SPEECH_PROB_MAX = 0.6
+AVG_LOGPROB_MIN = -1.0
+
+# Matched against a whole segment, after stripping spaces and surrounding
+# punctuation. "Altyazı" may only be followed by capital initials ("M.K."), so a
+# real sentence that merely starts with the word is kept.
+_CREDIT_PHRASES = re.compile(
+    r"(?:"
+    r"altyaz[ıi](?:\s*[:\-–])?(?:\s*(?-i:[A-ZÇĞİÖŞÜ])\.?){0,4}"
+    r"|abone\s+ol(?:un|mayı\s+unutmayın)?"
+    r"|izlediğiniz\s+için\s+teşekkür(?:ler|\s+ederim)"
+    r"|thank\s+you\s+for\s+watching"
+    r"|thanks\s+for\s+watching"
+    r"|(?:subtitles?|captions?)\s+by\b.{0,60}"
+    r"|untertitel\b.{0,60}"
+    r")",
+    re.IGNORECASE,
+)
+_SEGMENT_EDGE = " \t\r\n.,;:!?-–—…\"'«»()[]♪"
+
+
+def is_credit_phrase(text: str) -> bool:
+    core = text.strip(_SEGMENT_EDGE)
+    return bool(core) and _CREDIT_PHRASES.fullmatch(core) is not None
+
+
+def _is_doubted(segment: dict) -> bool:
+    no_speech = segment.get("no_speech_prob")
+    logprob = segment.get("avg_logprob")
+    return (isinstance(no_speech, (int, float)) and isinstance(logprob, (int, float))
+            and no_speech > NO_SPEECH_PROB_MAX and logprob < AVG_LOGPROB_MIN)
+
+
+def clean_text(data: dict) -> str:
+    """The text of a /inference answer without hallucinated segments. When the
+    answer carries no usable segments, the whole text is held to the phrase
+    filter instead."""
+    text = data.get("text")
+    text = text.strip() if isinstance(text, str) else ""
+    segments = data.get("segments")
+    if isinstance(segments, list) and segments and all(
+            isinstance(seg, dict) and isinstance(seg.get("text"), str) for seg in segments):
+        kept = [seg["text"].strip() for seg in segments
+                if not _is_doubted(seg) and not is_credit_phrase(seg["text"])]
+        if len(kept) == len(segments):
+            return text
+        return " ".join(part for part in kept if part)
+    return "" if is_credit_phrase(text) else text
 
 
 def build_multipart(wav: bytes, fields: dict) -> "tuple[bytes, str]":
@@ -722,9 +784,8 @@ class WhisperServer:
             raise SttEngineFailed("whisper-server answered non-JSON") from exc
         if not isinstance(data, dict) or "error" in data:
             raise SttEngineFailed(f"whisper-server error: {data.get('error') if isinstance(data, dict) else data!r}")
-        text = data.get("text")
         return {
-            "text": text.strip() if isinstance(text, str) else "",
+            "text": clean_text(data),
             "language": data.get("language") if isinstance(data.get("language"), str) else None,
         }
 
@@ -798,8 +859,21 @@ MAX_SESSIONS = 4
 SESSION_TTL_S = 90.0
 # Independent of idle time: an empty chunk refreshes `last_seen`, so a caller
 # sending one every 89 s could otherwise hold a slot forever (audit finding,
-# 3 Sep 2026). The renderer's own ceiling is 60 s (MAX_RECORD_MS).
-SESSION_MAX_LIFETIME_S = 300.0
+# 3 Sep 2026). A dictation has no length limit of its own; the ceiling is the
+# route's 60 minutes of audio, plus a margin.
+SESSION_MAX_LIFETIME_S = 3700.0
+
+# Long audio is decoded in committed windows while the user still speaks, so
+# /finish only has the tail left. Once the un-committed audio passes
+# COMMIT_AFTER_BYTES it is cut at the quietest 100 ms frame of its last
+# COMMIT_SEARCH_BYTES (Whisper itself works on 30 s windows, so a window just
+# under that stays one decode).
+COMMIT_AFTER_BYTES = 28 * SAMPLE_RATE * 2
+COMMIT_SEARCH_BYTES = 4 * SAMPLE_RATE * 2
+COMMIT_FRAME_BYTES = SAMPLE_RATE // 10 * 2
+# After a failed window decode the audio is put back; retrying on every chunk
+# would hammer a server that just failed.
+COMMIT_RETRY_S = 10.0
 
 _now = time.monotonic
 
@@ -818,7 +892,9 @@ class SttTooLarge(Exception):
 
 class _Session:
     __slots__ = ("id", "lang", "pcm", "lock", "created", "last_seen",
-                 "partial", "partial_at", "live_lang", "decoding")
+                 "partial", "partial_at", "live_lang", "decoding",
+                 "total_bytes", "committed", "committing", "commit_thread",
+                 "commit_retry_at", "epoch")
 
     def __init__(self, session_id: str, lang: str):
         self.id = session_id
@@ -832,6 +908,16 @@ class _Session:
         self.partial_at = None
         self.live_lang = None
         self.decoding = False
+        # `pcm` is only the audio no window has taken yet; `total_bytes` is
+        # everything the session was ever fed (the route's budget).
+        self.total_bytes = 0
+        self.committed = []
+        self.committing = False
+        self.commit_thread = None
+        self.commit_retry_at = 0.0
+        # Bumped when a window commits: a live decode that started before it
+        # describes audio that is no longer in `pcm` and is dropped.
+        self.epoch = 0
 
 
 _sessions: "dict[str, _Session]" = {}
@@ -889,10 +975,10 @@ def _get(session_id: str) -> _Session:
 
 
 def session_bytes(session_id: str) -> int:
-    return len(_get(session_id).pcm)
+    return _get(session_id).total_bytes
 
 
-def feed(session_id: str, pcm: bytes, cap: "int | None" = None) -> str:
+def feed(session_id: str, pcm: bytes, cap: "int | None" = None, auto_on_cpu: bool = False) -> str:
     """Appends one chunk and returns the live text so far ("" without a GPU).
 
     The cap check and the append share one critical section: two chunks
@@ -904,21 +990,89 @@ def feed(session_id: str, pcm: bytes, cap: "int | None" = None) -> str:
         with _sessions_lock:
             if _sessions.get(session_id) is not session:
                 raise SttNoSession(session_id)
-        if cap is not None and len(session.pcm) + len(pcm) > cap:
+        if cap is not None and session.total_bytes + len(pcm) > cap:
             raise SttTooLarge()
         session.pcm.extend(pcm)
+        session.total_bytes += len(pcm)
         session.last_seen = _now()
+        window = _take_window(session)
         snapshot = _live_snapshot(session)
+        epoch = session.epoch
     get_server().touch()
+    if window is not None:
+        _start_commit(session, window, auto_on_cpu)
     if snapshot is not None:
-        _decode_partial(session, snapshot)
-    return session.partial
+        _decode_partial(session, snapshot, epoch)
+    with session.lock:
+        return _join_text(session.committed + [session.partial])
+
+
+def _join_text(parts) -> str:
+    return " ".join(part for part in parts if part)
+
+
+def _quietest_cut(pcm: bytearray) -> int:
+    """Byte offset of the middle of the quietest 100 ms frame within the last
+    COMMIT_SEARCH_BYTES. Plain RMS: Whisper only needs the cut to fall between
+    words, not on a precise pause."""
+    start = max(0, len(pcm) - COMMIT_SEARCH_BYTES)
+    start -= start % 2
+    best_at, best_energy = len(pcm), None
+    for offset in range(start, len(pcm) - COMMIT_FRAME_BYTES + 1, COMMIT_FRAME_BYTES):
+        samples = array.array("h")
+        samples.frombytes(bytes(pcm[offset:offset + COMMIT_FRAME_BYTES]))
+        if sys.byteorder == "big":
+            samples.byteswap()
+        energy = sum(x * x for x in samples)
+        if best_energy is None or energy < best_energy:
+            best_at, best_energy = offset + COMMIT_FRAME_BYTES // 2, energy
+    return best_at - best_at % 2
+
+
+def _take_window(session: _Session) -> "bytes | None":
+    """Cuts the next window off the front of the session's audio, or None when
+    it is not time. Called with ``session.lock`` held. One window decodes at a
+    time, so the committed text stays in speaking order."""
+    if (session.committing or len(session.pcm) < COMMIT_AFTER_BYTES
+            or _now() < session.commit_retry_at):
+        return None
+    cut = _quietest_cut(session.pcm)
+    window = bytes(session.pcm[:cut])
+    del session.pcm[:cut]
+    session.committing = True
+    return window
+
+
+def _start_commit(session: _Session, window: bytes, auto_on_cpu: bool) -> None:
+    thread = threading.Thread(target=_commit_window, args=(session, window, auto_on_cpu),
+                              name="stt-commit", daemon=True)
+    session.commit_thread = thread
+    thread.start()
+
+
+def _commit_window(session: _Session, window: bytes, auto_on_cpu: bool) -> None:
+    result = None
+    try:
+        result = transcribe_final(window, session.lang, auto_on_cpu)
+    except Exception as exc:                         # noqa: BLE001 — the audio must survive any failure
+        logger.warning("[stt] window decode failed, keeping its audio for the next try: %s", exc)
+    with session.lock:
+        session.committing = False
+        if result is None:
+            session.pcm[:0] = window
+            session.commit_retry_at = _now() + COMMIT_RETRY_S
+            return
+        if result["text"]:
+            session.committed.append(result["text"])
+        session.partial = ""
+        session.partial_at = None
+        session.epoch += 1
 
 
 def _live_snapshot(session: _Session) -> "bytes | None":
     """The audio to decode for live text, or None when it is not time yet.
     Called with ``session.lock`` held."""
-    if session.decoding or len(session.pcm) < LIVE_MIN_AUDIO_BYTES:
+    if session.decoding or session.committing or len(session.pcm) < LIVE_MIN_AUDIO_BYTES:
         return None
     if session.partial_at is not None and _now() - session.partial_at < LIVE_INTERVAL_S:
         return None
@@ -931,7 +1085,7 @@ def _live_snapshot(session: _Session) -> "bytes | None":
     return bytes(session.pcm)
 
 
-def _decode_partial(session: _Session, pcm: bytes) -> None:
+def _decode_partial(session: _Session, pcm: bytes, epoch: int) -> None:
     # A pinned language makes an update ~0.5 s instead of ~1.0 s (measured).
     # The final decode detects again on the whole recording either way.
     language = session.live_lang or "auto"
@@ -943,7 +1097,7 @@ def _decode_partial(session: _Session, pcm: bytes) -> None:
         result = None
     with session.lock:
         session.decoding = False
-        if result is None:
+        if result is None or session.epoch != epoch:
             return
         if session.live_lang is not None:
             session.partial = result["text"]
@@ -958,7 +1112,8 @@ def _decode_partial(session: _Session, pcm: bytes) -> None:
 
 
 def finish(session_id: str, auto_on_cpu: bool = False, discard: bool = False) -> dict:
-    """Removes the session and transcribes everything it heard."""
+    """Removes the session and transcribes everything it heard: the windows
+    already committed plus the tail no window has taken."""
     with _sessions_lock:
         session = _sessions.pop(session_id, None)
     if session is None:
@@ -966,8 +1121,15 @@ def finish(session_id: str, auto_on_cpu: bool = False, discard: bool = False) ->
     if discard:
         get_server().touch()
         return {"text": "", "duration_ms": 0}
+    thread = session.commit_thread
+    if thread is not None:
+        thread.join(FINAL_TIMEOUT_S)
+        if thread.is_alive():
+            raise SttEngineFailed("a window decode did not finish in time")
     with session.lock:
         pcm = bytes(session.pcm)
+        committed = list(session.committed)
     result = transcribe_final(pcm, session.lang, auto_on_cpu)
-    result["duration_ms"] = len(pcm) // 2 * 1000 // SAMPLE_RATE
+    result["text"] = _join_text(committed + [result["text"]])
+    result["duration_ms"] = session.total_bytes // 2 * 1000 // SAMPLE_RATE
     return result

@@ -11,17 +11,12 @@
  * mono, 16000 Hz. Every constant here is that contract, not a preference.
  */
 
-/** Backend limit: decoded WAV must be ≤ 2 MiB, else 413 `stt_too_large`. */
-export const WAV_MAX_BYTES = 2 * 1024 * 1024;
-
 /**
- * Hard stop for one recording.
- *
- * 60 s of 16 kHz mono 16-bit is 1,920,044 bytes — deliberately just under
- * WAV_MAX_BYTES, so the clock and the byte budget run out at nearly the same
- * moment and neither limit can be hit without the other being close.
+ * Backend limit of the ONE-SHOT route: decoded WAV must be ≤ 2 MiB, else 413
+ * `stt_too_large`. The chunked dictation session has no such client limit (the
+ * backend allows 60 minutes of audio per session).
  */
-export const MAX_RECORD_MS = 60_000;
+export const WAV_MAX_BYTES = 2 * 1024 * 1024;
 
 export const WAV_SAMPLE_RATE = 16000;
 

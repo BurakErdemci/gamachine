@@ -173,6 +173,7 @@ def test_inference_fields_has_the_exact_contract():
         "response_format": "verbose_json",
         "no_timestamps": "true",
         "temperature": "0.0",
+        "suppress_nst": "true",
     }
 
 
@@ -184,8 +185,8 @@ def test_build_multipart_contains_every_field_and_the_wav_bytes_verbatim():
     assert ctype.startswith("multipart/form-data; boundary=")
     boundary = ctype.split("boundary=", 1)[1]
     marker = ("--" + boundary).encode()
-    # 4 text fields + 1 file part opened, plus the closing "--boundary--".
-    assert body.count(marker) == 5 + 1
+    # 5 text fields + 1 file part opened, plus the closing "--boundary--".
+    assert body.count(marker) == 6 + 1
     for name, value in fields.items():
         assert f'name="{name}"'.encode() in body
         assert value.encode() in body

@@ -32,7 +32,9 @@ MAX_B64_CHARS = 2_796_204
 # ceil(65536 / 3) * 4, checked before decoding for the same reason as above.
 MAX_CHUNK_BYTES = 65_536
 MAX_CHUNK_B64_CHARS = 87_384
-MAX_SESSION_BYTES = 2_097_152             # same 2 MiB budget as the one-shot route
+# 60 minutes of 16 kHz mono 16-bit PCM (~115 MB in RAM per session). Long audio
+# is committed window by window (stt_whisper), so /finish does not slow down.
+MAX_SESSION_BYTES = 60 * 60 * stt_whisper.SAMPLE_RATE * 2
 
 # A session id only ever comes from `secrets.token_urlsafe`. Anything outside
 # that alphabet cannot name a live session, so it is answered like any other
@@ -192,7 +194,7 @@ def create_transcribe_router(db=None):
             raise HTTPException(400, detail="stt_wrong_format")
 
         try:
-            partial = stt_whisper.feed(session_id, pcm, cap=MAX_SESSION_BYTES)
+            partial = stt_whisper.feed(session_id, pcm, cap=MAX_SESSION_BYTES, auto_on_cpu=auto_language_cpu())
             total = stt_whisper.session_bytes(session_id)
         except stt_whisper.SttTooLarge:
             raise HTTPException(413, detail="stt_too_large")
