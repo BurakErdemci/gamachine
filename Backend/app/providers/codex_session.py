@@ -35,6 +35,7 @@ import uuid
 from datetime import datetime
 from typing import Any, AsyncGenerator, Dict, List, Optional, Sequence, Set
 
+import process_tree
 import unity_file_guard
 from computer_use import registration
 from browser_use import registration as browser_registration
@@ -49,6 +50,9 @@ logger = logging.getLogger(__name__)
 # varsayılan 64 KiB StreamReader limitini aşabiliyor. Makul bir üst sınır koy;
 # sınırsız buffer kullanma.
 _APP_SERVER_STREAM_LIMIT = 8 * 1024 * 1024
+
+# Upper bound for one in-place thread/compact/start (lock wait, then the compacted notification).
+_COMPACT_TIMEOUT_S = 120.0
 
 # conversation_id → CodexSession (canlı, isteklerin ötesinde yaşar)
 _SESSIONS: Dict[int, "CodexSession"] = {}
@@ -944,6 +948,15 @@ class CodexSession:
         self._file_changes: "collections.OrderedDict[str, list]" = collections.OrderedDict()
         # İlk turda DB bağlam özeti enjekte edildi mi (sonraki turlarda thread hatırlıyor)
         self._ctx_injected = False
+        # Per-turn overrides sent with turn/start (model/effort need no rebuild); None = not sent.
+        self._turn_model: Optional[str] = None
+        self._turn_effort: Optional[str] = None
+        # cwd the thread was started with; a different self.cwd is sent per turn.
+        self._thread_cwd: Optional[str] = None
+        # steered client_id -> text, until its user_injected event is emitted (once).
+        self._steer_pending: Dict[str, str] = {}
+        # Set by thread/compacted (or a contextCompaction item) while compact() waits.
+        self._compacted_event = asyncio.Event()
 
     # ── Süreç yaşam döngüsü ──────────────────────────────────────────────
     @property
@@ -1024,6 +1037,7 @@ class CodexSession:
         }
         if self.model:
             params["model"] = self.model
+        self._thread_cwd = params["cwd"]
         resp = await self._request("thread/start", params, timeout=30)
         if (resp or {}).get("error"):
             error = (resp or {}).get("error") or {}
@@ -1059,7 +1073,14 @@ class CodexSession:
                 await rt
             except BaseException:
                 pass
+        orphans: List[int] = []
         if self._proc is not None:
+            # Descendants are collected while the app-server still lives: once it
+            # is dead they are orphans no tree walk can find (see process_tree).
+            try:
+                orphans = await asyncio.to_thread(process_tree.collect_descendants, self._proc.pid)
+            except Exception as e:
+                logger.debug(f"[CodexSession:{self.conversation_id}] süreç ağacı okunamadı: {e}")
             try:
                 self._proc.kill()
             except ProcessLookupError:
@@ -1068,6 +1089,11 @@ class CodexSession:
                 await asyncio.wait_for(self._proc.wait(), timeout=5)
             except Exception:
                 pass
+        if orphans:
+            try:
+                await process_tree.kill_pids(orphans)
+            except Exception as e:
+                logger.warning(f"[CodexSession:{self.conversation_id}] alt süreçler sonlandırılamadı: {e}")
         self._proc = None
         self._started = False
         # Bekleyen istek future'larını serbest bırak (yoksa _request sonsuz bekler)
@@ -1075,6 +1101,7 @@ class CodexSession:
             if not fut.done():
                 fut.cancel()
         self._pending.clear()
+        self._steer_pending.clear()
 
     # ── Düşük seviye JSON-RPC (NDJSON) ───────────────────────────────────
     async def _send(self, obj: dict):
@@ -1403,6 +1430,12 @@ class CodexSession:
                              self.conversation_id)
             return
 
+        if method == "thread/compacted" or (
+                method == "item/completed"
+                and (params.get("item") or {}).get("type") == "contextCompaction"):
+            self._compacted_event.set()
+            return
+
         out_q = self._out_q
         if out_q is None:
             return  # tur dışı bildirim (ör. remoteControl/status) — yok say
@@ -1479,6 +1512,9 @@ class CodexSession:
         elif method == "item/started":
             item = params.get("item", {}) or {}
             itype = item.get("type", "")
+            if itype == "userMessage":
+                await self._emit_user_injected(item.get("clientId"))
+                return
             # Metin/akıl yürütme delta ile gelir; userMessage = kullanıcının kendi mesajının
             # yankısı (araç değil) → gizle.
             if itype in ("agentMessage", "reasoning", "userMessage"):
@@ -1493,6 +1529,7 @@ class CodexSession:
             item = params.get("item", {}) or {}
             itype = item.get("type", "")
             if itype == "userMessage":
+                await self._emit_user_injected(item.get("clientId"))
                 return  # kullanıcı mesajı yankısı — gösterme
             if itype == "agentMessage":
                 # Final metin zaten delta'larla akıtıldı; tekrar ekleme (çift sayım önlemi)
@@ -1544,6 +1581,16 @@ class CodexSession:
                     "Biraz sonra tekrar dene ya da başka bir modele geç (örneğin GPT-6 Sol)."
                 )
             await self._emit_terminal({"type": "error", "message": _err})
+
+    async def _emit_user_injected(self, client_id) -> None:
+        """Emit `user_injected` for a steered message, once: whichever of the
+        userMessage echo and the steer response arrives first spends the entry."""
+        if not isinstance(client_id, str):
+            return
+        text = self._steer_pending.pop(client_id, None)
+        q = self._out_q
+        if text is not None and q is not None:
+            await q.put({"type": "user_injected", "client_id": client_id, "text": text})
 
     @staticmethod
     def _item_summary(item: dict) -> str:
@@ -1617,6 +1664,77 @@ class CodexSession:
         })
         logger.info(f"[CodexSession:{self.conversation_id}] tur iptal edildi (cancel_turn)")
 
+    # ── Canlı turda kullanıcı mesajı (turn/steer) ────────────────────────
+    async def steer(self, text: str, client_id: str) -> bool:
+        """Deliver `text` into the RUNNING turn without interrupting it. _turn_lock ALMAZ.
+
+        False (nothing sent or the server refused: unsupported method, turn
+        ended/mismatch, non-steerable turn) lets the caller queue the message."""
+        turn_id = self._current_turn_id
+        if not (self._started and self.thread_id and turn_id and self._out_q is not None
+                and not self._terminal_sent):
+            return False
+        self._steer_pending[client_id] = text
+        try:
+            resp = await self._request("turn/steer", {
+                "threadId": self.thread_id,
+                "expectedTurnId": turn_id,
+                "input": [{"type": "text", "text": text}],
+                "clientUserMessageId": client_id,
+            }, timeout=10)
+        except Exception as e:
+            self._steer_pending.pop(client_id, None)
+            logger.warning(f"[CodexSession:{self.conversation_id}] steer hatası: {e}")
+            return False
+        error = (resp or {}).get("error")
+        if error:
+            self._steer_pending.pop(client_id, None)
+            logger.info(f"[CodexSession:{self.conversation_id}] steer reddedildi: {error}")
+            return False
+        # No echo yet means the server may not send one; the response is the ack.
+        await self._emit_user_injected(client_id)
+        return True
+
+    # ── Yerinde sıkıştırma (thread/compact/start) ────────────────────────
+    async def compact(self) -> bool:
+        """Compact the live thread in place; never closes the process.
+
+        Waits (bounded) for a running turn to finish, since the protocol does not
+        say compaction may overlap one. False on timeout, an error reply or an
+        unsupported method, so the caller can use the old rebuild path."""
+        if not (self._started and self.thread_id):
+            return False
+        try:
+            await asyncio.wait_for(self._turn_lock.acquire(), timeout=_COMPACT_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            logger.warning(f"[CodexSession:{self.conversation_id}] compact: tur bitmedi, vazgeçildi")
+            return False
+        try:
+            self._compacted_event.clear()
+            try:
+                resp = await self._request("thread/compact/start", {"threadId": self.thread_id}, timeout=30)
+            except Exception as e:
+                logger.warning(f"[CodexSession:{self.conversation_id}] compact hatası: {e}")
+                return False
+            if (resp or {}).get("error"):
+                logger.info(f"[CodexSession:{self.conversation_id}] compact reddedildi: {resp['error']}")
+                return False
+            try:
+                await asyncio.wait_for(self._compacted_event.wait(), timeout=_COMPACT_TIMEOUT_S)
+            except asyncio.TimeoutError:
+                logger.warning(f"[CodexSession:{self.conversation_id}] compact: tamamlanma bildirimi gelmedi")
+                return False
+            return True
+        finally:
+            self._turn_lock.release()
+
+    def set_turn_overrides(self, model: Optional[str] = None, effort: Optional[str] = None) -> None:
+        """Model/effort sent with every following turn/start; None leaves a value unchanged."""
+        if model:
+            self._turn_model = model
+        if effort:
+            self._turn_effort = effort
+
     # ── Mesaj akışı: bir tur gönder, event dict'leri yield et ────────────
     async def usage_card_text(self) -> str:
         """`/usage` için: canlı app-server'dan account/rateLimits + account/read çekip
@@ -1679,7 +1797,9 @@ class CodexSession:
             lines.append("Şu anda raporlanacak kullanım penceresi yok.")
         return "\n".join(lines)
 
-    async def stream(self, message: str, image_paths: Optional[List[str]] = None) -> AsyncGenerator[dict, None]:
+    async def stream(self, message: str, image_paths: Optional[List[str]] = None, *,
+                     model: Optional[str] = None, effort: Optional[str] = None,
+                     cwd: Optional[str] = None) -> AsyncGenerator[dict, None]:
         if not self._started:
             await self.start()
 
@@ -1698,11 +1818,20 @@ class CodexSession:
             for p in (image_paths or []):
                 input_items.append({"type": "localImage", "path": p})
 
+            turn_params: Dict[str, Any] = {"threadId": self.thread_id, "input": input_items}
+            turn_model = model or self._turn_model
+            turn_effort = effort or self._turn_effort
+            turn_cwd = cwd or (self.cwd if self._thread_cwd and self.cwd and self.cwd != self._thread_cwd else None)
+            if turn_model:
+                turn_params["model"] = turn_model
+            if turn_effort:
+                turn_params["effort"] = turn_effort
+            if turn_cwd:
+                turn_params["cwd"] = turn_cwd
+            self._steer_pending.clear()
+
             try:
-                resp = await self._request("turn/start", {
-                    "threadId": self.thread_id,
-                    "input": input_items,
-                }, timeout=60)
+                resp = await self._request("turn/start", turn_params, timeout=60)
                 self._current_turn_id = (((resp or {}).get("result") or {}).get("turn") or {}).get("id")
             except Exception as e:
                 logger.exception(f"[CodexSession:{self.conversation_id}] turn/start hatası")
