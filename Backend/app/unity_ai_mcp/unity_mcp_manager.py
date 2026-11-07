@@ -241,6 +241,14 @@ def _bring_editor_forward(project_path: str) -> None:
         logger.debug("[UnityMCP] Could not bring the editor forward.", exc_info=True)
 
 
+def unity_mcp_disabled() -> bool:
+    """True when GAMACHINE_NO_UNITY_MCP is 1/true/yes: this backend never starts, probes or stops the MCP port.
+
+    Read on every call so an isolated dev backend can run beside a live Gamachine that owns 8080.
+    """
+    return os.environ.get("GAMACHINE_NO_UNITY_MCP", "").strip().lower() in ("1", "true", "yes")
+
+
 # Unity bağlantı durumu
 class UnityMCPStatus:
     OFF = "off"            # Sunucu kapalı
@@ -418,6 +426,8 @@ class UnityMCPManager:
         Kendi sürecimiz canlıyken probe ATILMIYOR: süreç sahipliği probe'dan güçlü
         bir kanıt, ve her durum yoklamasında bir HTTP isteği doğurmanın anlamı yok.
         """
+        if unity_mcp_disabled():
+            return Occupant(ServerIdentity.NONE, "GAMACHINE_NO_UNITY_MCP")
         if self.process and self.process.poll() is None:
             return Occupant(ServerIdentity.OURS, "kendi sürecimiz")
         import time
@@ -600,6 +610,9 @@ class UnityMCPManager:
         Unity'nin kendi arayüzüyle aynı komutu kullanır (uvx).
         Zaten çalışıyorsa veya başlatılıyorsa True döner (idempotent).
         """
+        if unity_mcp_disabled():
+            logger.info("[UnityMCP] GAMACHINE_NO_UNITY_MCP is set; not starting the Unity MCP server.")
+            return False
         if self._starting or self.is_running():
             return True
         self.last_error = None
@@ -736,6 +749,8 @@ class UnityMCPManager:
         Ama o geçiş artık porttaki her şeyi değil, yalnız kimliği doğrulanan
         süreçleri kapatıyor (bkz. mcp_port_guard).
         """
+        if unity_mcp_disabled():
+            return
         from .mcp_port_guard import collect_owned_listeners, terminate_port_listeners
 
         # Durdurmanın ardından 2 sn boyunca "hâlâ ayakta" okunmasın.
@@ -833,6 +848,8 @@ class UnityMCPManager:
         _HEALTH_FAILS_TO_RESTART passes in a row. A user stop clears `enabled`, so it never
         restarts; a foreign process on the port is left alone.
         """
+        if unity_mcp_disabled():
+            return
         if not self.enabled or self._starting or self._gave_up:
             return
         process = self.process
@@ -956,6 +973,8 @@ class UnityMCPManager:
 
     async def check_health(self, timeout: float = 2.0) -> bool:
         """HTTP sunucusunun ayakta olduğunu kontrol eder (/health)."""
+        if unity_mcp_disabled():
+            return False
         try:
             async with httpx.AsyncClient() as client:
                 res = await client.get(
@@ -968,6 +987,8 @@ class UnityMCPManager:
 
     async def check_unity_connected(self) -> bool:
         """Unity Editor'ün (plugin) sunucuya bağlı olup olmadığını kontrol eder."""
+        if unity_mcp_disabled():
+            return False
         try:
             async with httpx.AsyncClient() as client:
                 res = await client.get(
@@ -1159,6 +1180,8 @@ class UnityMCPManager:
         is_running() yalnız süreç canlı mı diye bakar; port henüz dinlemiyor olabilir ve Unity
         erken yazılmış dosyada ServerReachable başarısız olup otomatik bağlanmayı kalıcı kapatır.
         """
+        if unity_mcp_disabled():
+            return False
         for _ in range(timeout * 2):
             await asyncio.sleep(0.5)
             if self.is_running() and await self.check_health():

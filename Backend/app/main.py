@@ -238,7 +238,9 @@ async def _side_sweep_loop() -> None:
 
 def _reset_unity_autoconnect_on_startup() -> None:
     try:
-        from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
+        from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager, unity_mcp_disabled
+        if unity_mcp_disabled():
+            return
         if not unity_mcp_manager.is_running():
             unity_mcp_manager.reset_autoconnect_off(db.get_last_workspace(1))
     except Exception as e:
@@ -252,15 +254,20 @@ async def lifespan(app: FastAPI):
     # bir port olduğu için kullanıcının alakasız bir dev server'ı da haber
     # verilmeden ölüyordu. Artık kimliği doğrulanan süreç öldürülüyor, doğrulanamayan
     # yalnız loglanıyor — gerekçe ve yöntem için bkz. mcp_port_guard modül docstring'i.
-    try:
-        from unity_ai_mcp.mcp_port_guard import DEFAULT_MCP_PORT, terminate_port_listeners
-        cleanup = terminate_port_listeners(DEFAULT_MCP_PORT)
-        for pid in cleanup.killed:
-            logger.info(f"[Startup] Orphan MCP süreci temizlendi (PID: {pid})")
-        if cleanup.refused:
-            logger.warning(f"[Startup] {cleanup.message}")
-    except Exception as e:
-        logger.debug(f"[Startup] Port temizleme atlandı: {e}")
+    from unity_ai_mcp.unity_mcp_manager import unity_mcp_disabled
+    no_unity_mcp = unity_mcp_disabled()
+    if no_unity_mcp:
+        logger.info("[Startup] GAMACHINE_NO_UNITY_MCP is set: Unity MCP port cleanup, supervisor and shutdown are skipped.")
+    else:
+        try:
+            from unity_ai_mcp.mcp_port_guard import DEFAULT_MCP_PORT, terminate_port_listeners
+            cleanup = terminate_port_listeners(DEFAULT_MCP_PORT)
+            for pid in cleanup.killed:
+                logger.info(f"[Startup] Orphan MCP süreci temizlendi (PID: {pid})")
+            if cleanup.refused:
+                logger.warning(f"[Startup] {cleanup.message}")
+        except Exception as e:
+            logger.debug(f"[Startup] Port temizleme atlandı: {e}")
 
     _reset_unity_autoconnect_on_startup()
 
@@ -274,7 +281,7 @@ async def lifespan(app: FastAPI):
         logger.warning(f"[Startup] Yan sohbet temizliği atlandı: {e}")
     side_sweeper = asyncio.create_task(_side_sweep_loop())
     from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
-    mcp_supervisor = asyncio.create_task(unity_mcp_manager.supervise_loop())
+    mcp_supervisor = None if no_unity_mcp else asyncio.create_task(unity_mcp_manager.supervise_loop())
 
     # Remote control reconnects on its own if it was on; off means no traffic.
     try:
@@ -315,11 +322,12 @@ async def lifespan(app: FastAPI):
     except BaseException:
         pass
 
-    mcp_supervisor.cancel()
-    try:
-        await mcp_supervisor
-    except BaseException:
-        pass
+    if mcp_supervisor is not None:
+        mcp_supervisor.cancel()
+        try:
+            await mcp_supervisor
+        except BaseException:
+            pass
 
     # Approval-ledger rows still queued are written before the process ends.
     try:
@@ -333,7 +341,8 @@ async def lifespan(app: FastAPI):
     try:
         from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
         from tools.unity_mcp_tools import unload_unity_tools
-        unity_mcp_manager.stop_server()
+        if not no_unity_mcp:
+            unity_mcp_manager.stop_server()
         unload_unity_tools()
         logger.info("[Shutdown] Unity MCP sunucusu durduruldu.")
     except Exception as e:
