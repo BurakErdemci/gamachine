@@ -1714,11 +1714,14 @@ class ClaudeSDKSession:
             return self._ended_tasks.get(task_id, "Görev"), False
         desc = self._active_tasks.pop(task_id)
         self._ended_tasks[task_id] = desc
-        self._task_meta.pop(task_id, None)
+        meta = self._task_meta.pop(task_id, None) or {}
         if (status != "completed" and task_id in self._cancel_tasks
                 and time.time() - self._cancel_at <= _STOP_KILL_WINDOW_S):
             self._stop_killed.append(desc)
-        else:
+        elif not (meta.get("foreground") or meta.get("subagent_owned")):
+            # Only background work the main agent started can wake the chat;
+            # a foreground tool call was reported in its own turn, and a
+            # subagent's internal task belongs to that subagent.
             self._done_tasks.append(desc)
         self._tasks_changed()
         return desc, True
@@ -1960,9 +1963,10 @@ class ClaudeSDKSession:
             # task says owned_by_subagent. A foreground task is the tool the
             # main turn waits on; Stop may end it alone (stop_task).
             raw = getattr(msg, "data", None) or {}
-            foreground = raw.get("is_backgrounded") is False and not raw.get("owned_by_subagent")
+            subagent_owned = bool(raw.get("owned_by_subagent"))
+            foreground = raw.get("is_backgrounded") is False and not subagent_owned
             self._task_meta[msg.task_id] = {"kind": self._task_kind(msg), "started_at": time.time(),
-                                            "foreground": foreground}
+                                            "foreground": foreground, "subagent_owned": subagent_owned}
             self._tasks_changed()
             await self._emit({"type": "status", "scope": "subagent",
                               "detail": f"🤖 Görev başladı: {desc}",
