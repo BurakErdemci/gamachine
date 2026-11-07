@@ -6,6 +6,7 @@ import logging
 import asyncio
 import subprocess
 import json
+import process_tree
 from typing import Dict, Any, Optional, List, AsyncGenerator
 
 from providers.agy_model_ids import AGY_MODEL_REPLACEMENTS
@@ -200,9 +201,7 @@ class BaseCLIProvider(AIProvider):
         logger.info(
             f"[CLIProvider:{self.binary_name}] kullanıcı durdurdu — PID={process.pid} sonlandırılıyor"
         )
-        try:
-            process.kill()
-        except ProcessLookupError:
+        if not await process_tree.end_tree(process):
             return False
         try:
             await asyncio.wait_for(process.wait(), timeout=3.0)
@@ -590,10 +589,7 @@ class BaseCLIProvider(AIProvider):
                     logger.error(
                         f"[CLIProvider:{self.binary_name}] prompt stdin'e yazılamadı "
                         f"(çocuk erken kapandı): {type(_e).__name__}")
-                    try:
-                        process.kill()
-                    except (ProcessLookupError, OSError):
-                        pass
+                    await process_tree.end_tree(process)
                     yield {"type": "error", "content": (
                         "⚠️ İstek CLI'a iletilemedi (süreç girdi kanalını erken kapattı). "
                         "Mesajınız işlenmedi — lütfen tekrar deneyin.")}
@@ -667,7 +663,7 @@ class BaseCLIProvider(AIProvider):
                             f"[CLIProvider:{self.binary_name}] "
                             f"{_termination_reason} (idle={_idle:.0f}s / "
                             f"toplam={_elapsed:.0f}s) — kill")
-                        process.kill()
+                        await process_tree.end_tree(process)
                         break
                     continue
 
@@ -1100,7 +1096,7 @@ class BaseCLIProvider(AIProvider):
         finally:
             if process is not None and process.returncode is None:
                 try:
-                    process.kill()
+                    await process_tree.end_tree(process)
                     await asyncio.wait_for(process.wait(), timeout=3.0)
                 except (ProcessLookupError, asyncio.TimeoutError):
                     pass

@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import sys
+import process_tree
 from collections.abc import Hashable, Mapping
 from typing import AsyncGenerator, Dict, Optional
 
@@ -237,7 +238,7 @@ def _stop_retired_children() -> list:
             _RETIRED.discard(token)
             continue
         try:
-            process.kill()
+            process_tree.end_tree_sync(process, strict=True)
         except Exception:
             logger.warning("[agy] closed child still not stoppable pid=%s",
                            getattr(process, "pid", None), exc_info=True)
@@ -315,7 +316,7 @@ def _kill_gated_children() -> list:
         if id(process) in stopped:
             continue
         try:
-            process.kill()
+            process_tree.end_tree_sync(process, strict=True)
         except Exception:
             logger.exception("[agy] could not stop pid=%s", getattr(process, "pid", None))
             if getattr(process, "returncode", None) is None:
@@ -469,7 +470,7 @@ class AgyStreamSession(SaglayiciSahipligi):
             logger.error("[agy] gate state stale in step mode; stopping pid=%s",
                          getattr(self._active_process, "pid", None))
             try:
-                self._active_process.kill()
+                process_tree.end_tree_sync(self._active_process, strict=True)
             except Exception:
                 logger.exception("[agy] could not stop the child with a stale gate state")
 
@@ -505,18 +506,12 @@ class AgyStreamSession(SaglayiciSahipligi):
         kill_retry_failed = False
 
         async def _kill_with_retry() -> bool:
-            try:
-                process.kill()
+            if await process_tree.end_tree(process):
                 return True
-            except OSError:
-                if process.returncode is not None:
-                    return True
-                await asyncio.sleep(0.05)
-                try:
-                    process.kill()
-                    return True
-                except OSError:
-                    return process.returncode is not None
+            if process.returncode is not None:
+                return True
+            await asyncio.sleep(0.05)
+            return await process_tree.end_tree(process) or process.returncode is not None
 
         try:
             if force and process.returncode is None:
@@ -614,7 +609,7 @@ class AgyStreamSession(SaglayiciSahipligi):
                         denied = _remove_gate_state()
                 if process.returncode is None:
                     try:
-                        process.kill()
+                        process_tree.end_tree_sync(process, strict=True)
                     except Exception:
                         # Already gone, or the kill failed: the reap below
                         # retries it, and the child stays tracked until then.

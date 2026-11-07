@@ -117,3 +117,76 @@ async def kill_pids(pids: List[int]) -> None:
             os.kill(pid, signal.SIGKILL)
         except OSError:
             pass
+
+
+def _descendants_of(proc) -> List[int]:
+    try:
+        return collect_descendants(_pid_of(proc))
+    except Exception as exc:
+        logger.debug("[process-tree] collect for pid=%s failed: %s", _pid_of(proc), exc)
+        return []
+
+
+def _pid_of(proc) -> Optional[int]:
+    pid = getattr(proc, "pid", None)
+    return pid if isinstance(pid, int) else None
+
+
+def _kill_pids_sync(pids: List[int]) -> None:
+    """Sync twin of kill_pids for the sync kill sites. Never raises.
+
+    On Windows taskkill is started and not waited for: these sites run on the
+    event loop (some under the agy gate lock), and a blocking wait of up to
+    KILL_WAIT_S would freeze the whole backend while the OS ends the tree."""
+    if not pids:
+        return
+    if sys.platform == "win32":
+        from spawn_env import build_spawn_env
+
+        args = ["taskkill", "/T", "/F"]
+        for pid in pids:
+            args += ["/PID", str(pid)]
+        try:
+            subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, env=build_spawn_env(),
+                             creationflags=_CREATE_NO_WINDOW)
+        except Exception as exc:
+            logger.debug("[process-tree] taskkill pids=%s failed: %s", pids, exc)
+        return
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+
+
+async def end_tree(proc) -> bool:
+    """Kill `proc` and everything it started. True when proc.kill() went
+    through; never raises. The descendants are collected first because once the
+    parent is dead nothing links them to it (a Popen or an asyncio Process)."""
+    descendants = _descendants_of(proc)
+    killed = True
+    try:
+        proc.kill()
+    except Exception as exc:
+        killed = False
+        logger.debug("[process-tree] kill pid=%s failed: %s", _pid_of(proc), exc)
+    await kill_pids(descendants)
+    return killed
+
+
+def end_tree_sync(proc, *, strict: bool = False) -> bool:
+    """Blocking end_tree for sync kill sites. With strict=True a failing
+    proc.kill() is re-raised after the descendants are killed, for callers that
+    act on that error."""
+    descendants = _descendants_of(proc)
+    try:
+        proc.kill()
+    except Exception as exc:
+        _kill_pids_sync(descendants)
+        if strict:
+            raise
+        logger.debug("[process-tree] kill pid=%s failed: %s", _pid_of(proc), exc)
+        return False
+    _kill_pids_sync(descendants)
+    return True
