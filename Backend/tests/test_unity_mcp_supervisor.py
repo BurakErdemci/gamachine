@@ -31,14 +31,15 @@ def sup(monkeypatch, tmp_path):
     (tmp_path / "server.log").write_text("\n".join(f"line {i}" for i in range(30)), encoding="utf-8")
     manager = um.UnityMCPManager()
     calls = {"start": 0, "stop": 0}
-    state = {"healthy": True, "occupant": um.ServerIdentity.NONE}
+    state = {"healthy": True, "occupant": um.ServerIdentity.NONE, "timeouts": []}
 
     def start():
         calls["start"] += 1
         manager.process = _Proc(None)
         return True
 
-    async def health():
+    async def health(timeout=2.0):
+        state["timeouts"].append(timeout)
         return state["healthy"]
 
     monkeypatch.setattr(manager, "start_server", start)
@@ -75,17 +76,42 @@ def test_health_failures_counted_in_a_row(sup):
     manager, calls, state = sup
     manager.process = _Proc(None)
     state["healthy"] = False
-    run(manager.supervise_once())
-    run(manager.supervise_once())
-    assert calls["start"] == 0
+    for _ in range(8):
+        run(manager.supervise_once())
+    assert calls["start"] == 0  # 8 misses (~80 s) are patience, not death
     state["healthy"] = True  # a good check resets the count
     run(manager.supervise_once())
     state["healthy"] = False
-    run(manager.supervise_once())
-    run(manager.supervise_once())
+    for _ in range(8):
+        run(manager.supervise_once())
     assert calls["start"] == 0
     run(manager.supervise_once())
     assert calls["start"] == 1
+    assert set(state["timeouts"]) == {um._SUPERVISOR_HEALTH_TIMEOUT_S}
+
+
+def test_ninth_failure_restarts_and_dead_process_restarts_at_once(sup):
+    manager, calls, state = sup
+    manager.process = _Proc(None)
+    state["healthy"] = False
+    for _ in range(9):
+        run(manager.supervise_once())
+    assert calls["start"] == 1
+    manager.process = _Proc(code=1)
+    state["healthy"] = True
+    run(manager.supervise_once())
+    assert calls["start"] == 2  # an exited process needs no streak
+
+
+def test_status_poll_success_inside_the_streak_resets_it(sup):
+    manager, calls, state = sup
+    manager.process = _Proc(None)
+    state["healthy"] = False
+    for _ in range(8):
+        run(manager.supervise_once())
+    manager._last_health_ok = um.time.monotonic()  # a status poll got /health through
+    run(manager.supervise_once())
+    assert calls["start"] == 0 and manager._health_fails == 1
 
 
 def test_health_failures_inside_startup_grace_do_not_count(sup):
@@ -264,7 +290,7 @@ def test_gave_up_with_live_process_reports_blocked(sup, language, expected):
     manager._restart_times = [um.time.monotonic()] * 3
     manager.process = _Proc(None)
     state["healthy"] = False
-    for _ in range(3):
+    for _ in range(um._HEALTH_FAILS_TO_RESTART):
         run(manager.supervise_once())
     assert manager._gave_up and calls["start"] == 0
     status = run(manager._status())
@@ -291,12 +317,12 @@ def test_server_that_recovered_meanwhile_is_not_stopped(sup):
     manager, calls, state = sup
     manager.process = _Proc(None)
     state["healthy"] = False
-    run(manager.supervise_once())
-    run(manager.supervise_once())
+    for _ in range(um._HEALTH_FAILS_TO_RESTART - 1):
+        run(manager.supervise_once())
 
     async def scenario():
         await manager.mcp_lock.acquire()
-        task = asyncio.create_task(manager.supervise_once())  # third failure: decides "dead"
+        task = asyncio.create_task(manager.supervise_once())  # last failure: decides "dead"
         await asyncio.sleep(0.05)
         state["healthy"] = True
         manager.mcp_lock.release()
@@ -404,3 +430,89 @@ def test_autoconnect_is_written_only_after_health_answers(sup, monkeypatch):
                         lambda ws, auto_start=True: writes.append((ws, auto_start, health_calls["n"])))
     assert run(manager.write_autoconnect_when_ready("proj", timeout=10)) is True
     assert writes == [("proj", True, 4)]  # not written during the three failing health passes
+
+
+def _status_manager(manager, monkeypatch, instances):
+    """_status with a live process; /api/instances answers come from the `instances` list (an Exception raises)."""
+    monkeypatch.setattr(manager, "is_running", lambda: True)
+    monkeypatch.setattr(manager, "api_headers", lambda: {})
+
+    class _Res:
+        def __init__(self, code, data):
+            self.status_code, self._data = code, data
+
+        def json(self):
+            return self._data
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, url, **kw):
+            item = instances.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            return item
+
+    monkeypatch.setattr(um.httpx, "AsyncClient", _Client)
+    monkeypatch.setattr(um, "bridge_compile_errors", lambda path: [])
+    return _Res
+
+
+def test_status_holds_last_good_through_one_health_miss(sup, monkeypatch):
+    manager, _, state = sup
+    manager.process = _Proc(None)
+    res = _status_manager(manager, monkeypatch, [])
+    manager._started_at = um.time.monotonic() - 1000
+    queue = [res(200, {"instances": [{"name": "p@1"}]})]
+    _status_manager(manager, monkeypatch, queue)
+    good = run(manager._status())
+    assert good["status"] == "connected"
+    state["healthy"] = False
+    assert run(manager._status()) == good  # one miss: held
+    assert run(manager._status())["status"] == "starting"  # two in a row: starting
+
+
+def test_status_is_starting_when_server_never_answered_since_start(sup, monkeypatch):
+    manager, _, state = sup
+    manager.process = _Proc(None)
+    _status_manager(manager, monkeypatch, [])
+    state["healthy"] = False
+    assert run(manager._status())["status"] == "starting"
+
+
+def test_status_starting_when_supervisor_streak_is_two(sup, monkeypatch):
+    manager, _, state = sup
+    manager.process = _Proc(None)
+    res = _status_manager(manager, monkeypatch, [])
+    _status_manager(manager, monkeypatch, [res(200, {"instances": [{"name": "p@1"}]})])
+    run(manager._status())
+    state["healthy"] = False
+    manager._health_fails = 2
+    assert run(manager._status())["status"] == "starting"
+
+
+def test_one_instances_failure_keeps_connected_two_downgrade(sup, monkeypatch):
+    manager, _, _ = sup
+    manager.process = _Proc(None)
+    res = _status_manager(manager, monkeypatch, [])
+    queue = [res(200, {"instances": [{"name": "p@1"}]}), OSError("slow"), res(500, {}), res(200, {"instances": []})]
+    _status_manager(manager, monkeypatch, queue)
+    assert run(manager._status())["status"] == "connected"
+    held = run(manager._status())
+    assert held["status"] == "connected" and held["instances"] == [{"name": "p@1"}]
+    assert run(manager._status())["status"] == "running"  # second failure in a row
+    assert run(manager._status())["status"] == "running"  # explicit empty list
+
+
+def test_explicit_empty_instances_downgrades_at_once(sup, monkeypatch):
+    manager, _, _ = sup
+    manager.process = _Proc(None)
+    res = _status_manager(manager, monkeypatch, [])
+    queue = [res(200, {"instances": [{"name": "p@1"}]}), res(200, {"instances": []})]
+    _status_manager(manager, monkeypatch, queue)
+    assert run(manager._status())["status"] == "connected"
+    assert run(manager._status())["status"] == "running"

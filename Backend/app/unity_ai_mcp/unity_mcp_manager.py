@@ -33,7 +33,9 @@ _LEGACY_SCRIPT_HEADER = "// Gamachine — MCP bağlantı yapılandırması"
 _EXCLUDE_MARKER = "# Gamachine (local, not committed)"
 # Self-healing: a dead server is restarted at most _RESTART_CAP times per _RESTART_WINDOW_S.
 _SUPERVISE_INTERVAL_S = 10
-_HEALTH_FAILS_TO_RESTART = 3
+# 9 failed passes = ~90 s of continuous failure: a busy server answers /health late for 20-30 s (7 Nov 2026).
+_HEALTH_FAILS_TO_RESTART = 9
+_SUPERVISOR_HEALTH_TIMEOUT_S = 5.0
 _RESTART_CAP = 3
 _RESTART_WINDOW_S = 600
 _STARTUP_GRACE_S = 120  # uvx may be installing; health failures do not count yet
@@ -283,6 +285,7 @@ class UnityMCPManager:
         self.last_error: Optional[str] = None
         # Supervision state (see supervise_once). `enabled` is the "user wants it on" flag.
         self._health_fails = 0
+        self._reset_health_memory()
         self._restart_times: list[float] = []
         self._gave_up = False
         self._started_at = float("-inf")
@@ -710,6 +713,7 @@ class UnityMCPManager:
             self._starting = False
             self._started_at = time.monotonic()
             self._health_fails = 0
+            self._reset_health_memory()
             # Cache'de bu porta ait eski bir kimlik ölçümü kalmış olabilir
             # (ör. az önceki "yabancı" kararı). 2 sn boyunca ona güvenmek
             # başlattığımız sunucuyu "yabancı" göstermek demek.
@@ -736,6 +740,7 @@ class UnityMCPManager:
 
         # Durdurmanın ardından 2 sn boyunca "hâlâ ayakta" okunmasın.
         self.invalidate_identity_cache()
+        self._reset_health_memory()
 
         # Ata zinciri, ARADAKİ uvx ölmeden önce örneklenmeli: uvx gidince
         # dinleyici torun init'e evlat ediniliyor (ppid=1) ve "bizim" olduğu bir
@@ -790,6 +795,15 @@ class UnityMCPManager:
 
     # ─── Supervision ─────────────────────────────────────────────────────────
 
+    def _reset_health_memory(self) -> None:
+        """Forget what the current server last answered; start_server/stop_server call this."""
+        self._fail_streak_started = float("-inf")
+        self._last_health_ok = float("-inf")
+        self._status_health_misses = 0
+        self._instances_misses = 0
+        self._last_instances: Optional[list] = None
+        self._last_good_status: Optional[dict] = None
+
     def reset_supervision(self) -> None:
         """A user toggle starts the restart budget over."""
         self._restart_times.clear()
@@ -824,11 +838,16 @@ class UnityMCPManager:
         process = self.process
         exit_code = process.poll() if process is not None else None
         if process is not None and exit_code is None:
-            if await self.check_health():
+            if await self.check_health(timeout=_SUPERVISOR_HEALTH_TIMEOUT_S):
                 self._health_fails = 0
+                self._last_health_ok = time.monotonic()
                 return
             if time.monotonic() - self._started_at < _STARTUP_GRACE_S:
                 return
+            if self._last_health_ok > self._fail_streak_started:
+                self._health_fails = 0  # /health answered (e.g. to a status poll) since the streak began
+            if self._health_fails == 0:
+                self._fail_streak_started = time.monotonic()
             self._health_fails += 1
             if self._health_fails < _HEALTH_FAILS_TO_RESTART:
                 return
@@ -846,9 +865,14 @@ class UnityMCPManager:
             # A toggle may have run while we waited for the lock: it replaces the process.
             if not self.enabled or self._starting or self._gave_up or self.process is not process:
                 return
-            if process is not None and process.poll() is None and await self.check_health():
-                self._health_fails = 0  # recovered while we waited
-                return
+            if process is not None and process.poll() is None:
+                if await self.check_health(timeout=_SUPERVISOR_HEALTH_TIMEOUT_S):
+                    self._health_fails = 0  # recovered while we waited
+                    self._last_health_ok = time.monotonic()
+                    return
+                if self._last_health_ok > self._fail_streak_started:
+                    self._health_fails = 0  # answered since the streak began: a recovered server is never killed
+                    return
             now = time.monotonic()
             self._restart_times = [t for t in self._restart_times if now - t < _RESTART_WINDOW_S]
             if len(self._restart_times) >= _RESTART_CAP:
@@ -930,12 +954,12 @@ class UnityMCPManager:
             return None
         return f"http://{host}:{self.mcp_port}/mcp"
 
-    async def check_health(self) -> bool:
+    async def check_health(self, timeout: float = 2.0) -> bool:
         """HTTP sunucusunun ayakta olduğunu kontrol eder (/health)."""
         try:
             async with httpx.AsyncClient() as client:
                 res = await client.get(
-                    f"http://localhost:{self.mcp_port}/health", timeout=2.0
+                    f"http://localhost:{self.mcp_port}/health", timeout=timeout
                 )
                 healthy = res.status_code == 200
                 return healthy
@@ -1071,18 +1095,36 @@ class UnityMCPManager:
 
         healthy = await self.check_health()
         if not healthy:
+            self._status_health_misses += 1
+            # A busy server misses a check now and then (measured 7 Nov 2026): hold the last good answer
+            # through one miss, once the server has answered since its start.
+            answered = self._last_health_ok > self._started_at
+            if (answered and self._last_good_status is not None
+                    and self._status_health_misses < 2 and self._health_fails < 2):
+                return dict(self._last_good_status)
             return {"status": UnityMCPStatus.STARTING, "pid": pid, "port": self.mcp_port,
                     "instances": [], "reason": None}
+        self._status_health_misses = 0
+        self._last_health_ok = time.monotonic()
 
+        instances = None
         try:
             async with httpx.AsyncClient() as client:
                 res = await client.get(
                     f"http://localhost:{self.mcp_port}/api/instances",
                     headers=self.api_headers(), timeout=2.0
                 )
-                instances = res.json().get("instances", []) if res.status_code == 200 else []
+                if res.status_code == 200:
+                    instances = res.json().get("instances", [])
         except Exception:
-            instances = []
+            pass
+        if instances is not None:
+            self._instances_misses = 0
+            self._last_instances = instances
+        else:
+            self._instances_misses += 1
+            # One failed call keeps the last measured instances; a second in a row downgrades.
+            instances = self._last_instances if (self._instances_misses < 2 and self._last_instances) else []
 
         unity_status = UnityMCPStatus.CONNECTED if instances else UnityMCPStatus.RUNNING
         reason_code = None
@@ -1104,6 +1146,7 @@ class UnityMCPManager:
         }
         if reason_code is not None:
             result.update(reason_code=reason_code, reason_lines=reason_lines)
+        self._last_good_status = dict(result)
         return result
 
     # ─── Unity Paket Kurulumu ────────────────────────────────────────────────
