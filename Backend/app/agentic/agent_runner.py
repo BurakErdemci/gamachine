@@ -3608,7 +3608,8 @@ class AgentRunner:
             if _connectors_changed:
                 reasons.append("bağlayıcılar değişti")
             _running = _existing.running_work() if hasattr(_existing, "running_work") else []
-            if _running:
+            # The same predicate the CLI switch uses: a turn still streaming counts too.
+            if _session_has_running_work(_existing):
                 # Closing kills the app-server's whole process tree: keep the
                 # session as is (get_session returns it unchanged) and rebuild
                 # on the first turn start with no running work, as Claude does.
