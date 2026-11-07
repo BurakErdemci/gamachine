@@ -43,6 +43,11 @@ def hard_guards(monkeypatch):
 
 @pytest.fixture
 def mgr(monkeypatch):
+    # Other test files leave method overrides on the shared singleton; drop them so
+    # class-level patches here are what the instance sees.
+    for name in ("is_running", "check_unity_connected", "check_health"):
+        if name in vars(m.unity_mcp_manager):
+            monkeypatch.delattr(m.unity_mcp_manager, name)
     monkeypatch.setattr(m.unity_mcp_manager, "process", None)
     monkeypatch.setattr(m.unity_mcp_manager, "_starting", False)
     return m.unity_mcp_manager
