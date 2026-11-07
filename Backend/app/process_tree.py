@@ -58,8 +58,10 @@ def _parent_map_windows() -> dict:
 
 
 def _parent_map_posix() -> dict:
+    from spawn_env import build_spawn_env
+
     out = subprocess.run(["ps", "-A", "-o", "pid=,ppid="], capture_output=True,
-                         text=True, timeout=KILL_WAIT_S).stdout
+                         text=True, timeout=KILL_WAIT_S, env=build_spawn_env()).stdout
     parents = {}
     for line in out.splitlines():
         parts = line.split()
