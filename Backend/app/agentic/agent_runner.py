@@ -1839,6 +1839,7 @@ class AgentRunner:
     Gemini'nin native function calling özelliğini kullanır.
     """
     _agent_guide = ""
+    _unity_note = ""
 
     def __init__(
         self,
@@ -1916,6 +1917,11 @@ class AgentRunner:
         from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
         from unity_ai_mcp import unity_project_presence
 
+        # The guide follows the Unity MCP toggle (`enabled`), never the live
+        # state: the server dying or restarting, a dropped bridge or the open
+        # scene change mid-work, and a changed guide rebuilds the CLI session.
+        # The live state goes out as a per-turn note instead.
+        toggle_on = bool(unity_mcp_manager.enabled)
         unity_state = "off"
         if unity_mcp_manager.is_running():
             unity_state = "not_responding"
@@ -1935,9 +1941,11 @@ class AgentRunner:
                 scene = await asyncio.to_thread(unity_project_presence.active_scene, self.workspace_path)
             except Exception as exc:
                 logger.debug("Unity active scene could not be read: %s", exc)
+        language = getattr(self, "language", "tr")
+        self._unity_note = agent_guide.unity_note(language, unity_state, scene) if toggle_on else ""
         self._agent_guide = compose_agent_guide(
-            getattr(self, "language", "tr"), project_open=bool(getattr(self, "workspace_path", None)),
-            unity_state=unity_state, addendum=addendum, unity_scene=scene)
+            language, project_open=bool(getattr(self, "workspace_path", None)),
+            unity_state="connected" if toggle_on else "off", addendum=addendum)
 
     def _get_architect_wisdom(self) -> str:
         """
@@ -3386,6 +3394,8 @@ class AgentRunner:
                 self.session_reset_notice = "\n".join(filter(None, (self.session_reset_notice, _reset_notice)))
             if self.session_reset_notice:
                 message = f"{self.session_reset_notice}\n\n{message}"
+            if getattr(self, "_unity_note", ""):
+                message = f"{self._unity_note}\n\n{message}"
             if _defer_note:
                 message = f"{_defer_note}\n\n{message}"
 
@@ -3689,6 +3699,8 @@ class AgentRunner:
                     _session_guide = agent_guide.with_connectors(_session_guide)
                 message = _session_guide + "\n\n" + message
             session._ctx_injected = True
+        if getattr(self, "_unity_note", ""):
+            message = f"{self._unity_note}\n\n{message}"
         if _defer_note:
             message = f"{_defer_note}\n\n{message}"
         if self.generation_mode in ("auto", "balanced") and not getattr(self, "read_only", False):

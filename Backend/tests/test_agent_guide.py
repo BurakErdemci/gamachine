@@ -229,13 +229,16 @@ def test_codex_scene_save_hint_uses_manage_scene(monkeypatch):
 def test_unity_mapping_checks_once_with_two_second_overall_timeout(monkeypatch, running, answer, state):
     check = AsyncMock(side_effect=answer if isinstance(answer, Exception) else None,
                       return_value=answer if isinstance(answer, bool) else False)
+    monkeypatch.setattr(unity_mcp_manager, "enabled", True)
     monkeypatch.setattr(unity_mcp_manager, "is_running", lambda: running)
     monkeypatch.setattr(unity_mcp_manager, "check_unity_connected", check)
     monkeypatch.setattr(ar, "get_addendum", lambda: "SAVED_RULE")
     current = runner(language="tr", workspace_path="")
     with patch.object(ar.asyncio, "wait_for", wraps=asyncio.wait_for) as wait:
         asyncio.run(current._prepare_agent_guide())
-    assert current._agent_guide == guide.compose("tr", project_open=False, unity_state=state, addendum="SAVED_RULE")
+    # The guide follows the toggle only; the live state is the per-turn note.
+    assert current._agent_guide == guide.compose("tr", project_open=False, unity_state="connected", addendum="SAVED_RULE")
+    assert current._unity_note == guide.unity_note("tr", state)
     assert check.await_count == int(running)
     if running:
         assert wait.call_args.kwargs["timeout"] == 2.0
@@ -251,13 +254,15 @@ def test_unity_timeout_actually_cancels_a_stalled_check(monkeypatch):
                 await asyncio.Event().wait()
             finally:
                 cancelled.set()
+        monkeypatch.setattr(unity_mcp_manager, "enabled", True)
         monkeypatch.setattr(unity_mcp_manager, "is_running", lambda: True)
         monkeypatch.setattr(unity_mcp_manager, "check_unity_connected", check)
         monkeypatch.setattr(ar, "get_addendum", lambda: None)
         current = runner()
         await asyncio.wait_for(current._prepare_agent_guide(), timeout=3.0)
         assert cancelled.is_set()
-        assert current._agent_guide == guide.compose("en", project_open=True, unity_state="not_responding")
+        assert current._agent_guide == guide.compose("en", project_open=True, unity_state="connected")
+        assert current._unity_note == guide.unity_note("en", "not_responding")
     asyncio.run(scenario())
 
 

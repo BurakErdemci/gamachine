@@ -4,7 +4,7 @@ import asyncio
 import json
 import subprocess
 from types import SimpleNamespace
-from unittest.mock import MagicMock, Mock
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 from fastapi import BackgroundTasks, FastAPI, HTTPException
@@ -67,13 +67,17 @@ def test_runner_reads_scene_each_turn_and_tolerates_failure(monkeypatch, scene, 
     current.language = "en"
     read_scene = Mock(return_value=scene, side_effect=error)
     monkeypatch.setattr(presence, "active_scene", read_scene)
-    monkeypatch.setattr(unity_mcp_manager, "is_running", lambda: False)
+    monkeypatch.setattr(unity_mcp_manager, "enabled", True)
+    monkeypatch.setattr(unity_mcp_manager, "is_running", lambda: True)
+    monkeypatch.setattr(unity_mcp_manager, "check_unity_connected", AsyncMock(return_value=True))
     monkeypatch.setattr(agent_runner, "get_addendum", lambda: None)
     asyncio.run(current._prepare_agent_guide())
     asyncio.run(current._prepare_agent_guide())
     assert read_scene.call_count == 2
     read_scene.assert_called_with("Our Game")
-    assert current._agent_guide == agent_guide.compose("en", project_open=True, unity_state="off", unity_scene=scene)
+    # The scene reaches the agent as the per-turn note, never inside the guide.
+    assert current._agent_guide == agent_guide.compose("en", project_open=True, unity_state="connected")
+    assert current._unity_note == agent_guide.unity_note("en", "connected", scene)
 
 
 @pytest.fixture
