@@ -290,6 +290,26 @@ def _oturum_yeniden_kurma_gerekceleri(mevcut, *, model, effort, workspace, mcp_s
     return gerekceler
 
 
+# Per conversation: the reason set whose "applies after background tasks finish"
+# line the model already got, so a standing deferral is announced once.
+_DEFERRED_REASONS: Dict[Any, tuple] = {}
+
+
+def _oturum_karari(gerekceler: List[str], mevcut) -> str:
+    """Pure: what to do with the cached session given the rebuild reasons.
+
+    "keep" (no reasons), "switch_model" (only the model differs and the live
+    client can switch it in place), "defer" (a rebuild is due but background
+    tasks run: closing would kill them), "rebuild" (close and recreate).
+    """
+    if not gerekceler:
+        return "keep"
+    if (all(g.startswith("model ") for g in gerekceler)
+            and getattr(mevcut, "is_live", False) and getattr(mevcut, "_client", None) is not None):
+        return "switch_model"
+    return "defer" if getattr(mevcut, "_active_tasks", None) else "rebuild"
+
+
 def _remove_project_mcp_json(workspace_path: Optional[str]) -> None:
     """Ürünün kendi `.mcp.json` kayıtlarını kullanıcının projesinden ÇIKARIR.
 
@@ -2484,10 +2504,34 @@ Kullanıcı hangi dilde yazıyorsa o dilde cevap ver; mesajın dili belli değil
             workspace=_workspace, mcp_servers=mcp_servers_cfg,
             read_only=_read_only, agent_guide=_session_guide,
         )
-        if _reasons:
-            logger.info(f"[ClaudeSession] {', '.join(_reasons)}; session yeniden kuruluyor "
-                        f"(canlı bağlam sıfırlanır, DB özeti korunur)")
-            await close_session(self.conversation_id)
+        _decision = _oturum_karari(_reasons, _existing)
+        if _decision == "switch_model":
+            try:
+                await _existing._client.set_model(model)
+                _existing.model = model
+                logger.info(f"[ClaudeSession] {', '.join(_reasons)}; model canlı oturumda değiştirildi")
+                _decision = "keep"
+            except Exception as e:
+                logger.warning(f"[ClaudeSession] set_model başarısız ({e}); yeniden kurma yoluna düşülüyor")
+                _decision = "defer" if _existing._active_tasks else "rebuild"
+        _defer_note = ""
+        if _decision == "defer":
+            # Closing the session would kill its background tasks: keep it as is
+            # (kwargs below carry its own identity so get_session does not
+            # discard it either) and rebuild on the first turn with none running.
+            _key = tuple(_reasons)
+            logger.info(f"[ClaudeSession] {', '.join(_reasons)}; yeniden kurma "
+                        f"{len(_existing._active_tasks)} arka plan işi bitene kadar bekliyor")
+            if _DEFERRED_REASONS.get(self.conversation_id) != _key:
+                _DEFERRED_REASONS[self.conversation_id] = _key
+                _defer_note = (f"[Sistem] Ayar değişikliği ({', '.join(_reasons)}) "
+                               f"arka plan işleri bitince uygulanacak.")
+        else:
+            _DEFERRED_REASONS.pop(self.conversation_id, None)
+            if _decision == "rebuild":
+                logger.info(f"[ClaudeSession] {', '.join(_reasons)}; session yeniden kuruluyor "
+                            f"(canlı bağlam sıfırlanır, DB özeti korunur)")
+                await close_session(self.conversation_id)
 
         _session_kwargs = dict(
             model=model,
@@ -2513,6 +2557,11 @@ Kullanıcı hangi dilde yazıyorsa o dilde cevap ver; mesajın dili belli değil
             ],
             read_only=_read_only,
         )
+        if _decision == "defer":
+            _session_kwargs.update(
+                model=_existing.model, agent_guide=_existing.agent_guide, cwd=_existing.cwd,
+                mcp_servers=_existing.mcp_servers, effort=_existing.effort,
+                read_only=_existing.read_only)
 
         # Görsel: Claude Code SDK/headless satır-içi image-block'u modele SUNMUYOR
         # (SDK ContentBlock union'ında ImageBlock yok → blok sessizce düşer). Bu yüzden
@@ -2559,6 +2608,8 @@ Kullanıcı hangi dilde yazıyorsa o dilde cevap ver; mesajın dili belli değil
                 self.session_reset_notice = "\n".join(filter(None, (self.session_reset_notice, _reset_notice)))
             if self.session_reset_notice:
                 message = f"{self.session_reset_notice}\n\n{message}"
+            if _defer_note:
+                message = f"{_defer_note}\n\n{message}"
 
             _yielded = 0
             try:
