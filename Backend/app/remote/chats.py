@@ -160,6 +160,16 @@ def recent_messages(db, conv_id: int, limit: int = MESSAGES_LIMIT) -> List[dict]
     return out
 
 
+# The phone page prints any other kind as a bare log line, so the desktop-only
+# kinds (tool_result, the 2 s status heartbeat) would flood its chat log.
+PHONE_KINDS = frozenset({"text", "tool_call", "turn_start", "turn_end",
+                         "card_opened", "card_closed"})
+
+
+def phone_visible(event: dict) -> bool:
+    return event.get("kind") in PHONE_KINDS
+
+
 def phone_event(conv_id: int, event: dict) -> dict:
     kind = event.get("kind")
     out: Dict[str, Any] = {"type": "event", "chat_id": str(conv_id), "seq": event.get("seq"),

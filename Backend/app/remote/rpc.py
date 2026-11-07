@@ -158,7 +158,7 @@ class Dispatcher:
         backlog, sub = turn_events.join(conv, since or 0)
         events = backlog["events"] if since is not None else chats.current_turn_events(backlog["events"])
         result = {"chat_id": str(conv), "messages": messages,
-                  "events": [chats.phone_event(conv, e) for e in events],
+                  "events": [chats.phone_event(conv, e) for e in events if chats.phone_visible(e)],
                   "gap": bool(backlog["gap"]) if since is not None else False,
                   "epoch": backlog["epoch"], "last_seq": backlog["last_seq"]}
         while len(session.chats) >= session.MAX_OPEN_CHATS:
@@ -203,11 +203,13 @@ class Dispatcher:
                                             "epoch": backlog["epoch"], "last_seq": backlog["last_seq"]})
                     for e in backlog["events"]:
                         if e["seq"] > last_seq:
-                            await session.send(chats.phone_event(conv, e))
+                            if chats.phone_visible(e):
+                                await session.send(chats.phone_event(conv, e))
                             last_seq = e["seq"]
                 if event["seq"] <= last_seq:
                     continue
-                if not await session.send(chats.phone_event(conv, event)):
+                if chats.phone_visible(event) and not await session.send(
+                        chats.phone_event(conv, event)):
                     return
                 last_seq = event["seq"]
         except asyncio.CancelledError:

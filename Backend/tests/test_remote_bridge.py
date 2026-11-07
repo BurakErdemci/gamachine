@@ -641,6 +641,24 @@ async def test_open_chat_then_live_events_then_close(env):
         await phone.next_push(lambda m: m.get("type") == "event", timeout=0.4)
 
 
+async def test_desktop_only_turn_kinds_never_reach_the_phone(env):
+    # The phone page prints an unknown kind as a bare log line; the 2 s status
+    # heartbeat would flood a followed chat with "status" lines.
+    phone = await pair_phone(env)
+    conv = make_chat(env.db)
+    turn_events.append(conv, "turn_start", provider="claude", model="m", origin="wake")
+    turn_events.append(conv, "status", tokens=10, detail="")
+    turn_events.append(conv, "tool_result", name="bash", success=True, summary="ok")
+    r = await phone.request("open_chat", chat_id=str(conv))
+    assert [e["kind"] for e in r["result"]["events"]] == ["turn_start"]
+    turn_events.append(conv, "status", tokens=20, detail="")
+    turn_events.append(conv, "tool_call", name="bash", summary="ls")
+    ev = await phone.next_push(lambda m: m.get("type") == "event")
+    assert ev["kind"] == "tool_call"
+    r = await phone.request("open_chat", chat_id=conv, since_seq=0)
+    assert [e["kind"] for e in r["result"]["events"]] == ["turn_start", "tool_call"]
+
+
 async def test_open_chat_since_seq_replays_the_ring(env):
     phone = await pair_phone(env)
     conv = make_chat(env.db)
