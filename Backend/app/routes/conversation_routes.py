@@ -24,6 +24,7 @@ from error_i18n import localize_sse, translate_detail
 from schemas import ChatRequest, HiddenRequest, NewConversationRequest, RenameRequest, SideChatRequest
 
 from agentic.agent_runner import AgentRunner
+from agentic import api_compaction
 from agentic import approval_mode
 from agentic import cards as _cards
 from agentic import chat_model
@@ -309,6 +310,10 @@ def _live_context_reading(conv_id: int, family: str | None) -> dict | None:
         elif family == "opencode":
             from providers.oneshot_cli import peek_session
             session = peek_session(conv_id, family)
+        elif family is None:
+            # API-key chats: the provider's usage of the chat's last request.
+            from agentic.agent_runner import api_context_reading
+            return api_context_reading(conv_id)
         else:
             return None
         reading = getattr(session, "context_reading", None)
@@ -1816,6 +1821,14 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
             return _usage_cache_read(user_id, family or "-", empty)
 
         if provider_type != "subscription":
+            reading = _live_context_reading(conv_id, None) if kind == "context" else None
+            if isinstance(reading, dict) and reading.get("window", 0) > 0:
+                # Measured from the provider's own usage of the last request.
+                return {"status": "ok", "kind": "context",
+                        "text": (f"Context: {_fmt_tokens(reading['used'])} / "
+                                 f"{_fmt_tokens(reading['window'])} tokens "
+                                 f"({round(reading['percent'])}%) · {reading.get('model') or model_name}"),
+                        "context_usage": _context_usage_payload(db, conv_id, reading=reading)}
             return _fallback("unsupported", "cloud")
         if family not in _REPORT_FAMILIES_WITH_SESSIONS:
             return _fallback("unsupported", "provider")
@@ -2189,6 +2202,16 @@ Max 300 kelime. Türkçe yaz.
 ÖZET:"""
 
         async def _ai_summary() -> str:
+            if provider_type in api_compaction.API_PROVIDERS:
+                # API chats: the loop's own summariser over the whole history, on
+                # the chat's model (the one auto-compaction uses), not the last
+                # 20 messages cut to 500 chars.
+                from providers import model_catalog
+                prompt = api_compaction.summary_prompt(
+                    api_compaction.render_turns(api_compaction.history_turns(messages, drop_last=False)),
+                    prior=prior,
+                    budget_chars=2 * model_catalog.context_window(provider_type, model_name))
+                return await api_compaction.summarize(provider_type, api_key, model_name, prompt)
             provider = AIProviderManager.get_provider(
                 {"provider_type": provider_type, "model_name": model_name, "api_key": api_key}
             )
@@ -2435,7 +2458,18 @@ Max 300 kelime. Türkçe yaz.
                 resume_id=_resume_id,
                 mail_depth=mail_depth,
                 task_wake=bool(ticketed_wake and not mail_rows),
+                api_history=api_compaction.history_turns(history_messages),
+                api_memory=memory if isinstance(memory, str) else "",
             )
+            _conv = request.conversation_id
+
+            def _store_compaction(summary: str, through_id) -> None:
+                # Auto-compaction of an API turn: the same storage as the button.
+                if through_id is None:
+                    db.save_memory(_conv, summary)
+                else:
+                    db.compact_conversation(_conv, summary, through_id=through_id)
+            runner.compaction_store = _store_compaction
         except Exception:
             _end_turn_reply(request.conversation_id, _turn_user_row, None, "error")
             raise

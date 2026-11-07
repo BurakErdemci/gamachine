@@ -172,6 +172,11 @@ EN: dict[str, str] = {
      "Yan soru için başka bir model seç."):
         "Side questions are unavailable with Antigravity (agy), which runs one turn at a time. "
         "Choose another model for the side question.",
+    # API-loop auto-compaction (agentic/agent_runner.py `_before_request`)
+    "🗜️ Bağlam dolmak üzere — eski turlar özetleniyor": "🗜️ Context almost full — summarising older turns",
+    "🗜️ Eski turlar özetlendi, devam ediliyor": "🗜️ Older turns summarised, continuing",
+    "Bağlam özetlenemedi; tur özetsiz sürüyor ve bağlam sınırına takılabilir.":
+        "The context could not be summarised; the turn continues without a summary and may hit the context limit.",
 }
 
 PATTERNS: list[tuple[re.Pattern, str]] = [

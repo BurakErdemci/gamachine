@@ -187,7 +187,8 @@ def test_tools_added_during_execution_reach_next_request(run_case, monkeypatch,
             return [t.name for t in tools]
         if provider == "openai":
             return [t["function"]["name"] for t in tools]
-        return [t["name"] for t in tools]
+        # Anthropic's server web_search tool (typed, no schema) is not a registry tool.
+        return [t["name"] for t in tools if "type" not in t]
 
     assert names(requests[0]) == ["read_file"]
     expected = ["read_file", "newly_enabled_tool"]
@@ -229,7 +230,8 @@ def test_shared_system_and_invalid_image(run_case, provider, image, caplog):
     else:
         system = request["messages"][0]["content"]
         parts = request["messages"][1]["content"]
-    assert "[DİL]\nKullanıcı hangi dilde yazıyorsa o dilde cevap ver; mesajın dili belli değilse Türkçe konuş." in system
+    assert ("[Language]\nReply in the language of the user's latest message; when it "
+            "cannot be told, reply in Turkish.") in system
     assert "C# kodu yazmak için KULLANMA" not in system
     assert "architect wisdom" in system
     assert len(parts) == 1

@@ -399,3 +399,120 @@ def clear_cache() -> None:
     global _or_cache
     _cache.clear()
     _or_cache = None
+
+
+# ── Context windows and prices for the API-key agent loop ────────────────────
+#
+# Source for every Anthropic row: the claude-api skill's model table (cached
+# 2026-10-06, read 7 Nov 2026): context window, $/MTok input and output, and
+# its prompt-caching economics (cache read 0.1x input unless a model lists its
+# own rate, 5-minute cache write 1.25x input). Only rows with a published
+# price are here; any other model gets `None` cost, never a guess. A model
+# OpenRouter's catalogue prices is priced from that catalogue when it is
+# already loaded in this process (no fetch happens on this path).
+#
+# Matching is by id prefix, longest first, so `claude-opus-5-5` does not fall
+# to the `claude-opus-5` row.
+_ANTHROPIC_MODELS: Dict[str, dict] = {
+    # id prefix: window, input, output, cache read ($/MTok; None = 0.1x input)
+    "claude-fable-5-1":  {"window": 1_000_000, "in": 10.00, "out": 50.00, "read": 0.25},
+    "claude-mythos-5-1": {"window": 1_000_000, "in": 10.00, "out": 50.00, "read": 0.25},
+    "claude-fable-5":    {"window": 1_000_000, "in": 10.00, "out": 50.00, "read": 1.00},
+    "claude-mythos-5":   {"window": 1_000_000, "in": 10.00, "out": 50.00, "read": 1.00},
+    "claude-opus-5-5":   {"window": 1_000_000, "in": 4.00, "out": 20.00, "read": 0.20},
+    "claude-opus-5":     {"window": 1_000_000, "in": 5.00, "out": 25.00, "read": None},
+    "claude-opus-4-8":   {"window": 1_000_000, "in": 5.00, "out": 25.00, "read": None},
+    "claude-opus-4-7":   {"window": 1_000_000, "in": 5.00, "out": 25.00, "read": None},
+    "claude-opus-4-6":   {"window": 1_000_000, "in": 5.00, "out": 25.00, "read": None},
+    "claude-sonnet-5-5": {"window": 1_000_000, "in": 2.00, "out": 10.00, "read": 0.20},
+    "claude-sonnet-5":   {"window": 1_000_000, "in": 2.00, "out": 10.00, "read": None},
+    "claude-sonnet-4-6": {"window": 1_000_000, "in": 3.00, "out": 15.00, "read": None},
+    # Haiku 5.5 bills prompts over 100K tokens at $0.50 / $2.50 (see `_LONG_TIER`).
+    "claude-haiku-5-5":  {"window": 1_000_000, "in": 0.10, "out": 0.50, "read": None},
+    "claude-haiku-4-5":  {"window": 200_000, "in": 1.00, "out": 5.00, "read": None},
+}
+_LONG_TIER: Dict[str, tuple[int, float, float]] = {
+    "claude-haiku-5-5": (100_000, 0.50, 2.50),
+}
+_CACHE_WRITE_FACTOR = 1.25
+_CACHE_READ_FACTOR = 0.1
+
+# Window used when a model's own is unknown. Gemini API models ship a
+# 1,048,576-token window; the OpenAI-compatible default is the conservative
+# 128K most of those hosts serve, so auto-compaction fires early rather than
+# after a context-length error.
+_DEFAULT_WINDOW: Dict[str, int] = {
+    "google": 1_048_576,
+    "anthropic": 200_000,
+}
+_FALLBACK_WINDOW = 128_000
+
+
+def _anthropic_row(model: str) -> Optional[dict]:
+    m = (model or "").lower()
+    for prefix in sorted(_ANTHROPIC_MODELS, key=len, reverse=True):
+        if m.startswith(prefix):
+            return _ANTHROPIC_MODELS[prefix]
+    return None
+
+
+def _openrouter_row(provider: str, model: str) -> Optional[dict]:
+    """The OpenRouter catalogue row for this model, only if already cached."""
+    if not _or_cache or not _or_cache[1]:
+        return None
+    oid = openrouter_id_for(provider, model or "")
+    return _or_cache[1].get(oid) if oid else None
+
+
+def context_window(provider: str, model: str) -> int:
+    """Context window in tokens for `model`; a per-provider default when unknown."""
+    if provider == "anthropic":
+        row = _anthropic_row(model)
+        if row:
+            return row["window"]
+    entry = _openrouter_row(provider, model)
+    if entry and entry.get("context_length"):
+        return entry["context_length"]
+    return _DEFAULT_WINDOW.get(provider, _FALLBACK_WINDOW)
+
+
+def _per_token(value) -> Optional[float]:
+    try:
+        price = float(value)
+    except (TypeError, ValueError):
+        return None
+    return price if price >= 0 else None
+
+
+def turn_cost_usd(provider: str, model: str, input_tokens: int, output_tokens: int,
+                  cache_read_tokens: int = 0, cache_write_tokens: int = 0) -> Optional[float]:
+    """USD cost of one request from a published price, or None when unknown.
+
+    `input_tokens` is the uncached input only (Anthropic reports cache reads and
+    writes apart from it; the OpenAI and Gemini adapters subtract the cached
+    share before calling).
+    """
+    row = _anthropic_row(model) if provider == "anthropic" else None
+    if row:
+        price_in, price_out = row["in"], row["out"]
+        tier = next((t for p, t in _LONG_TIER.items() if (model or "").lower().startswith(p)), None)
+        prompt = input_tokens + cache_read_tokens + cache_write_tokens
+        if tier and prompt > tier[0]:
+            price_in, price_out = tier[1], tier[2]
+        read = row["read"] if row["read"] is not None and not (tier and prompt > tier[0]) \
+            else price_in * _CACHE_READ_FACTOR
+        total = (input_tokens * price_in + output_tokens * price_out
+                 + cache_read_tokens * read
+                 + cache_write_tokens * price_in * _CACHE_WRITE_FACTOR)
+        return round(total / 1_000_000, 6)
+    entry = _openrouter_row(provider, model)
+    pricing = (entry or {}).get("pricing") or {}
+    prompt, completion = _per_token(pricing.get("prompt")), _per_token(pricing.get("completion"))
+    if prompt is None or completion is None:
+        return None
+    read = _per_token(pricing.get("input_cache_read"))
+    write = _per_token(pricing.get("input_cache_write"))
+    total = (input_tokens * prompt + output_tokens * completion
+             + cache_read_tokens * (read if read is not None else prompt)
+             + cache_write_tokens * (write if write is not None else prompt))
+    return round(total, 6)

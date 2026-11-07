@@ -14,6 +14,8 @@ import hashlib
 import logging
 import asyncio
 import contextlib
+import inspect
+import types
 import re
 import secrets
 import subprocess
@@ -42,7 +44,32 @@ from tools.tool_registry import (
     get_openai_tool_declarations, get_gemini_tool_declarations, _all_tool_definitions,
     run_tool_definitions,
 )
-from prompts import SYSTEM_PROMPT
+from prompts import SYSTEM_PROMPT as _PRODUCT_PROMPT
+
+# Base system prompt of the API-key agent loop. English and language-neutral:
+# the reply language comes from the user's message (rule added per run). The
+# Turkish product prompt stays on the plain fallback path (`_run_simple`).
+# write_file is the only file-writing tool and it replaces the whole file, so
+# the whole-file rule stays.
+SYSTEM_PROMPT = """You are Gamachine, an architect and autonomous software agent for Unity and C#, working on the user's Unity project through the tools you are given.
+
+[Scope]
+- Unity and C# are your field. Developer work that serves the Unity project is in scope too: git, file organisation, project configuration, small helper scripts such as build scripts.
+- Tools whose names start with `manage_` come from the Unity MCP server and act on the Unity Editor directly; they exist only while Unity is connected.
+
+[Never guess]
+Do not guess, assume or recall the Unity Editor's state (scene contents, hierarchy, objects, component values, assets, console output). Read it with a tool. If no tool can reach it, say so plainly.
+
+[How to work]
+1. Explore first: read files and search before changing anything. Skip exploration for questions that do not depend on the project's state.
+2. Act with the tools: write files, run commands, change the editor through MCP.
+3. Verify: check `read_console` for errors; when the result is visual, take a screenshot and judge it.
+4. write_file replaces the whole file, so always write the complete file content, never a fragment.
+5. When you show code in a reply, start each code block with its path on the first line, for example `// path: Assets/Scripts/Player.cs`.
+6. Keep the user's latest technical instructions in every update.
+
+[Style]
+Short, direct and technical. Do not repeat greetings or recaps of the project in follow-up replies."""
 import agent_guide
 import harness_notes
 from agent_guide import compose as compose_agent_guide, get_addendum
@@ -970,13 +997,159 @@ class _APITurn(NamedTuple):
     thoughts: list
     calls: list  # (id, name, args, raw SDK call)
     truncated: bool
-    input_tokens: int
+    input_tokens: int  # uncached input of this request
     output_tokens: int
     malformed: bool = False
     raw: Any = None
+    cache_read: int = 0
+    cache_write: int = 0
+    # Anthropic `pause_turn`: a server tool (web search) stopped mid-turn; the
+    # assistant content goes back as is and the same turn is requested again.
+    paused: bool = False
 
 
-class _GeminiAdapter:
+# Tool output cap, the Claude Code CLI's own default for command output
+# (BASH_MAX_OUTPUT_LENGTH, 30 000 chars). The old 8 000 cut a mid-size file read
+# in half and appended a Turkish note the model had to translate.
+_TOOL_RESULT_LIMIT = 30_000
+
+
+def _cut_tool_result(text: str) -> str:
+    if len(text) <= _TOOL_RESULT_LIMIT:
+        return text
+    return text[:_TOOL_RESULT_LIMIT] + f"… [truncated {len(text) - _TOOL_RESULT_LIMIT} chars]"
+
+
+# OpenAI-compatible hosts; the summariser builds its client from the same table.
+OPENAI_BASE_URLS = {
+    "openrouter": "https://openrouter.ai/api/v1",
+    "deepseek": "https://api.deepseek.com",
+    "groq": "https://api.groq.com/openai/v1",
+    "moonshot": "https://api.moonshot.ai/v1",
+    "z-ai": "https://api.z.ai/api/paas/v4",
+    "nvidia": "https://integrate.api.nvidia.com/v1",
+}
+
+
+def _uses_responses_api(provider_type: str, model_name: str) -> bool:
+    """GPT-6-class models call tools only through the Responses API."""
+    return ((provider_type or "").lower() == "openai"
+            and (model_name or "").lower().startswith("gpt-6"))
+
+
+# Last measured context use per API chat, read by the chat's context gauge.
+_API_CONTEXT_READINGS: Dict[int, dict] = {}
+
+
+def api_context_reading(conversation_id) -> Optional[dict]:
+    """`{"used", "window", "percent", "model"}` of the chat's last API request."""
+    return _API_CONTEXT_READINGS.get(conversation_id)
+
+
+def _field(obj, name, default=None):
+    if isinstance(obj, dict):
+        return obj.get(name, default)
+    return getattr(obj, name, default)
+
+
+def _dump(obj) -> dict:
+    """An SDK object as a request-shaped dict (None fields left out)."""
+    if isinstance(obj, dict):
+        return dict(obj)
+    dump = getattr(obj, "model_dump", None)
+    if callable(dump):
+        return dump(exclude_none=True)
+    return {k: v for k, v in vars(obj).items() if v is not None}
+
+
+def _is_stream(value) -> bool:
+    # A client that answers a `stream=True` request with a whole response (test
+    # doubles, a proxy that ignores the flag) is read the non-streamed way.
+    return hasattr(value, "__aiter__")
+
+
+async def _close_stream(stream) -> None:
+    for name in ("aclose", "close"):
+        closer = getattr(stream, name, None)
+        if callable(closer):
+            result = closer()
+            if inspect.isawaitable(result):
+                await result
+            return
+
+
+class _APIHistory:
+    """What the three API adapters share: deltas, stored history, compaction.
+
+    `items` is the provider-native message list, `first` the index of its first
+    conversation item. `item_ids` maps an item (by identity) to the DB row it
+    was built from, so a compaction knows which stored rows it replaced.
+    """
+    on_text = None
+    first = 0
+
+    def _emit(self, text):
+        if text and self.on_text is not None:
+            self.on_text(text)
+
+    def _add(self, item, row_id=None):
+        self.items.append(item)
+        if row_id is not None:
+            self.item_ids[id(item)] = row_id
+
+    def _load_history(self, runner):
+        self.item_ids = {}
+        for turn in getattr(runner, "api_history", None) or []:
+            self._add(self.history_item(turn["role"], turn["text"]), turn.get("id"))
+
+    def fold(self, cut: int, summary_text: str) -> Optional[int]:
+        """Replace items[first:cut] with one user summary; the newest replaced row id."""
+        old = self.items[self.first:cut]
+        ids = [self.item_ids[id(x)] for x in old if id(x) in self.item_ids]
+        self.items[self.first:cut] = [self.history_item("user", summary_text)]
+        return max(ids) if ids else None
+
+
+def _gemini_text_only(part) -> bool:
+    return bool(getattr(part, "text", None)) and all(
+        getattr(part, name, None) is None
+        for name in ("function_call", "function_response", "inline_data", "file_data",
+                     "executable_code", "code_execution_result", "tool_call", "tool_response"))
+
+
+def _merge_gemini_part(parts: list, part) -> None:
+    """Streamed text arrives in fragments; one text part per run keeps the view's
+    `"\\n".join` from splitting a sentence and keeps a late thought signature."""
+    prev = parts[-1] if parts else None
+    if (prev is not None and _gemini_text_only(prev) and _gemini_text_only(part)
+            and bool(getattr(prev, "thought", False)) == bool(getattr(part, "thought", False))
+            and not getattr(prev, "thought_signature", None)):
+        parts[-1] = gtypes.Part(text=prev.text + part.text, thought=getattr(prev, "thought", None),
+                                thought_signature=getattr(part, "thought_signature", None))
+    else:
+        parts.append(part)
+
+
+# Gemini models whose API refused google_search next to function tools; asked once
+# per process, then the model runs with function tools only.
+_GEMINI_SEARCH_OFF: set = set()
+
+
+def _gemini_search_supported(model_name: str) -> bool:
+    # Built-in tools next to function calling (ToolConfig
+    # include_server_side_tool_invocations, google-genai 2.27) is a Gemini 3+ feature.
+    match = re.search(r"gemini-(\d+)", (model_name or "").lower())
+    return bool(match) and int(match.group(1)) >= 3 and model_name not in _GEMINI_SEARCH_OFF
+
+
+def _gemini_search_refused(exc: Exception) -> bool:
+    m = str(exc).lower()
+    return (("search" in m or "built-in" in m or "server_side" in m or "server-side" in m)
+            and any(w in m for w in ("not supported", "unsupported", "not enabled", "invalid",
+                                     "cannot be used", "not allowed")))
+
+
+class _GeminiAdapter(_APIHistory):
     label = "Google"
     error_prefix = "AI hatası:"
     iptal_edilebilir = False
@@ -984,9 +1157,39 @@ class _GeminiAdapter:
     def preflight(self, runner):
         return None
 
+    @property
+    def items(self):
+        return self.contents
+
+    def history_item(self, role, text):
+        return gtypes.Content(role="user" if role == "user" else "model",
+                              parts=[gtypes.Part(text=text)])
+
+    def is_assistant(self, item):
+        return getattr(item, "role", None) == "model"
+
+    def render(self, item):
+        out = []
+        for part in getattr(item, "parts", None) or []:
+            text, fc, thought = _gemini_part_view(part)
+            response = getattr(part, "function_response", None)
+            if fc is not None and getattr(fc, "name", None):
+                out.append(f"[tool call {fc.name} {json.dumps(dict(getattr(fc, 'args', None) or {}), ensure_ascii=False, default=str)}]")
+            elif response is not None:
+                out.append(f"[tool result {getattr(response, 'name', '')}: {getattr(response, 'response', '')}]")
+            elif text and not thought:
+                out.append(text)
+        role = "ASSISTANT" if self.is_assistant(item) else "USER"
+        return f"{role}: " + "\n".join(out)
+
     def prepare(self, runner, system, user_message, images):
         from providers.effort_caps import map_effort
         self.client = genai.Client(api_key=runner.api_key)
+        # The async client streams and is cancellable: Stop cancels the request
+        # task and the dropped stream takes its late chunks with it. A client
+        # without `aio` (an older SDK shape) falls back to the blocking call.
+        self.streaming = hasattr(self.client, "aio")
+        self.iptal_edilebilir = self.streaming
         effort = map_effort("google", runner.model_name,
                             runner.effort_level or runner.thinking_level or "auto")
         thinking = None
@@ -999,10 +1202,12 @@ class _GeminiAdapter:
             thinking = gtypes.ThinkingConfig(thinking_budget=4096)
         self.config = gtypes.GenerateContentConfig(system_instruction=system,
                                                    thinking_config=thinking)
+        self.contents = []
+        self._load_history(runner)
         parts = [gtypes.Part(text=user_message)]
         parts.extend(gtypes.Part(inline_data=gtypes.Blob(mime_type=mime, data=data))
                      for mime, data in images)
-        self.contents = [gtypes.Content(role="user", parts=parts)]
+        self.contents.append(gtypes.Content(role="user", parts=parts))
 
     def refresh_tools(self, runner):
         declarations = get_gemini_tool_declarations()[0]["function_declarations"]
@@ -1013,19 +1218,60 @@ class _GeminiAdapter:
                                        parameters=d["parameters"])
             for d in declarations
         ])]
+        self.search = _gemini_search_supported(runner.model_name)
+        if self.search:
+            self.config.tools.append(gtypes.Tool(google_search=gtypes.GoogleSearch()))
+            self.config.tool_config = gtypes.ToolConfig(include_server_side_tool_invocations=True)
+        else:
+            self.config.tool_config = None
 
     async def request(self, runner):
-        return await asyncio.to_thread(self.client.models.generate_content,
-                                       model=runner.model_name, contents=self.contents,
-                                       config=self.config)
+        if not self.streaming:
+            return await asyncio.to_thread(self.client.models.generate_content,
+                                           model=runner.model_name, contents=self.contents,
+                                           config=self.config)
+        try:
+            return await self._stream(runner)
+        except Exception as exc:
+            if not self.search or not _gemini_search_refused(exc):
+                raise
+            _GEMINI_SEARCH_OFF.add(runner.model_name)
+            logger.warning("[provider] %s refused google_search next to function tools; "
+                           "continuing without web search: %s", runner.model_name, exc)
+            self.refresh_tools(runner)
+            return await self._stream(runner)
+
+    async def _stream(self, runner):
+        stream = await self.client.aio.models.generate_content_stream(
+            model=runner.model_name, contents=self.contents, config=self.config)
+        parts, usage, reason, seen = [], None, None, False
+        try:
+            async for chunk in stream:
+                usage = getattr(chunk, "usage_metadata", None) or usage
+                for candidate in (getattr(chunk, "candidates", None) or [])[:1]:
+                    seen = True
+                    reason = getattr(candidate, "finish_reason", None) or reason
+                    for part in getattr(getattr(candidate, "content", None), "parts", None) or []:
+                        text, fc, thought = _gemini_part_view(part)
+                        if text and fc is None and not thought:
+                            self._emit(text)
+                        _merge_gemini_part(parts, part)
+        finally:
+            await _close_stream(stream)
+        candidates = ([types.SimpleNamespace(content=gtypes.Content(role="model", parts=parts),
+                                             finish_reason=reason)] if seen else [])
+        return types.SimpleNamespace(candidates=candidates, usage_metadata=usage)
 
     def view(self, response):
         usage = getattr(response, "usage_metadata", None)
-        input_tokens = getattr(usage, "prompt_token_count", 0) or 0
-        output_tokens = getattr(usage, "candidates_token_count", 0) or 0
+        prompt = getattr(usage, "prompt_token_count", 0) or 0
+        cached = getattr(usage, "cached_content_token_count", 0) or 0
+        output_tokens = ((getattr(usage, "candidates_token_count", 0) or 0)
+                         + (getattr(usage, "thoughts_token_count", 0) or 0))
         candidates = getattr(response, "candidates", None) or []
         if not candidates:
-            return _APITurn([], [], [], False, input_tokens, output_tokens, True)
+            return _APITurn([], [], [], False, prompt - cached, output_tokens, True,
+                            cache_read=cached)
         candidate = candidates[0]
         content = getattr(candidate, "content", None)
         texts, thoughts, calls = [], [], []
@@ -1039,7 +1285,7 @@ class _GeminiAdapter:
         reason = getattr(candidate, "finish_reason", None)
         return _APITurn(texts, thoughts, calls,
                         getattr(reason, "name", str(reason)) == "MAX_TOKENS",
-                        input_tokens, output_tokens, raw=content)
+                        prompt - cached, output_tokens, raw=content, cache_read=cached)
 
     def append_assistant(self, turn):
         if turn.raw is not None:
@@ -1060,11 +1306,21 @@ class _GeminiAdapter:
         self.contents.append(gtypes.Content(role="user", parts=self.results))
         if self.screenshots:
             self.contents.append(gtypes.Content(role="user", parts=[gtypes.Part(
-                text="(capture_unity_screenshot çıktısı — ekran görüntüsü:)")
+                text="(capture_unity_screenshot output — screenshot:)")
             ] + self.screenshots))
 
 
-class _AnthropicAdapter:
+def _anthropic_web_search_tool(model_name: str) -> dict:
+    # Dynamic-filtering variant where the claude-api skill lists it
+    # (Opus 5.5/5/4.8/4.7/4.6, Sonnet 5.5/5/4.6); the basic one elsewhere.
+    m = (model_name or "").lower()
+    dynamic = m.startswith(("claude-opus-5", "claude-opus-4-8", "claude-opus-4-7",
+                            "claude-opus-4-6", "claude-sonnet-5", "claude-sonnet-4-6"))
+    return {"type": "web_search_20260209" if dynamic else "web_search_20250305",
+            "name": "web_search", "max_uses": 5}
+
+
+class _AnthropicAdapter(_APIHistory):
     label = "Sağlayıcı"
     error_prefix = "Claude hatası:"
     iptal_edilebilir = True
@@ -1072,41 +1328,167 @@ class _AnthropicAdapter:
     def preflight(self, runner):
         return None
 
+    @property
+    def items(self):
+        return self.messages
+
+    def history_item(self, role, text):
+        return {"role": "user" if role == "user" else "assistant", "content": text}
+
+    def is_assistant(self, item):
+        return item.get("role") == "assistant"
+
+    def render(self, item):
+        content = item.get("content")
+        out = []
+        for block in ([{"type": "text", "text": content}] if isinstance(content, str) else content or []):
+            kind = _field(block, "type")
+            if kind == "text":
+                out.append(_field(block, "text") or "")
+            elif kind in ("tool_use", "server_tool_use"):
+                out.append(f"[tool call {_field(block, 'name')} "
+                           f"{json.dumps(_field(block, 'input') or {}, ensure_ascii=False, default=str)}]")
+            elif kind == "tool_result":
+                result = _field(block, "content")
+                if not isinstance(result, str):
+                    result = " ".join(_field(b, "text") or "" for b in result or [])
+                out.append(f"[tool result: {result}]")
+        role = "ASSISTANT" if self.is_assistant(item) else "USER"
+        return f"{role}: " + "\n".join(out)
+
+    def fold(self, cut, summary_text):
+        through = super().fold(cut, summary_text)
+        # Thinking blocks are bound to the prefix that produced it; the summary
+        # changes that prefix, so the kept tail goes back without them (the
+        # claude-api skill's no-beta recovery shape: strip every thinking block,
+        # keep text and tool_use).
+        for message in self.messages:
+            if message.get("role") == "assistant" and not isinstance(message.get("content"), str):
+                message["content"] = [b for b in message["content"]
+                                      if _field(b, "type") not in ("thinking", "redacted_thinking")]
+        return through
+
     def prepare(self, runner, system, user_message, images):
         from providers.effort_caps import map_effort
         self.client = anthropic.AsyncAnthropic(api_key=runner.api_key)
         self.system = [{"type": "text", "text": system,
                         "cache_control": {"type": "ephemeral"}}]
+        self.messages = []
+        self._load_history(runner)
         parts = [{"type": "text", "text": user_message}]
         parts.extend({"type": "image", "source": {"type": "base64", "media_type": mime,
                                                   "data": data}} for mime, data in images)
-        self.messages = [{"role": "user", "content": parts}]
+        self.messages.append({"role": "user", "content": parts})
         self.effort = map_effort("anthropic", runner.model_name,
                                  runner.effort_level or runner.thinking_level or "auto"
                                  ).get("anthropic_extra_body")
 
     def refresh_tools(self, runner):
-        self.tools = [{"name": t["name"], "description": t["description"],
-                       "input_schema": t["parameters"]} for t in runner._tool_definitions()]
-        if self.tools:
-            self.tools[-1]["cache_control"] = {"type": "ephemeral"}
+        self.tools = [_anthropic_web_search_tool(runner.model_name)]
+        self.tools += [{"name": t["name"], "description": t["description"],
+                        "input_schema": t["parameters"]} for t in runner._tool_definitions()]
+        self.tools[-1]["cache_control"] = {"type": "ephemeral"}
+
+    def _marked(self):
+        """Messages with the rolling cache breakpoint on the last one.
+
+        Breakpoints: system, last tool, last message (3 of the API's 4). The
+        last message is history from the next request on, so each request
+        reads the prefix the previous one wrote.
+        """
+        messages = list(self.messages)
+        last = dict(messages[-1])
+        content = last.get("content")
+        if isinstance(content, str):
+            if not content:
+                return messages
+            content = [{"type": "text", "text": content}]
+        content = list(content or [])
+        if content and isinstance(content[-1], dict):
+            content[-1] = {**content[-1], "cache_control": {"type": "ephemeral"}}
+            last["content"] = content
+            messages[-1] = last
+        return messages
 
     async def request(self, runner):
-        return await self.client.messages.create(
+        result = await self.client.messages.create(
             model=runner.model_name, max_tokens=_anthropic_loop_max_tokens(runner.model_name),
-            system=self.system, messages=self.messages, tools=self.tools,
-            timeout=_SAGLAYICI_ZAMAN_ASIMI,
+            system=self.system, messages=self._marked(), tools=self.tools,
+            timeout=_SAGLAYICI_ZAMAN_ASIMI, stream=True,
             **({"extra_body": self.effort} if self.effort else {}))
+        if not _is_stream(result):
+            return result
+        return await self._collect(result)
+
+    async def _collect(self, stream):
+        """Raw stream events -> the final message, content as request-shaped dicts."""
+        blocks, partial = {}, {}
+        usage = {"input_tokens": 0, "output_tokens": 0,
+                  "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+        stop = None
+
+        def take_usage(source):
+            for key in usage:
+                value = getattr(source, key, None)
+                if value is not None:
+                    usage[key] = value
+        try:
+            async for event in stream:
+                kind = getattr(event, "type", None)
+                if kind == "message_start":
+                    take_usage(getattr(event.message, "usage", None))
+                elif kind == "content_block_start":
+                    block = _dump(event.content_block)
+                    if block.get("type") in ("tool_use", "server_tool_use"):
+                        partial[event.index] = ""
+                    blocks[event.index] = block
+                elif kind == "content_block_delta":
+                    block, delta = blocks.get(event.index), event.delta
+                    dtype = getattr(delta, "type", None)
+                    if block is None:
+                        continue
+                    if dtype == "text_delta":
+                        block["text"] = block.get("text", "") + delta.text
+                        self._emit(delta.text)
+                    elif dtype == "input_json_delta":
+                        partial[event.index] = partial.get(event.index, "") + delta.partial_json
+                    elif dtype == "thinking_delta":
+                        block["thinking"] = block.get("thinking", "") + delta.thinking
+                    elif dtype == "signature_delta":
+                        block["signature"] = delta.signature
+                    elif dtype == "citations_delta":
+                        block.setdefault("citations", []).append(_dump(delta.citation))
+                elif kind == "content_block_stop":
+                    if partial.get(event.index):
+                        try:
+                            blocks[event.index]["input"] = json.loads(partial[event.index])
+                        except (json.JSONDecodeError, KeyError):
+                            blocks[event.index]["input"] = {}
+                elif kind == "message_delta":
+                    stop = getattr(event.delta, "stop_reason", None) or stop
+                    take_usage(getattr(event, "usage", None))
+        finally:
+            await _close_stream(stream)
+        return types.SimpleNamespace(content=[blocks[i] for i in sorted(blocks)],
+                                     stop_reason=stop,
+                                     usage=types.SimpleNamespace(**usage))
 
     def view(self, response):
         blocks = getattr(response, "content", None) or []
         usage = getattr(response, "usage", None)
+        stop = getattr(response, "stop_reason", None)
         return _APITurn(
-            [b.text for b in blocks if b.type == "text" and b.text], [],
-            [(b.id, b.name, b.input, b) for b in blocks if b.type == "tool_use"],
-            getattr(response, "stop_reason", None) == "max_tokens",
+            [_field(b, "text") for b in blocks if _field(b, "type") == "text" and _field(b, "text")],
+            [_field(b, "thinking") for b in blocks
+             if _field(b, "type") == "thinking" and _field(b, "thinking")],
+            [(_field(b, "id"), _field(b, "name"), _field(b, "input") or {}, b)
+             for b in blocks if _field(b, "type") == "tool_use"],
+            stop == "max_tokens",
             getattr(usage, "input_tokens", 0) or 0,
-            getattr(usage, "output_tokens", 0) or 0, raw=blocks)
+            getattr(usage, "output_tokens", 0) or 0, raw=blocks,
+            cache_read=getattr(usage, "cache_read_input_tokens", 0) or 0,
+            cache_write=getattr(usage, "cache_creation_input_tokens", 0) or 0,
+            paused=stop == "pause_turn")
 
     def append_assistant(self, turn):
         self.messages.append({"role": "assistant", "content": turn.raw})
@@ -1125,44 +1507,53 @@ class _AnthropicAdapter:
         self.messages.append({"role": "user", "content": self.results})
 
 
-class _OpenAIAdapter:
+class _OpenAIAdapter(_APIHistory):
     label = "Sağlayıcı"
     error_prefix = "OpenAI/API hatası:"
     iptal_edilebilir = True
+    first = 1  # messages[0] is the system message
 
     def preflight(self, runner):
-        if ((runner.provider_type or "").lower() == "openai"
-                and (runner.model_name or "").lower().startswith("gpt-6")):
-            return AgentEvent("error", {"message": (
-                f"'{runner.model_name}' bu sürümde bulut API anahtarıyla araç kullanamıyor: "
-                "GPT-6 araç çağrısını yalnız Responses API'si üzerinden yapıyor, "
-                "uygulama ise Chat Completions kullanıyor. Codex (abonelik) yolundan "
-                "'Codex (GPT-6 Astra)' seçeneğini kullanın ya da başka bir bulut modeli seçin."
-            )})
         return None
+
+    @property
+    def items(self):
+        return self.messages
+
+    def history_item(self, role, text):
+        return {"role": "user" if role == "user" else "assistant", "content": text}
+
+    def is_assistant(self, item):
+        return item.get("role") == "assistant"
+
+    def render(self, item):
+        role = item.get("role")
+        content = item.get("content")
+        if not isinstance(content, str):
+            content = " ".join(p.get("text", "") for p in content or [] if isinstance(p, dict))
+        if role == "tool":
+            return f"TOOL RESULT ({item.get('name', '')}): {content}"
+        calls = " ".join(f"[tool call {c['function']['name']} {c['function']['arguments']}]"
+                         for c in item.get("tool_calls") or [])
+        return f"{'ASSISTANT' if role == 'assistant' else 'USER'}: {content or ''} {calls}".rstrip()
 
     def prepare(self, runner, system, user_message, images):
         from providers.effort_caps import map_effort
         self.client = openai.AsyncOpenAI(api_key=runner.api_key)
-        base_url = {
-            "openrouter": "https://openrouter.ai/api/v1",
-            "deepseek": "https://api.deepseek.com",
-            "groq": "https://api.groq.com/openai/v1",
-            "moonshot": "https://api.moonshot.ai/v1",
-            "z-ai": "https://api.z.ai/api/paas/v4",
-            "nvidia": "https://integrate.api.nvidia.com/v1",
-        }.get(runner.provider_type)
+        base_url = OPENAI_BASE_URLS.get(runner.provider_type)
         if base_url:
             self.client.base_url = base_url
+        self.openrouter = runner.provider_type == "openrouter"
         system_content = system
-        if runner.provider_type == "openrouter":
+        if self.openrouter:
             system_content = [{"type": "text", "text": system,
                                "cache_control": {"type": "ephemeral"}}]
         parts = [{"type": "text", "text": user_message}]
         parts.extend({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{data}"}}
                      for mime, data in images)
-        self.messages = [{"role": "system", "content": system_content},
-                         {"role": "user", "content": parts}]
+        self.messages = [{"role": "system", "content": system_content}]
+        self._load_history(runner)
+        self.messages.append({"role": "user", "content": parts})
         self.effort = map_effort(runner.provider_type, runner.model_name,
                                  runner.effort_level or runner.thinking_level or "auto")
 
@@ -1171,21 +1562,81 @@ class _OpenAIAdapter:
         if runner.read_only:
             self.tools = [t for t in self.tools if _read_only_tool_declared(t["function"]["name"])]
 
+    def _marked(self):
+        """OpenRouter: rolling breakpoint on the last user message (Anthropic and
+        Gemini models honour it there, the rest ignore it); OpenAI, DeepSeek and the
+        others cache prefixes implicitly and get no extra field."""
+        if not self.openrouter:
+            return self.messages
+        messages = list(self.messages)
+        for i in range(len(messages) - 1, self.first - 1, -1):
+            if messages[i].get("role") != "user":
+                continue
+            content = messages[i].get("content")
+            parts = ([{"type": "text", "text": content}] if isinstance(content, str) and content
+                     else list(content or []))
+            for j in range(len(parts) - 1, -1, -1):
+                if isinstance(parts[j], dict) and parts[j].get("type") == "text":
+                    parts[j] = {**parts[j], "cache_control": {"type": "ephemeral"}}
+                    messages[i] = {**messages[i], "content": parts}
+                    return messages
+            return messages
+        return messages
+
     async def request(self, runner):
         extra = self.effort.get("extra_body")
-        return await self.client.chat.completions.create(
-            model=runner.model_name, messages=self.messages, tools=self.tools,
+        result = await self.client.chat.completions.create(
+            model=runner.model_name, messages=self._marked(), tools=self.tools,
             tool_choice="auto", timeout=_SAGLAYICI_ZAMAN_ASIMI,
+            stream=True, stream_options={"include_usage": True},
             **self.effort.get("request_params", {}),
             **({"extra_body": extra} if extra else {}))
+        if not _is_stream(result):
+            return result
+        return await self._collect(result)
+
+    async def _collect(self, stream):
+        """Chunks -> one completion: text joined, tool calls assembled by index."""
+        content, calls, finish, usage, seen = [], {}, None, None, False
+        try:
+            async for chunk in stream:
+                usage = getattr(chunk, "usage", None) or usage
+                for choice in (getattr(chunk, "choices", None) or [])[:1]:
+                    seen = True
+                    finish = getattr(choice, "finish_reason", None) or finish
+                    delta = getattr(choice, "delta", None)
+                    piece = getattr(delta, "content", None)
+                    if piece:
+                        content.append(piece)
+                        self._emit(piece)
+                    for call in getattr(delta, "tool_calls", None) or []:
+                        slot = calls.setdefault(getattr(call, "index", 0) or 0,
+                                                {"id": None, "name": "", "arguments": ""})
+                        slot["id"] = getattr(call, "id", None) or slot["id"]
+                        function = getattr(call, "function", None)
+                        if function is not None:
+                            slot["name"] = slot["name"] or (getattr(function, "name", None) or "")
+                            slot["arguments"] += getattr(function, "arguments", None) or ""
+        finally:
+            await _close_stream(stream)
+        tool_calls = [types.SimpleNamespace(
+            id=slot["id"] or f"call_{index}", type="function",
+            function=types.SimpleNamespace(name=slot["name"], arguments=slot["arguments"] or "{}"))
+            for index, slot in sorted(calls.items())]
+        message = types.SimpleNamespace(content="".join(content) or None,
+                                        tool_calls=tool_calls or None)
+        choices = [types.SimpleNamespace(message=message, finish_reason=finish)] if seen else []
+        return types.SimpleNamespace(choices=choices, usage=usage)
 
     def view(self, response):
         usage = getattr(response, "usage", None)
-        input_tokens = getattr(usage, "prompt_tokens", 0) or 0
+        prompt = getattr(usage, "prompt_tokens", 0) or 0
+        cached = getattr(getattr(usage, "prompt_tokens_details", None), "cached_tokens", 0) or 0
         output_tokens = getattr(usage, "completion_tokens", 0) or 0
         choices = getattr(response, "choices", None) or []
         if not choices:
-            return _APITurn([], [], [], False, input_tokens, output_tokens, True)
+            return _APITurn([], [], [], False, prompt - cached, output_tokens, True,
+                            cache_read=cached)
         message = choices[0].message
         calls = []
         for call in message.tool_calls or []:
@@ -1196,7 +1647,7 @@ class _OpenAIAdapter:
             calls.append((call.id, call.function.name, args, call))
         return _APITurn([message.content] if message.content else [], [], calls,
                         getattr(choices[0], "finish_reason", None) == "length",
-                        input_tokens, output_tokens, raw=message)
+                        prompt - cached, output_tokens, raw=message, cache_read=cached)
 
     def append_assistant(self, turn):
         message = {"role": "assistant"}
@@ -1214,9 +1665,132 @@ class _OpenAIAdapter:
                               "content": result_str})
         if screenshot:
             self.messages.append({"role": "user", "content": [
-                {"type": "text", "text": "[Screenshot — yukarıdaki tool sonucuyla ilgili görsel]"},
+                {"type": "text", "text": "[Screenshot — image for the tool result above]"},
                 {"type": "image_url", "image_url": {"url": screenshot}},
             ]})
+
+    def finish_results(self):
+        pass
+
+
+class _OpenAIResponsesAdapter(_APIHistory):
+    """OpenAI Responses API, for the models that call tools only there (GPT-6).
+
+    `store=False` keeps the conversation on this side like every other path;
+    reasoning items come back encrypted and are sent back as they came.
+    """
+    label = "Sağlayıcı"
+    error_prefix = "OpenAI/API hatası:"
+    iptal_edilebilir = True
+
+    def preflight(self, runner):
+        return None
+
+    @property
+    def items(self):
+        return self.input
+
+    def history_item(self, role, text):
+        return {"role": "user" if role == "user" else "assistant", "content": text}
+
+    def is_assistant(self, item):
+        return (_field(item, "role") == "assistant"
+                or _field(item, "type") in ("function_call", "reasoning"))
+
+    def render(self, item):
+        kind = _field(item, "type")
+        if kind == "function_call":
+            return f"ASSISTANT: [tool call {_field(item, 'name')} {_field(item, 'arguments')}]"
+        if kind == "function_call_output":
+            return f"TOOL RESULT: {_field(item, 'output')}"
+        if kind == "reasoning":
+            return ""
+        content = _field(item, "content")
+        if not isinstance(content, str):
+            content = " ".join(_field(p, "text") or "" for p in content or [])
+        return f"{'ASSISTANT' if self.is_assistant(item) else 'USER'}: {content}"
+
+    def prepare(self, runner, system, user_message, images):
+        from providers.effort_caps import map_effort
+        self.client = openai.AsyncOpenAI(api_key=runner.api_key)
+        self.instructions = system
+        self.input = []
+        self._load_history(runner)
+        parts = [{"type": "input_text", "text": user_message}]
+        parts.extend({"type": "input_image", "image_url": f"data:{mime};base64,{data}",
+                      "detail": "auto"} for mime, data in images)
+        self.input.append({"role": "user", "content": parts})
+        level = map_effort(runner.provider_type, runner.model_name,
+                           runner.effort_level or runner.thinking_level or "auto"
+                           ).get("request_params", {}).get("reasoning_effort")
+        self.reasoning = {"effort": level} if level else None
+
+    def refresh_tools(self, runner):
+        functions = [t["function"] for t in get_openai_tool_declarations()]
+        if runner.read_only:
+            functions = [f for f in functions if _read_only_tool_declared(f["name"])]
+        self.tools = [{"type": "function", "name": f["name"],
+                       "description": f.get("description", ""),
+                       "parameters": f.get("parameters"), "strict": False} for f in functions]
+
+    async def request(self, runner):
+        result = await self.client.responses.create(
+            model=runner.model_name, instructions=self.instructions, input=self.input,
+            tools=self.tools, stream=True, store=False,
+            include=["reasoning.encrypted_content"], timeout=_SAGLAYICI_ZAMAN_ASIMI,
+            **({"reasoning": self.reasoning} if self.reasoning else {}))
+        if not _is_stream(result):
+            return result
+        final = None
+        try:
+            async for event in result:
+                kind = getattr(event, "type", None)
+                if kind == "response.output_text.delta":
+                    self._emit(getattr(event, "delta", ""))
+                elif kind in ("response.completed", "response.incomplete", "response.failed"):
+                    final = event.response
+        finally:
+            await _close_stream(result)
+        if final is None:
+            raise RuntimeError("the Responses stream ended without a final response")
+        if getattr(final, "status", None) == "failed":
+            error = getattr(final, "error", None)
+            raise RuntimeError(getattr(error, "message", None) or "response failed")
+        return final
+
+    def view(self, response):
+        output = list(_field(response, "output") or [])
+        usage = _field(response, "usage")
+        prompt = getattr(usage, "input_tokens", 0) or 0
+        cached = getattr(getattr(usage, "input_tokens_details", None), "cached_tokens", 0) or 0
+        texts, calls = [], []
+        for item in output:
+            kind = _field(item, "type")
+            if kind == "message":
+                texts += [_field(p, "text") for p in _field(item, "content") or []
+                          if _field(p, "type") == "output_text" and _field(p, "text")]
+            elif kind == "function_call":
+                try:
+                    args = json.loads(_field(item, "arguments") or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    args = {}
+                calls.append((_field(item, "call_id"), _field(item, "name"), args, item))
+        details = _field(response, "incomplete_details")
+        truncated = (_field(response, "status") == "incomplete"
+                     and _field(details, "reason") == "max_output_tokens")
+        return _APITurn(texts, [], calls, truncated, prompt - cached,
+                        getattr(usage, "output_tokens", 0) or 0, raw=output, cache_read=cached)
+
+    def append_assistant(self, turn):
+        self.input.extend(_dump(item) for item in turn.raw)
+
+    def append_result(self, call, result_str, screenshot):
+        self.input.append({"type": "function_call_output", "call_id": call[0],
+                           "output": result_str})
+        if screenshot:
+            self.input.append({"role": "user", "content": [
+                {"type": "input_text", "text": "[Screenshot — image for the tool result above]"},
+                {"type": "input_image", "image_url": screenshot, "detail": "auto"}]})
 
     def finish_results(self):
         pass
@@ -1249,6 +1823,8 @@ class AgentRunner:
         mail_depth: int = 0,
         side_turn: Optional[SideTurn] = None,
         task_wake: bool = False,
+        api_history: Optional[List[dict]] = None,
+        api_memory: str = "",
     ):
         # A wake turn for finished background tasks: a busy Claude session
         # defers it instead of being reset (the reset kills the CLI's tasks).
@@ -1290,6 +1866,14 @@ class AgentRunner:
         self.videos = videos  # [{"kind":"path"|"url", ...}] → _prepare_videos ile kareye çevrilir
         self.use_thinking = thinking_level != "off"
         self._agent_guide = ""
+        # API-key loop only: the stored conversation as user/assistant turns
+        # (`api_compaction.history_turns`), sent as real provider messages; None
+        # means none was handed over and `context` is used as before.
+        self.api_history = api_history
+        self.api_memory = api_memory or ""
+        # Set by the route: (summary, through_row_id) -> stores an auto-compaction.
+        self.compaction_store = None
+        self._ctx_used = 0
 
     async def _prepare_agent_guide(self) -> None:
         from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
@@ -1332,7 +1916,7 @@ class AgentRunner:
                 try:
                     with open(full_path, "r", encoding="utf-8") as f:
                         content = f.read()
-                        return f"\n\n[PROJE KURALLARI (ARCHITECT.md)]\n{content}\n"
+                        return f"\n\n[Project rules ({p})]\n{content}\n"
                 except Exception as e:
                     logger.warning(f"Wisdom dosyası okunamadı ({p}): {e}")
         return ""
@@ -1560,10 +2144,9 @@ class AgentRunner:
         sağlayıcılarında; CLI/abonelik ve ollama'da kimlik zaten net."""
         if self.provider_type in ("subscription", "ollama"):
             return ""
-        return (f"\n\n[MODEL KİMLİĞİN] Sen '{self.model_name}' modelisin ve "
-                f"'{self.provider_type}' sağlayıcısı üzerinden çalışıyorsun. Kimliğin veya hangi "
-                f"model olduğun sorulursa BUNU söyle; farklı bir model (Claude/GPT/Gemini vb.) "
-                f"olduğunu İDDİA ETME.")
+        return (f"\n\n[Your identity] You are the model '{self.model_name}', running through "
+                f"the '{self.provider_type}' provider. If asked who you are or which model you "
+                f"are, say exactly this; do not claim to be a different model.")
 
     def _tool_definitions(self) -> list:
         """Every tool definition this runner offers the model."""
@@ -1573,7 +2156,8 @@ class AgentRunner:
         return defs
 
     async def _await_provider(
-        self, istek: "asyncio.Task", *, iptal_edilebilir: bool = True
+        self, istek: "asyncio.Task", *, iptal_edilebilir: bool = True,
+        deltas: "asyncio.Queue | None" = None,
     ) -> AsyncGenerator[AgentEvent, None]:
         """Sağlayıcı isteği beklenirken kalp atışı yayar; tur ölürse isteği iptal eder.
 
@@ -1599,17 +2183,41 @@ class AgentRunner:
         kalmasın diye sonucunu okuyan bir done-callback bağlanıyor (aşağıya bak).
         """
         gecen = 0.0
+        # `deltas`: text fragments a streaming request pushes while it runs; each
+        # batch becomes a `text` event as it arrives (the renderer appends them,
+        # the final `response` replaces the whole). A delta resets the silence count.
+        getter = None
         try:
             while True:
-                biten, _ = await asyncio.wait({istek}, timeout=_KALP_ATISI_SN)
-                if biten:
+                if deltas is not None and getter is None:
+                    getter = asyncio.ensure_future(deltas.get())
+                biten, _ = await asyncio.wait({istek, *([getter] if getter else [])},
+                                              timeout=_KALP_ATISI_SN,
+                                              return_when=asyncio.FIRST_COMPLETED)
+                if getter is not None and getter in biten:
+                    parca = [getter.result()]
+                    getter = None
+                    while not deltas.empty():
+                        parca.append(deltas.get_nowait())
+                    gecen = 0.0
+                    yield AgentEvent("text", {"content": "".join(parca)})
+                if istek in biten:
+                    if deltas is not None and not deltas.empty():
+                        parca = []
+                        while not deltas.empty():
+                            parca.append(deltas.get_nowait())
+                        yield AgentEvent("text", {"content": "".join(parca)})
                     return
+                if biten:
+                    continue
                 gecen += _KALP_ATISI_SN
                 yield AgentEvent("status", {"detail": (
                     f"⏳ {self.model_name} {gecen:g} sn'dir yanıt vermedi — sağlayıcı "
                     f"hâlâ işliyor (Durdur ile iptal edebilirsin)"
                 )})
         finally:
+            if getter is not None and not getter.done():
+                getter.cancel()
             # `done()` ise DOKUNULMAZ: biten bir isteğin sonucunu (ya da
             # istisnasını) çağıran `result()` ile okuyor, burada beklemek onu
             # yutardı. Yalnız gerçekten askıda kalmış bir istek iptal edilir.
@@ -1810,24 +2418,18 @@ class AgentRunner:
             await events.aclose()
 
     def _api_system_instruction(self, toolset=None):
-        system = f"""{SYSTEM_PROMPT}
-
-Sen Unity projesi üzerinde çalışan bir AI asistanısın. Sana verilen araçları kullanarak projeyi keşfedebilir, dosyaları okuyabilir, arama yapabilir ve kod yazabilirsin.
-
-[ÇALIŞMA PRENSİBİ - HAYATİ KURALLAR]
-1. ÖNCE projeyi keşfet (dosya oku, ara).
-2. KOD YAZARKEN: KESİNLİKLE parça kod (snippet) verme. Sadece değişen yeri değil, dosyanın TAMAMINI yazmak ZORUNDASIN.
-3. KOD BLOKLARI: Her kod bloğunun İSTİSNASIZ İLK SATIRINA yolu ekle:
-// path: Assets/Scripts/Tam/Dosya/Yolu.cs
-
-4. Kullanıcının en son verdiği teknik talimatları asla unutma, her güncellemede bunları koru.
-5. Eğer tam dosyayı yazmazsan sistem çalışmaz ve kullanıcıya hatalı bilgi vermiş olursun.
-
-[BAĞLAM]
-{self.context or "Yeni sohbet."}
-
-[DİL]
-Kullanıcı hangi dilde yazıyorsa o dilde cevap ver; mesajın dili belli değilse {'Türkçe' if self.language == 'tr' else 'İngilizce'} konuş."""
+        fallback = "Turkish" if self.language == "tr" else "English"
+        parts = [SYSTEM_PROMPT,
+                 "[Language]\nReply in the language of the user's latest message; when it "
+                 f"cannot be told, reply in {fallback}."]
+        if getattr(self, "api_history", None) is None:
+            # No stored history handed over (side questions, direct callers): the
+            # context text is all this run has.
+            if self.context:
+                parts.append(f"[Context]\n{self.context}")
+        elif getattr(self, "api_memory", ""):
+            parts.append(f"[Earlier conversation summary]\n{self.api_memory}")
+        system = "\n\n".join(parts)
         guide = toolset.with_guide(self._agent_guide) if toolset is not None else self._agent_guide
         return (system + "\n\n" + guide
                 + self._get_architect_wisdom() + self._identity_note())
@@ -1846,8 +2448,58 @@ Kullanıcı hangi dilde yazıyorsa o dilde cevap ver; mesajın dili belli değil
             if toolset is not None:
                 await toolset.aclose()
 
+    def _record_context(self, used: int, window: int) -> None:
+        self._ctx_used = used
+        if self.conversation_id is not None and window > 0:
+            _API_CONTEXT_READINGS[self.conversation_id] = {
+                "used": used, "window": window, "percent": 100.0 * used / window,
+                "model": self.model_name}
+
+    async def _before_request(self, adapter, iteration: int, window: int):
+        """Per-iteration hook, run before every provider request of the API loop.
+
+        Today it compacts the conversation once the last request used
+        `AUTO_COMPACT_SHARE` of the window; later work (mid-turn messages, job
+        wakes) hooks in here too.
+        """
+        from agentic import api_compaction
+        if getattr(adapter, "items", None) is None or window <= 0:
+            return
+        if self._ctx_used < api_compaction.AUTO_COMPACT_SHARE * window:
+            return
+        cut = api_compaction.plan_cut(adapter.items, adapter.is_assistant, adapter.first)
+        if cut is None:
+            logger.warning("API loop %s: context at %s/%s tokens but nothing old enough to "
+                           "compact", self.model_name, self._ctx_used, window)
+            return
+        yield AgentEvent("status", {"detail": "🗜️ Bağlam dolmak üzere — eski turlar özetleniyor"})
+        rendered = [adapter.render(item) for item in adapter.items[adapter.first:cut]]
+        prompt = api_compaction.summary_prompt(rendered, budget_chars=int(window * 2))
+        try:
+            summary = await api_compaction.summarize(self.provider_type, self.api_key,
+                                                     self.model_name, prompt)
+        except Exception as exc:
+            from secret_redaction import redact_secrets
+            logger.warning("API loop compaction failed: %s", redact_secrets(str(exc)))
+            summary = ""
+        if not summary:
+            yield AgentEvent("warning", {"message": (
+                "Bağlam özetlenemedi; tur özetsiz sürüyor ve bağlam sınırına takılabilir.")})
+            self._ctx_used = 0
+            return
+        through = adapter.fold(cut, api_compaction.summary_message(summary))
+        store = getattr(self, "compaction_store", None)
+        if store is not None:
+            try:
+                await asyncio.to_thread(store, summary, through)
+            except Exception:
+                logger.exception("API loop compaction summary not stored")
+        self._ctx_used = sum(len(adapter.render(item)) for item in adapter.items) // 4
+        yield AgentEvent("status", {"detail": "🗜️ Eski turlar özetlendi, devam ediliyor"})
+
     async def _api_turns(self, adapter, user_message, toolset):
         from secret_redaction import redact_secrets
+        from providers import model_catalog
 
         preflight = adapter.preflight(self)
         if preflight is not None:
@@ -1865,12 +2517,22 @@ Kullanıcı hangi dilde yazıyorsa o dilde cevap ver; mesajın dili belli değil
                 logger.warning("Skipping invalid initial image data URL")
         if toolset is not None:
             await toolset.sync()
-        adapter.prepare(self, self._api_system_instruction(toolset), user_message, images)
+        system = self._api_system_instruction(toolset)
+        adapter.prepare(self, system, user_message, images)
+        window = model_catalog.context_window(self.provider_type, self.model_name)
+        # Until the first usage arrives, a chars/4 estimate of what is about to
+        # be sent: a long stored history is compacted before the first request.
+        self._ctx_used = 0
+        if getattr(adapter, "items", None) is not None:
+            self._ctx_used = (len(system) + sum(len(adapter.render(i)) for i in adapter.items)) // 4
         turn_t0 = time.time()
-        turn_in = turn_out = 0
+        totals = {"input": 0, "output": 0, "read": 0, "write": 0}
+        cost = 0.0
         _progress = _ProgressGuard()
         for iteration in range(MAX_ITERATIONS):
             logger.info("API loop %s iteration %s", self.provider_type, iteration + 1)
+            async for event in self._before_request(adapter, iteration, window):
+                yield event
             if toolset is not None:
                 # A switch flipped since the last request takes effect on this one.
                 await toolset.sync()
@@ -1878,19 +2540,25 @@ Kullanıcı hangi dilde yazıyorsa o dilde cevap ver; mesajın dili belli değil
                 adapter.refresh_tools(self)
             response = None
             last_error = ""
+            streamed = False
             for retry in range(3):
+                deltas = asyncio.Queue()
+                adapter.on_text = deltas.put_nowait
                 try:
                     request = asyncio.create_task(adapter.request(self))
                     async with contextlib.aclosing(self._await_provider(
-                            request, iptal_edilebilir=adapter.iptal_edilebilir)) as waiting:
+                            request, iptal_edilebilir=adapter.iptal_edilebilir,
+                            deltas=deltas)) as waiting:
                         async for event in waiting:
+                            streamed = streamed or event.type == "text"
                             yield event
                     response = request.result()
                     break
                 except Exception as e:
                     raw_error = str(e).lower()
                     error = redact_secrets(str(e))
-                    code = provider_retry_code(raw_error)
+                    # Text already on screen would be repeated by a retry.
+                    code = None if streamed else provider_retry_code(raw_error)
                     no_tools = "function calling is not enabled" in raw_error
                     logger.error("Provider %s failed: %s", self.provider_type, error,
                                  exc_info=not code or no_tools)
@@ -1938,8 +2606,18 @@ Kullanıcı hangi dilde yazıyorsa o dilde cevap ver; mesajın dili belli değil
                 return
 
             turn = adapter.view(response)
-            turn_in += turn.input_tokens
-            turn_out += turn.output_tokens
+            totals["input"] += turn.input_tokens
+            totals["output"] += turn.output_tokens
+            totals["read"] += turn.cache_read
+            totals["write"] += turn.cache_write
+            # From model_catalog's price table; None (unknown) poisons the sum.
+            request_cost = model_catalog.turn_cost_usd(
+                self.provider_type, self.model_name, turn.input_tokens, turn.output_tokens,
+                turn.cache_read, turn.cache_write)
+            cost = None if cost is None or request_cost is None else cost + request_cost
+            used = turn.input_tokens + turn.cache_read + turn.cache_write + turn.output_tokens
+            if used:
+                self._record_context(used, window)
             if turn.malformed:
                 yield AgentEvent("error", {
                     "code": "provider_malformed_response",
@@ -1952,13 +2630,25 @@ Kullanıcı hangi dilde yazıyorsa o dilde cevap ver; mesajın dili belli değil
             for thought in turn.thoughts:
                 yield AgentEvent("thinking", {"text": thought})
             text = "\n".join(t for t in turn.texts if t)
+            if turn.paused and not turn.calls and not turn.truncated:
+                # A server tool paused the turn: its content goes back and the
+                # same turn continues on the next request.
+                adapter.append_assistant(turn)
+                if text and not streamed:
+                    yield AgentEvent("text", {"content": text})
+                continue
             if turn.truncated or not turn.calls:
                 yield AgentEvent("turn_usage", {
-                    "input_tokens": turn_in, "output_tokens": turn_out, "cost_usd": None,
+                    # Same shape as the Claude CLI path: input counts cached input too.
+                    "input_tokens": totals["input"] + totals["read"] + totals["write"],
+                    "output_tokens": totals["output"],
+                    "cache_read_input_tokens": totals["read"],
+                    "cache_creation_input_tokens": totals["write"],
+                    "cost_usd": cost if cost is None else round(cost, 6),
                     "duration_ms": int((time.time() - turn_t0) * 1000),
                 })
                 if text or not turn.truncated:
-                    if text and not turn.truncated:
+                    if text and not turn.truncated and not streamed:
                         yield AgentEvent("text", {"content": text})
                     yield AgentEvent("response", {"content": text})
                 if turn.truncated:
@@ -1969,7 +2659,7 @@ Kullanıcı hangi dilde yazıyorsa o dilde cevap ver; mesajın dili belli değil
                 return
 
             adapter.append_assistant(turn)
-            if text:
+            if text and not streamed:
                 yield AgentEvent("text", {"content": text})
             for call in turn.calls:
                 _, name, args, _ = call
@@ -1995,8 +2685,8 @@ Kullanıcı hangi dilde yazıyorsa o dilde cevap ver; mesajın dili belli değil
                     screenshot = result.pop("image_base64", None)
                     summary = self._summarize_result(name, result)
                 result_str = json.dumps(result, ensure_ascii=False)
-                if len(result_str) > 8000 and not denied:
-                    result_str = result_str[:8000] + "... (kısaltıldı)"
+                if not denied:
+                    result_str = _cut_tool_result(result_str)
                 yield AgentEvent("tool_result", {
                     "tool": name, "success": result.get("success", False), "summary": summary,
                 })
@@ -2046,7 +2736,9 @@ Kullanıcı hangi dilde yazıyorsa o dilde cevap ver; mesajın dili belli değil
             await events.aclose()
 
     def _openai_loop(self, user_message: str) -> AsyncGenerator[AgentEvent, None]:
-        return self._api_loop(_OpenAIAdapter(), user_message)
+        adapter = (_OpenAIResponsesAdapter() if _uses_responses_api(self.provider_type, self.model_name)
+                   else _OpenAIAdapter())
+        return self._api_loop(adapter, user_message)
 
     # ═══════════════════════════════════════════════
     # BASIT FALLBACK (Function calling olmayan provider'lar)
@@ -2067,7 +2759,7 @@ Kullanıcı hangi dilde yazıyorsa o dilde cevap ver; mesajın dili belli değil
             provider._agent_guide = self._agent_guide
             provider._language = getattr(self, "language", "tr")
 
-            prompt = f"{SYSTEM_PROMPT}\n\n[BAĞLAM]\n{self.context}\n\n[KULLANICI]\n{user_message}"
+            prompt = f"{_PRODUCT_PROMPT}\n\n[BAĞLAM]\n{self.context}\n\n[KULLANICI]\n{user_message}"
 
             if self.provider_type == "subscription":
                 # Subscription ajanları için mod bilgisini ilet. Fail closed:

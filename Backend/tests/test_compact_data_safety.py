@@ -116,19 +116,23 @@ def test_route_carries_prior_summary_into_prompt_and_fallback(db, monkeypatch, r
     through_id = db.get_conversation_messages(cid)[-1]["id"]
     prompts = []
 
-    class Provider:
-        async def analyze_code(self, prompt, max_tokens, cwd=None):
-            prompts.append(prompt)
-            db.add_message(cid, "user", "arrived during summary")
-            if result == "error":
-                yield {"type": "error", "content": "injected failure"}
-            else:
-                yield {"type": "final", "text": prior if result == "success" else ""}
+    # The API summariser itself is replaced, so no SDK client is ever built; the
+    # old provider path is made to fail loudly if the route still took it.
+    async def summarize(provider_type, api_key, model_name, prompt):
+        prompts.append(prompt)
+        db.add_message(cid, "user", "arrived during summary")
+        if result == "error":
+            raise RuntimeError("injected failure")
+        return prior if result == "success" else ""
+
+    def no_provider(*args):
+        raise AssertionError("an API chat must not use the AIProviderManager path")
 
     monkeypatch.setattr(routes, "require_conversation_owner", lambda *args: (1, {}))
     monkeypatch.setattr(routes.chat_model, "chat_model",
                         lambda *args: {"provider_type": "openai", "model_name": "fake"})
-    monkeypatch.setattr(routes.AIProviderManager, "get_provider", lambda *args: Provider())
+    monkeypatch.setattr(routes.api_compaction, "summarize", summarize)
+    monkeypatch.setattr(routes.AIProviderManager, "get_provider", no_provider)
     reset = AsyncMock()
     monkeypatch.setattr(routes, "_cli_bagalamini_sifirla", reset)
     router = routes.create_conversation_router(db, {})
@@ -137,11 +141,12 @@ def test_route_carries_prior_summary_into_prompt_and_fallback(db, monkeypatch, r
 
     outcome = asyncio.run(endpoint(cid, "token", None))
 
-    block = f"ÖNCEKİ ÖZET (kararlarını ve önemli detaylarını yeni özete taşı):\n{prior}\n\n"
+    block = f"Earlier summary (carry its decisions and details forward):\n{prior}\n\n"
     assert len(prompts) == 1
-    assert "Max 300 kelime. Türkçe yaz.\n\n" + block + "SOHBET:" in prompts[0]
+    assert block + "CONVERSATION:" in prompts[0]
     assert SUMMARY_PREFIX not in prompts[0]
-    assert "recent message 0\n" not in prompts[0]
+    # The whole history is summarised now, not the last 20 messages.
+    assert "recent message 0\n" in prompts[0] and "recent message 23" in prompts[0]
     if result == "success":
         expected = prior
     else:
