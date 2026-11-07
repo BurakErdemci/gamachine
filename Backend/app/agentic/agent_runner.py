@@ -2531,6 +2531,8 @@ Kullanıcı hangi dilde yazıyorsa o dilde cevap ver; mesajın dili belli değil
             if _decision == "rebuild":
                 logger.info(f"[ClaudeSession] {', '.join(_reasons)}; session yeniden kuruluyor "
                             f"(canlı bağlam sıfırlanır, DB özeti korunur)")
+                if _existing is not None:
+                    _existing.close_reason = ", ".join(_reasons)
                 await close_session(self.conversation_id)
 
         _session_kwargs = dict(

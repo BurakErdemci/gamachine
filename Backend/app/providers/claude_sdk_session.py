@@ -53,6 +53,7 @@ from agentic.command_gates import APPROVAL_TIMEOUT_S
 # modül çıplak adla import ediliyor (`backend.spec` `pathex=['app']` taşıyor).
 from unity_tool_policy import is_unity_mcp_read_only
 import action_risk
+import process_tree
 import unity_file_guard
 from path_containment import is_within
 from providers.text_blocks import block_break
@@ -421,20 +422,24 @@ _STOP_KILLED_NOTICE = "[Sistem] Durdurma şu arka plan işlerini kesti: {names}.
 # interrupt, which would kill that subagent (owner's rule, 7 Nov 2026).
 _STOP_NOTE = ("[Sistem] Kullanıcı durdurdu. Şu anki işi bırak, yeni araç çağırma, "
               "arka plan işlerine dokunma; tek cümleyle dur ve kullanıcıyı bekle.")
-_SESSION_RESET_NOTICE = ("[Sistem] Oturum yenilendi (model/ayar değişikliği); şu arka plan işleri "
-                         "kesildi: {names}. Gerekirse yeniden başlat.")
+_SESSION_RESET_NOTICE = ("[Sistem] Oturum kapatıldı ({reason}); şu arka plan işleri "
+                         "sonlandırıldı: {names}. Gerekirse yeniden başlat.")
+_DEFAULT_CLOSE_REASON = "oturum kapatıldı"
 # Background tasks a session close took with it (model/effort/workspace change,
 # compact, reset), per chat: the session object is gone by the next turn, so
 # the names wait here for that turn's message to the model.
 _RESET_KILLED: Dict[int, List[str]] = {}
+# Why the session was closed, per chat, for the same notice.
+_RESET_REASONS: Dict[int, str] = {}
 
 
 def take_reset_notice(conversation_id: int) -> str:
     """The line telling the model which background tasks a session close ended, once."""
     names = _RESET_KILLED.pop(conversation_id, None)
+    reason = _RESET_REASONS.pop(conversation_id, None) or _DEFAULT_CLOSE_REASON
     if not names:
         return ""
-    return _SESSION_RESET_NOTICE.format(names=", ".join(dict.fromkeys(names)))
+    return _SESSION_RESET_NOTICE.format(reason=reason, names=", ".join(dict.fromkeys(names)))
 
 
 def _canonical(path: str, base: str = "") -> Path:
@@ -1017,6 +1022,11 @@ class ClaudeSDKSession:
         # Out of the cache: its row was cleared once at retirement, and a later
         # publish would overwrite a replacement session's row.
         self._retired = False
+        # Why this session is being closed (set by the closer, shown in the
+        # reset notice), and whether background tasks were running when it was
+        # retired: _retire clears them before close() runs.
+        self.close_reason: Optional[str] = None
+        self._tasks_at_close = False
         # Tasks a Stop ended; the next turn's message tells the model.
         self._stop_killed: List[str] = []
         # The last Stop of the current turn and the tasks running when it was
@@ -1125,9 +1135,11 @@ class ClaudeSDKSession:
         self._reader_task = asyncio.create_task(self._reader_loop())
         logger.info(f"[ClaudeSDKSession:{self.conversation_id}] başlatıldı (model={self.model}, effort={self.effort or '-'})")
 
-    async def close(self):
+    async def close(self, reason: Optional[str] = None):
         # Önce reader'ı durdur (transport kapanırken yarım okuma gürültüsü olmasın),
         # sonra client'ı kapat. Reader'ın KENDİ içinden çağrılırsa kendini iptal etmez.
+        if reason:
+            self.close_reason = reason
         self._cancel_grace()
         await self._drop_pending_injects()
         # Closing the session ends every card it opened. Without this the gate
@@ -1145,11 +1157,26 @@ class ClaudeSDKSession:
                 await rt
             except BaseException:
                 pass
+        orphans: List[int] = []
         if self._client is not None:
+            if self._active_tasks or self._tasks_at_close:
+                # The SDK close ends claude.exe only; its background children
+                # would be orphaned and keep running. Collect them while their
+                # parent still lives (measured 7 Nov 2026).
+                try:
+                    cli_pid = self._client._transport._process.pid
+                    orphans = await asyncio.to_thread(process_tree.collect_descendants, cli_pid)
+                except Exception as e:
+                    logger.debug(f"[ClaudeSDKSession:{self.conversation_id}] süreç ağacı okunamadı: {e}")
             try:
                 await asyncio.wait_for(self._client.__aexit__(None, None, None), timeout=10)
             except Exception as e:
                 logger.warning(f"[ClaudeSDKSession:{self.conversation_id}] kapatma hatası: {e}")
+        if orphans:
+            try:
+                await process_tree.kill_pids(orphans)
+            except Exception as e:
+                logger.warning(f"[ClaudeSDKSession:{self.conversation_id}] arka plan süreçleri sonlandırılamadı: {e}")
         self._client = None
         self._started = False
         self._turn_active = False
@@ -1168,6 +1195,8 @@ class ClaudeSDKSession:
         if not self._active_tasks:
             return
         _RESET_KILLED.setdefault(self.conversation_id, []).extend(self._active_tasks.values())
+        _RESET_REASONS[self.conversation_id] = self.close_reason or _DEFAULT_CLOSE_REASON
+        self._tasks_at_close = True
         self._active_tasks.clear()
         self._task_meta.clear()
         self._tasks_changed()
@@ -1407,6 +1436,7 @@ class ClaudeSDKSession:
         logger.warning(f"[ClaudeSDKSession:{self.conversation_id}] interrupt işlemedi → session zorla resetleniyor")
         await self._drop_pending_injects()
         await self._finish_turn(error="⏹ Tur durduruldu (session resetlendi).")
+        self.close_reason = "durdurma"
         _evict(self)
         await self.close()
 
@@ -1422,6 +1452,7 @@ class ClaudeSDKSession:
             self._broken = True
             await self._drop_pending_injects()
             await self._finish_turn(error=f"Claude session koptu: {e}")
+            self.close_reason = "oturum koptu"
             _evict(self)
             # Kendi içinden tam close çağrılmaz (kendini iptal etmesin) — subprocess
             # zaten ölmüş; artıkları arka plan task'ı temizler (close, current_task
@@ -2248,12 +2279,14 @@ def get_session(conversation_id: int, **kwargs) -> ClaudeSDKSession:
     """conversation_id için canlı session'ı getir; yoksa (veya kopmuşsa) oluştur."""
     sess = _SESSIONS.get(conversation_id)
     if sess is not None and sess._broken:
+        sess.close_reason = "oturum koptu"
         _discard(conversation_id, sess)
         sess = None
     if sess is not None:
         reason = _identity_mismatch(sess, kwargs)
         if reason:
             logger.info(f"[ClaudeSDKSession:{conversation_id}] {reason}; session yeniden kuruluyor")
+            sess.close_reason = reason
             _discard(conversation_id, sess)
             sess = None
     if sess is None:

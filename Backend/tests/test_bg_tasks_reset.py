@@ -23,8 +23,10 @@ from schemas import ChatRequest
 from test_bg_tasks_frames import MINE, _db, _live, _notified, _open, _post, _route, _started, runner  # noqa: F401  (runner is a fixture)
 
 CONV = 9301
-NOTICE = ("[Sistem] Oturum yenilendi (model/ayar değişikliği); şu arka plan işleri kesildi: "
+NOTICE = ("[Sistem] Oturum kapatıldı (oturum kapatıldı); şu arka plan işleri sonlandırıldı: "
           "dev server, audit. Gerekirse yeniden başlat.")
+MODEL_NOTICE = ("[Sistem] Oturum kapatıldı (model claude-opus-5 → claude-sonnet-5); şu arka plan işleri "
+                "sonlandırıldı: dev server, audit. Gerekirse yeniden başlat.")
 
 
 @pytest.fixture(autouse=True)
@@ -32,10 +34,12 @@ def _fresh():
     turn_events.RING.reset()
     wake_queue.reset_all()
     cs._RESET_KILLED.clear()
+    cs._RESET_REASONS.clear()
     yield
     for cid in (CONV, 1, MINE):
         cs._SESSIONS.pop(cid, None)
     cs._RESET_KILLED.clear()
+    cs._RESET_REASONS.clear()
     cs._BG_TASK_LISTENERS.clear()
     turn_events.RING.reset()
     wake_queue.reset_all()
@@ -64,7 +68,7 @@ def test_a_model_change_records_the_killed_tasks_and_clears_the_row():
     assert same is False
     assert pending == ["dev server", "audit"]
     assert seen[-1] == (CONV, [])
-    assert cs.take_reset_notice(CONV) == NOTICE
+    assert cs.take_reset_notice(CONV) == MODEL_NOTICE
     assert cs.take_reset_notice(CONV) == ""
 
 
@@ -101,7 +105,9 @@ def test_the_next_turn_carries_the_notice_and_a_system_row(runner):
     assert runner.messages[-1] == "next"
 
 
-def test_the_runners_model_change_tells_the_new_model_in_the_same_turn(monkeypatch):
+def test_the_runners_settings_change_waits_for_running_tasks(monkeypatch):
+    """A rebuild would kill the running background tasks (red line, 7 Nov 2026):
+    the live session stays, the tasks keep running and the model is told once."""
     from computer_use import settings
     from providers.cli_base import BaseCLIProvider
     from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
@@ -133,9 +139,9 @@ def test_the_runners_model_change_tells_the_new_model_in_the_same_turn(monkeypat
         return current, events
 
     current, events = asyncio.run(run())
-    assert CONV not in cs._SESSIONS
-    assert sent == [f"{NOTICE}\n\ngo on"]
-    assert current.session_reset_notice == NOTICE
+    assert CONV in cs._SESSIONS and cs._SESSIONS[CONV]._active_tasks
+    assert len(sent) == 1 and sent[0].startswith("[Sistem] Ayar değişikliği (") and sent[0].endswith("\n\ngo on")
+    assert not current.session_reset_notice
     assert cs.take_reset_notice(CONV) == ""
     assert events[-1].type == "done"
 
