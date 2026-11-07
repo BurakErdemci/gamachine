@@ -1,6 +1,7 @@
 """Independent subscription usage: fixture parsing and fake-only probes."""
 import asyncio
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -429,9 +430,11 @@ async def test_agy_command_env_and_cleanup(monkeypatch, mode):
     from providers import cli_base
     monkeypatch.setattr(ul, "_agy_binary", lambda: "fake-agy")
     monkeypatch.setattr(cli_base.BaseCLIProvider, "_resolve_exec", lambda args: args)
-    monkeypatch.setattr(cli_base, "build_spawn_env", lambda **kw: {"family": kw["family"]})
+    monkeypatch.setattr(cli_base, "build_spawn_env",
+                        lambda **kw: {"family": kw["family"], "GEMINI_CONFIG_DIR": "real", "HOME": "real"})
     if mode == "timeout":
         monkeypatch.setattr(ul, "FETCH_TIMEOUT_S", 0.01)
+    homes = []
 
     class Proc:
         returncode = 1 if mode == "exit" else 0
@@ -446,7 +449,11 @@ async def test_agy_command_env_and_cleanup(monkeypatch, mode):
 
     async def spawn(*args, **kwargs):
         assert args == ("fake-agy", "-p", "/usage", "--output-format", "json")
-        assert kwargs["env"] == {"family": "agy"}
+        env = kwargs["env"]
+        # agy runs on an empty home, so it starts none of the user's MCP servers.
+        assert env["HOME"] == env["USERPROFILE"] != "real" and os.path.isdir(env["HOME"])
+        assert not os.listdir(env["HOME"]) and "GEMINI_CONFIG_DIR" not in env
+        homes.append(env["HOME"])
         return proc
 
     async def kill(child):
@@ -461,6 +468,7 @@ async def test_agy_command_env_and_cleanup(monkeypatch, mode):
         with pytest.raises(expected):
             await ul.fetch_agy_usage()
     assert killed == [proc]
+    assert len(homes) == 1 and not os.path.exists(homes[0])  # the empty home is removed
 
 
 @pytest.fixture

@@ -9,6 +9,7 @@ import re
 import shutil
 import signal
 import subprocess
+import tempfile
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -388,12 +389,21 @@ async def fetch_agy_usage():
     from providers.cli_base import BaseCLIProvider, build_spawn_env
     binary = _agy_binary()
     proc = None
+    # An empty home: with the real one agy starts every MCP server of
+    # ~/.gemini/config/mcp_config.json through cmd.exe, and on Windows 11 one of
+    # those consoles now and then surfaced as a flashing terminal (measured
+    # 7 Nov 2026: the window 0.6 s after a usage run; with an empty home the
+    # usage came back complete and no cmd.exe started). Same trick as titles.
+    home = tempfile.mkdtemp(prefix="gamachine-agy-usage-")
+    env = build_spawn_env(family="agy")
+    env.update(HOME=home, USERPROFILE=home)
+    env.pop("GEMINI_CONFIG_DIR", None)  # would point agy back at the real config
     try:
         async with asyncio.timeout(FETCH_TIMEOUT_S):
             proc = await asyncio.create_subprocess_exec(
                 *BaseCLIProvider._resolve_exec([binary, "-p", "/usage", "--output-format", "json"]),
                 stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE, env=build_spawn_env(family="agy"),
+                stderr=asyncio.subprocess.PIPE, env=env,
                 cwd=_neutral_cwd(),
                 creationflags=_CREATIONFLAGS, start_new_session=_NEW_SESSION)
             stdout, stderr = await proc.communicate()
@@ -402,6 +412,7 @@ async def fetch_agy_usage():
             return parse_agy_usage(json.loads(stdout))
     finally:
         await _kill_probe(proc)
+        shutil.rmtree(home, ignore_errors=True)
 
 
 class UsageService:
