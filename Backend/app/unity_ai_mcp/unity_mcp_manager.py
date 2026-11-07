@@ -13,7 +13,9 @@ import re
 import shutil
 import stat
 import tempfile
+import threading
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -48,6 +50,59 @@ _GAVE_UP_MESSAGES = {
 def _server_log_path() -> str:
     # Writable user dir: project_root may be a write-protected Program Files in the packaged app.
     return os.path.join(os.path.expanduser("~"), ".unity_architect_ai", "unity_mcp_server.log")
+
+
+# Temporary diagnostics: the owner asked on 8 Nov 2026 to log why the Unity connection drops. Remove before the
+# public release (this block, every unity_diag(...) call and tests/test_unity_diag.py).
+UNITY_DIAG = True
+_DIAG_MAX_BYTES = 5 * 1024 * 1024
+_DIAG_KEEP = 2  # unity_mcp_diag.log.1 and .2
+_SERVER_LOG_MAX_BYTES = 10 * 1024 * 1024
+_diag_lock = threading.Lock()
+# Tests that run with the real home must not write the owner's diag log; a test that redirects HOME may.
+_IMPORT_HOME = os.path.expanduser("~")
+
+
+def unity_diag_path() -> str:
+    return os.path.join(os.path.expanduser("~"), ".unity_architect_ai", "unity_mcp_diag.log")
+
+
+def _rotate_log(path: str, max_bytes: int, keep: int) -> None:
+    """path -> path.1 -> path.2 ... (the oldest of `keep` is dropped) once path is over max_bytes."""
+    try:
+        if os.path.getsize(path) <= max_bytes:
+            return
+    except OSError:
+        return
+    for n in range(keep - 1, 0, -1):
+        if os.path.exists(f"{path}.{n}"):
+            os.replace(f"{path}.{n}", f"{path}.{n + 1}")
+    os.replace(path, f"{path}.1")
+
+
+def unity_diag(event: str, **fields) -> None:
+    """Appends one JSON line {"ts", "event", **fields} to unity_mcp_diag.log. Never raises.
+
+    Fields must not carry secrets: use _token_fp for the local API token."""
+    if not UNITY_DIAG:
+        return
+    if "PYTEST_CURRENT_TEST" in os.environ and os.path.expanduser("~") == _IMPORT_HOME:
+        return
+    try:
+        record = {"ts": datetime.now().astimezone().isoformat(timespec="milliseconds"), "event": event, **fields}
+        line = json.dumps(record, ensure_ascii=False, default=str) + "\n"
+        path = unity_diag_path()
+        with _diag_lock:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            _rotate_log(path, _DIAG_MAX_BYTES, _DIAG_KEEP)
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(line)
+    except Exception:
+        logger.debug("[UnityMCP] diag write failed", exc_info=True)
+
+
+def _token_fp(token: Optional[str]) -> Optional[str]:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:8] if token else None
 
 
 class _ManifestChanged(Exception):
@@ -300,6 +355,9 @@ class UnityMCPManager:
         # Set while the supervisor stops a dead server to restart it: stop_server then leaves
         # autoconnect.json alone, or Unity reads autoStart=false and never resumes (4 Nov 2026).
         self._restarting = False
+        # Diagnostics only: the reason start_server/stop_server log when the caller passes none (set by the supervisor).
+        self._diag_reason: Optional[str] = None
+        self._diag_exit_logged = None
         # Why install_package last returned False (shown to the user by the toggle route).
         self.last_install_error: Optional[str] = None
         # Windows dialog probe (unity-mcp/Server/src/transport/unity_dialog_probe.py), loaded once.
@@ -430,6 +488,7 @@ class UnityMCPManager:
             return Occupant(ServerIdentity.NONE, "GAMACHINE_NO_UNITY_MCP")
         if self.process and self.process.poll() is None:
             return Occupant(ServerIdentity.OURS, "kendi sürecimiz")
+        self._note_exit(self.process, "port_occupant")
         import time
         now = time.monotonic()
         if now - self._identity_cache_ts < 2.0:
@@ -437,6 +496,24 @@ class UnityMCPManager:
         self._identity_cache_val = probe_port_identity(self.mcp_port)
         self._identity_cache_ts = now
         return self._identity_cache_val
+
+    def _note_exit(self, process, source: str) -> None:
+        """Diagnostics: records once per process that our own server process has exited."""
+        if process is None or self._diag_exit_logged is process:
+            return
+        try:
+            returncode = process.poll()
+        except Exception:
+            return
+        if returncode is None:
+            return
+        self._diag_exit_logged = process
+        uptime = time.monotonic() - self._started_at
+        unity_diag("server_exit", returncode=returncode, pid=getattr(process, "pid", None), source=source,
+                   uptime_s=round(uptime, 1) if uptime != float("inf") else None)
+
+    def _reason(self, reason: str) -> str:
+        return self._diag_reason if reason == "unknown" and self._diag_reason else reason
 
     def invalidate_identity_cache(self) -> None:
         """Cache'i düşür — sunucuyu başlattıktan/durdurduktan sonra çağrılır.
@@ -604,7 +681,7 @@ class UnityMCPManager:
             f.write(token)
         return token
 
-    def start_server(self) -> bool:
+    def start_server(self, reason: str = "unknown") -> bool:
         """
         Unity MCP HTTP sunucusunu başlatır.
         Unity'nin kendi arayüzüyle aynı komutu kullanır (uvx).
@@ -631,9 +708,13 @@ class UnityMCPManager:
         # Yalnız (b)'ye dayanmak, aracın bulunmadığı makinede korumayı tamamen
         # kaybetmek demekti; (a) o boşluğu kapatıyor ve tersi de doğru — (a) tek
         # başına kullanıcıya eyleme dönüştürülebilir bir ad veremiyor.
-        if self.port_occupant().identity == ServerIdentity.FOREIGN:
+        reason = self._reason(reason)
+        occupant = self.port_occupant()
+        if occupant.identity == ServerIdentity.FOREIGN:
             self.last_error = self._blocked_reason(self.port_occupant())
             logger.error(f"[UnityMCP] {self.last_error}")
+            unity_diag("server_start_refused", reason=reason, why="foreign_port_occupant",
+                       occupant=str(occupant.identity), detail=occupant.detail)
             return False
 
         from .mcp_port_guard import foreign_port_owner_infos, port_busy_message
@@ -647,6 +728,8 @@ class UnityMCPManager:
         if foreign:
             self.last_error = port_busy_message(self.mcp_port, foreign)
             logger.error(f"[UnityMCP] {self.last_error}")
+            unity_diag("server_start_refused", reason=reason, why="port_owner_found",
+                       occupant=str(occupant.identity), detail=occupant.detail)
             return False
 
         self._starting = True
@@ -670,6 +753,10 @@ class UnityMCPManager:
         log_path = _server_log_path()
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
         try:
+            try:
+                _rotate_log(log_path, _SERVER_LOG_MAX_BYTES, 1)
+            except OSError as e:
+                logger.debug(f"[UnityMCP] Sunucu logu döndürülemedi: {e}")
             log_file = open(log_path, "a", encoding="utf-8")
             # /api/command Unity Editor'de keyfi C# çalıştırabiliyor (execute_code) ve
             # 8080 makinedeki her sürece açık — sunucu bu sır olmadan o uçları hiç
@@ -727,6 +814,9 @@ class UnityMCPManager:
             self._started_at = time.monotonic()
             self._health_fails = 0
             self._reset_health_memory()
+            unity_diag("server_start", reason=reason, pid=self.process.pid, cmd=cmd,
+                       token_fp=_token_fp(self.local_api_token), port=self.mcp_port,
+                       port_occupant=str(occupant.identity), port_occupant_detail=occupant.detail)
             # Cache'de bu porta ait eski bir kimlik ölçümü kalmış olabilir
             # (ör. az önceki "yabancı" kararı). 2 sn boyunca ona güvenmek
             # başlattığımız sunucuyu "yabancı" göstermek demek.
@@ -734,12 +824,13 @@ class UnityMCPManager:
             return True
         except Exception as e:
             logger.error(f"[UnityMCP] Başlatılamadı: {e}")
+            unity_diag("server_start_failed", reason=reason, error=f"{type(e).__name__}: {e}")
             self.last_error = f"Unity MCP sunucusu başlatılamadı: {e}"
             self.local_api_token = None  # Sunucu ayakta değil — sır de geçersiz
             self._starting = False
             return False
 
-    def stop_server(self) -> None:
+    def stop_server(self, reason: str = "unknown") -> None:
         """
         MCP sunucusunu durdurur.
 
@@ -752,6 +843,7 @@ class UnityMCPManager:
         if unity_mcp_disabled():
             return
         from .mcp_port_guard import collect_owned_listeners, terminate_port_listeners
+        reason = self._reason(reason)
 
         # Durdurmanın ardından 2 sn boyunca "hâlâ ayakta" okunmasın.
         self.invalidate_identity_cache()
@@ -769,6 +861,8 @@ class UnityMCPManager:
                 logger.debug(f"[UnityMCP] Süreç ağacı okunamadı: {e}")
 
         # Kendi subprocess'imizi durdur
+        stopped_pid = self.process.pid if self.process else None
+        killed_pids: list = []
         if self.process:
             self.process.terminate()
             try:
@@ -782,6 +876,7 @@ class UnityMCPManager:
         if had_own_process or self.is_running():
             try:
                 cleanup = terminate_port_listeners(self.mcp_port, owned_pids=owned_pids)
+                killed_pids = cleanup.killed
                 if cleanup.killed:
                     logger.info(
                         f"[UnityMCP] Port {self.mcp_port} LISTEN temizlendi "
@@ -798,6 +893,7 @@ class UnityMCPManager:
         # ölçüm yapıp cache'i tazeliyor. O ölçüm artık geçersiz.
         self.invalidate_identity_cache()
         logger.info("[UnityMCP] Sunucu durduruldu.")
+        unity_diag("server_stop", reason=reason, process_pid=stopped_pid, killed_pids=killed_pids)
 
         if self._restarting:
             return
@@ -818,6 +914,10 @@ class UnityMCPManager:
         self._instances_misses = 0
         self._last_instances: Optional[list] = None
         self._last_good_status: Optional[dict] = None
+        # Diagnostics only (unity_diag): last seen health / Unity link, so records are written on change.
+        self._diag_health_ok: Optional[bool] = None
+        self._diag_health_fails = 0
+        self._diag_unity_link: Optional[bool] = None
 
     def reset_supervision(self) -> None:
         """A user toggle starts the restart budget over."""
@@ -854,6 +954,7 @@ class UnityMCPManager:
             return
         process = self.process
         exit_code = process.poll() if process is not None else None
+        self._note_exit(process, "supervise_once")
         if process is not None and exit_code is None:
             if await self.check_health(timeout=_SUPERVISOR_HEALTH_TIMEOUT_S):
                 self._health_fails = 0
@@ -895,18 +996,27 @@ class UnityMCPManager:
             if len(self._restart_times) >= _RESTART_CAP:
                 self._gave_up = True
                 self.last_error = _GAVE_UP_MESSAGES["en" if self.language == "en" else "tr"]
+                unity_diag("supervisor_gave_up", cause=reason, restart_cap=_RESTART_CAP)
                 logger.error(f"[UnityMCP] Server died again ({reason}); {_RESTART_CAP} restarts within "
                              f"{_RESTART_WINDOW_S // 60} min used up, not restarting.")
                 return
             self._restart_times.append(now)
+            unity_diag("supervisor_restart_decision", cause=reason, health_failures=self._health_fails,
+                       threshold=_HEALTH_FAILS_TO_RESTART, exit_code=exit_code,
+                       restart_n=len(self._restart_times), restart_cap=_RESTART_CAP)
             logger.warning(f"[UnityMCP] Server is dead: {reason}. Restart {len(self._restart_times)}/{_RESTART_CAP}. "
                            f"Last log lines:\n{self._log_tail()}")
             self._restarting = True
+            self._diag_reason = "supervisor_restart"
             try:
                 await self._run_to_completion(self.stop_server)
             finally:
                 self._restarting = False
-            if not await self._run_to_completion(self.start_server):
+            try:
+                started = await self._run_to_completion(self.start_server)
+            finally:
+                self._diag_reason = None
+            if not started:
                 logger.error(f"[UnityMCP] Restart failed: {self.last_error}")
                 return
             logger.info("[UnityMCP] Server restarted.")
@@ -975,20 +1085,36 @@ class UnityMCPManager:
         """HTTP sunucusunun ayakta olduğunu kontrol eder (/health)."""
         if unity_mcp_disabled():
             return False
+        healthy = False
+        error = None
+        started = time.monotonic()
         try:
             async with httpx.AsyncClient() as client:
                 res = await client.get(
                     f"http://localhost:{self.mcp_port}/health", timeout=timeout
                 )
                 healthy = res.status_code == 200
-                return healthy
+                if not healthy:
+                    error = f"http_{res.status_code}"
+        except httpx.ConnectError:
+            error = "connection_refused"
+        except httpx.TimeoutException:
+            error = "timeout"
         except Exception:
-            return False
+            error = "other"
+        self._diag_health_fails = 0 if healthy else self._diag_health_fails + 1
+        if healthy != self._diag_health_ok:
+            self._diag_health_ok = healthy
+            unity_diag("health", ok=healthy, error=error, latency_ms=round((time.monotonic() - started) * 1000),
+                       consecutive_failures=self._diag_health_fails, timeout_s=timeout)
+        return healthy
 
     async def check_unity_connected(self) -> bool:
         """Unity Editor'ün (plugin) sunucuya bağlı olup olmadığını kontrol eder."""
         if unity_mcp_disabled():
             return False
+        connected = False
+        error = None
         try:
             async with httpx.AsyncClient() as client:
                 res = await client.get(
@@ -997,10 +1123,19 @@ class UnityMCPManager:
                 )
                 if res.status_code == 200:
                     data = res.json()
-                    return bool(data.get("instances"))
+                    connected = bool(data.get("instances"))
+                else:
+                    error = f"http_{res.status_code}"
+        except httpx.ConnectError:
+            error = "connection_refused"
+        except httpx.TimeoutException:
+            error = "timeout"
         except Exception:
-            pass
-        return False
+            error = "other"
+        if connected != self._diag_unity_link:
+            self._diag_unity_link = connected
+            unity_diag("unity_link", connected=connected, error=error)
+        return connected
 
     def _blocked_reason(self, occupant: Occupant) -> str:
         """8080'i tutan yabancı süreci kullanıcıya ADIYLA anlat.
