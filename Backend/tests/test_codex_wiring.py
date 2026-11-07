@@ -330,3 +330,91 @@ async def test_a_rebuild_waits_for_running_work_then_runs(runner_env, tmp_path):
 
     assert third is not first
     runner_env.kill.assert_awaited_once()
+
+
+# ── 6. subagent threads ─────────────────────────────────────────────────────
+
+def _turn_msg(method, thread, turn, status="inProgress"):
+    return {"method": method, "params": {"threadId": thread, "turn": {"id": turn, "status": status}}}
+
+
+def _collab_started(item_id, thread="thr-1", turn="t-main"):
+    return {"method": "item/started", "params": {
+        "threadId": thread, "turnId": turn, "item": {"type": "collabAgentToolCall", "id": item_id}}}
+
+
+@pytest.mark.asyncio
+async def test_a_subagent_thread_counts_as_running_work_until_its_turn_completes():
+    session, _ = _live()
+    await session._dispatch(_turn_msg("turn/started", "thr-sub", "t-sub"))
+    assert session.running_work()
+    await session._dispatch(_turn_msg("turn/completed", "thr-sub", "t-sub", "completed"))
+    assert not session.running_work()
+
+
+@pytest.mark.asyncio
+async def test_the_main_threads_own_turn_is_not_counted_as_running_work():
+    session, _ = _live()
+    await session._dispatch(_turn_msg("turn/started", "thr-1", "t-main"))
+    assert not session.running_work()
+
+
+@pytest.mark.asyncio
+async def test_a_collab_call_ends_with_its_parent_turn_but_a_command_does_not():
+    session, _ = _live()
+    await session._dispatch(_collab_started("wait-1"))
+    await session._dispatch(_started("commandExecution", "cmd-1"))
+    await session._dispatch(_turn_msg("turn/completed", "thr-1", "t-main", "interrupted"))
+    assert list(session.running_work()) == ["cmd-1"]
+
+
+@pytest.mark.asyncio
+async def test_a_collab_call_of_another_turn_survives_a_turn_completion():
+    session, _ = _live()
+    await session._dispatch(_collab_started("wait-1", turn="t-two"))
+    await session._dispatch(_turn_msg("turn/completed", "thr-1", "t-one", "completed"))
+    assert list(session.running_work()) == ["wait-1"]
+    await session._dispatch(_turn_msg("turn/completed", "thr-1", "t-two", "completed"))
+    assert not session.running_work()
+
+
+@pytest.mark.asyncio
+async def test_a_collab_call_of_unknown_turn_ends_with_the_next_own_turn_completion():
+    session, _ = _live()
+    await session._dispatch(_started("collabAgentToolCall", "wait-1"))
+    await session._dispatch(_turn_msg("turn/completed", "thr-sub", "t-sub", "completed"))
+    assert list(session.running_work()) == ["wait-1"]
+    await session._dispatch(_turn_msg("turn/completed", "thr-1", "t-main", "completed"))
+    assert not session.running_work()
+
+
+@pytest.mark.asyncio
+async def test_a_subagent_threads_notifications_never_reach_the_main_turn_queue():
+    session, _ = _live()
+    session._out_q = asyncio.Queue()
+    session._current_turn_id = None
+    session._terminal_sent = False
+    await session._dispatch(_turn_msg("turn/completed", "thr-sub", "t-sub", "completed"))
+    await session._dispatch({"method": "item/completed", "params": {
+        "threadId": "thr-sub", "item": {"type": "agentMessage", "id": "m-1", "text": "sub"}}})
+    assert session._out_q.empty()
+    assert not session._terminal_sent
+
+
+@pytest.mark.asyncio
+async def test_a_rebuild_waits_while_a_subagent_thread_turn_is_running(runner_env, tmp_path):
+    first, _ = await _turn(runner_env)
+    await first._dispatch(_turn_msg("turn/started", "thr-sub", "t-sub"))
+
+    runner_env.runner.workspace_path = str(tmp_path)
+    second, _ = await _turn(runner_env, "next")
+
+    assert second is first
+    runner_env.kill.assert_not_awaited()
+    assert "arka plan işleri bitince uygulanacak" in runner_env.runner.session_defer_notice
+
+    await first._dispatch(_turn_msg("turn/completed", "thr-sub", "t-sub", "completed"))
+    third, _ = await _turn(runner_env, "later")
+
+    assert third is not first
+    runner_env.kill.assert_awaited_once()

@@ -964,6 +964,9 @@ class CodexSession:
         # items (see `_track_running_work`). The protocol has no background-task
         # list, so this is the only "work still running" signal.
         self._running_work: Set[str] = set()
+        # collabAgentToolCall item id -> turn id it started in (None = unknown);
+        # such an item ends with its turn even when no item/completed arrives.
+        self._collab_turns: Dict[str, Optional[str]] = {}
 
     # ── Süreç yaşam döngüsü ──────────────────────────────────────────────
     @property
@@ -1110,6 +1113,7 @@ class CodexSession:
         self._pending.clear()
         self._steer_pending.clear()
         self._running_work.clear()
+        self._collab_turns.clear()
 
     # ── Düşük seviye JSON-RPC (NDJSON) ───────────────────────────────────
     async def _send(self, obj: dict):
@@ -1192,9 +1196,31 @@ class CodexSession:
         item counts as running until its completion arrives or the session closes.
         """
         method = msg.get("method")
+        params = msg.get("params") or {}
+        if not isinstance(params, dict):
+            return
+        thread = params.get("threadId")
+        if method in ("turn/started", "turn/completed"):
+            if (self.thread_id and isinstance(thread, str) and thread
+                    and thread != self.thread_id):
+                # A subagent's own thread: running work until its turn completes.
+                key = "thread:" + thread
+                if method == "turn/started":
+                    self._running_work.add(key)
+                else:
+                    self._running_work.discard(key)
+            elif method == "turn/completed" and (not thread or thread == self.thread_id):
+                # Interrupt sends no item/completed for a parent's `wait` call, so
+                # collab items end with their turn (commands do not: they outlive it).
+                done_turn = _notification_turn_id(params)
+                for item_id, turn_id in list(self._collab_turns.items()):
+                    if turn_id is None or turn_id == done_turn:
+                        del self._collab_turns[item_id]
+                        self._running_work.discard(item_id)
+            return
         if method not in ("item/started", "item/completed"):
             return
-        item = (msg.get("params") or {}).get("item") or {}
+        item = params.get("item") or {}
         if not isinstance(item, dict) or item.get("type") not in _RUNNING_WORK_TYPES:
             return
         item_id = item.get("id")
@@ -1202,8 +1228,11 @@ class CodexSession:
             return
         if method == "item/started":
             self._running_work.add(item_id)
+            if item.get("type") == "collabAgentToolCall":
+                self._collab_turns[item_id] = _notification_turn_id(params) or self._current_turn_id
         else:
             self._running_work.discard(item_id)
+            self._collab_turns.pop(item_id, None)
 
     def running_work(self) -> List[str]:
         """Ids of commands/subagents started and not completed (empty = none)."""
@@ -1455,6 +1484,13 @@ class CodexSession:
     async def _handle_notification(self, msg: dict):
         method = msg.get("method", "")
         params = msg.get("params", {}) or {}
+        # Live codex 0.164 measurement (8 Nov 2026): a subagent runs in its own
+        # thread and its events share this connection. They are not this
+        # session's turn, so they never reach the main turn's queue.
+        thread = params.get("threadId")
+        if self.thread_id and isinstance(thread, str) and thread and thread != self.thread_id:
+            return
+
         if method == "thread/tokenUsage/updated":
             # Thread context remains relevant even after its turn's output was retired.
             usage = params.get("tokenUsage") if isinstance(params, dict) else None
