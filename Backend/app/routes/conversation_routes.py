@@ -2304,6 +2304,11 @@ Max 300 kelime. Türkçe yaz.
         if db.compact_conversation(conv_id, summary, through_id=through_id) is False:
             logger.info("[Compact] A newer compaction already covered this snapshot.")
 
+        # The stored API reading measured the uncompacted history; until the next
+        # request measures again, the gauge falls back to the estimate.
+        from agentic.agent_runner import _API_CONTEXT_READINGS
+        _API_CONTEXT_READINGS.pop(conv_id, None)
+
         # Sonraki tur, özetlenmiş küçük bağlamla başlar: canlı Claude oturumu
         # yerinde özetlenir, yoksa TEMİZ bir CLI oturumu açılır.
         _kept = await _cli_baglamini_kucult(db, conv_id)
