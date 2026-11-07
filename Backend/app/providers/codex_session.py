@@ -239,6 +239,9 @@ _RETIRED_TURN_IDS_MAX = 8
 # fileChange items whose paths wait for their approval request. Codex asks for
 # approval of one patch at a time, so a handful covers it.
 _FILE_CHANGES_MAX = 64
+# Thread item types that are work which can keep running: a shell command
+# (carries processId) or a Codex subagent (ItemStartedNotification schema, 0.164).
+_RUNNING_WORK_TYPES = ("commandExecution", "collabAgentToolCall")
 # Codex starts its MCP servers after thread/start replies; if no Unity server reports
 # "starting" within this window it is not starting them (measured: events arrive with the reply).
 MCP_STARTING_GRACE_S = 1.0
@@ -957,6 +960,10 @@ class CodexSession:
         self._steer_pending: Dict[str, str] = {}
         # Set by thread/compacted (or a contextCompaction item) while compact() waits.
         self._compacted_event = asyncio.Event()
+        # Ids of started, not yet completed commandExecution / collabAgentToolCall
+        # items (see `_track_running_work`). The protocol has no background-task
+        # list, so this is the only "work still running" signal.
+        self._running_work: Set[str] = set()
 
     # ── Süreç yaşam döngüsü ──────────────────────────────────────────────
     @property
@@ -1102,6 +1109,7 @@ class CodexSession:
                 fut.cancel()
         self._pending.clear()
         self._steer_pending.clear()
+        self._running_work.clear()
 
     # ── Düşük seviye JSON-RPC (NDJSON) ───────────────────────────────────
     async def _send(self, obj: dict):
@@ -1171,8 +1179,40 @@ class CodexSession:
         elif has_method:
             # notification (stream)
             self._remember_file_change(msg)
+            self._track_running_work(msg)
             self._remember_mcp_status(msg)
             await self._handle_notification(msg)
+
+    def _track_running_work(self, msg: dict) -> None:
+        """Record started-not-completed commands and subagents.
+
+        Runs in `_dispatch` beside `_remember_file_change`, before the stale-turn
+        filter: work outliving its turn still counts until `item/completed`.
+        Unmeasured whether a commandExecution can outlive turn/completed, so an
+        item counts as running until its completion arrives or the session closes.
+        """
+        method = msg.get("method")
+        if method not in ("item/started", "item/completed"):
+            return
+        item = (msg.get("params") or {}).get("item") or {}
+        if not isinstance(item, dict) or item.get("type") not in _RUNNING_WORK_TYPES:
+            return
+        item_id = item.get("id")
+        if not isinstance(item_id, str):
+            return
+        if method == "item/started":
+            self._running_work.add(item_id)
+        else:
+            self._running_work.discard(item_id)
+
+    def running_work(self) -> List[str]:
+        """Ids of commands/subagents started and not completed (empty = none)."""
+        return sorted(self._running_work)
+
+    @property
+    def turn_live(self) -> bool:
+        """A turn is streaming and has not sent its terminal event."""
+        return self._out_q is not None and not self._terminal_sent
 
     def _remember_mcp_status(self, msg: dict) -> None:
         """Record MCP server startup status for `_wait_for_unity_mcp`.

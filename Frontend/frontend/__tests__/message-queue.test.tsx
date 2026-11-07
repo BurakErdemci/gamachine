@@ -40,8 +40,10 @@ const API = 'http://127.0.0.1:8000'
 const USER = { id: 1, name: 'b', sessionToken: 'tok' } as any
 // `subscription` keeps the `done` branch away from `parseGeneratedFiles`.
 const CONFIG = { provider_type: 'subscription', model_name: 'claude-opus-5' } as any
-// A chat on Codex: a message typed mid-turn keeps the plain queue (no inject).
-const CODEX = { provider_type: 'subscription', model_name: 'gpt-6-luna' } as any
+// A chat on Antigravity (agy): a message typed mid-turn keeps the plain queue
+// (no inject), and "send now" stops the turn first. Codex injects like Claude
+// (see codex-midturn-inject.test.tsx).
+const AGY = { provider_type: 'subscription', model_name: 'agy-gemini-3-pro' } as any
 
 const enc = (ev: object) => new TextEncoder().encode(`data: ${JSON.stringify(ev)}\n\n`)
 
@@ -324,8 +326,8 @@ describe('message queue · edit, delete, send now', () => {
     expect(result.current.queuePaused).toBe(false)
   })
 
-  it('"send now" on a Codex chat stops the running turn, then sends that message first', async () => {
-    const { result } = hook(CODEX)
+  it('"send now" on an agy chat stops the running turn, then sends that message first', async () => {
+    const { result } = hook(AGY)
     await open(result, 1)
     send(result, 'first')
     await flush()
@@ -366,8 +368,8 @@ describe('message queue · edit, delete, send now', () => {
   }
 
   // Codex queueaudit, 28 Sep 2026: the next queued message went out unasked.
-  it('"send now" on a Codex chat whose message is deleted while Stop is pending sends nothing', async () => {
-    const { result } = hook(CODEX)
+  it('"send now" on an agy chat whose message is deleted while Stop is pending sends nothing', async () => {
+    const { result } = hook(AGY)
     await open(result, 1)
     send(result, 'first')
     await flush()
@@ -390,8 +392,8 @@ describe('message queue · edit, delete, send now', () => {
     expect(result.current.queuePaused).toBe(true)
   })
 
-  it('"send now" on a Codex chat whose message is taken back for editing while Stop is pending sends nothing', async () => {
-    const { result } = hook(CODEX)
+  it('"send now" on an agy chat whose message is taken back for editing while Stop is pending sends nothing', async () => {
+    const { result } = hook(AGY)
     await open(result, 1)
     send(result, 'first')
     await flush()
@@ -412,8 +414,8 @@ describe('message queue · edit, delete, send now', () => {
     expect(result.current.queuePaused).toBe(true)
   })
 
-  it('a second "send now" on a Codex chat click on the same message does not send it before Stop is answered', async () => {
-    const { result } = hook(CODEX)
+  it('a second "send now" on an agy chat click on the same message does not send it before Stop is answered', async () => {
+    const { result } = hook(AGY)
     await open(result, 1)
     send(result, 'first')
     await flush()
@@ -705,9 +707,9 @@ describe('message queue · mid-turn send on a Claude chat', () => {
     expect(result.current.queue.map((q: any) => q.state)).toEqual([undefined])
   })
 
-  it('a chat on Codex keeps the plain queue', async () => {
+  it('a chat on agy keeps the plain queue', async () => {
     injectStatus = 'injected'
-    const { result } = hook(CODEX)
+    const { result } = hook(AGY)
     await open(result, 1)
     send(result, 'first')
     await flush()

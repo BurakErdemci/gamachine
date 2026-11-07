@@ -177,6 +177,10 @@ EN: dict[str, str] = {
     "🗜️ Eski turlar özetlendi, devam ediliyor": "🗜️ Older turns summarised, continuing",
     "Bağlam özetlenemedi; tur özetsiz sürüyor ve bağlam sınırına takılabilir.":
         "The context could not be summarised; the turn continues without a summary and may hit the context limit.",
+    # /conversations/{id}/compact, Codex session kept (routes/conversation_routes.py)
+    "Oturum yerinde özetlenemedi; arka plan işleri çalıştığı için oturum yenilenmedi, bağlamı küçülmedi.":
+        "The session could not be compacted in place; it was not renewed because background work is running, "
+        "so its context did not shrink.",
 }
 
 PATTERNS: list[tuple[re.Pattern, str]] = [

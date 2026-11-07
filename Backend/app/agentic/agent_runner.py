@@ -3240,15 +3240,9 @@ class AgentRunner:
             # Closing the session would kill its background tasks: keep it as is
             # (kwargs below carry its own identity so get_session does not
             # discard it either) and rebuild on the first turn with none running.
-            _key = tuple(_reasons)
             logger.info(f"[ClaudeSession] {', '.join(_reasons)}; yeniden kurma "
                         f"{len(_existing._active_tasks)} arka plan işi bitene kadar bekliyor")
-            if _DEFERRED_REASONS.get(self.conversation_id) != _key:
-                _DEFERRED_REASONS[self.conversation_id] = _key
-                _defer_note = (f"[Sistem] Ayar değişikliği ({', '.join(_reasons)}) "
-                               f"arka plan işleri bitince uygulanacak.")
-                self.session_defer_notice = (f"Ayar değişikliği ({_gerekce_sozcukleri(_reasons)}) "
-                                             f"arka plan işleri bitince uygulanacak.")
+            _defer_note = self._defer_rebuild_notice(_reasons)
         else:
             _DEFERRED_REASONS.pop(self.conversation_id, None)
             if _decision == "rebuild":
@@ -3417,6 +3411,18 @@ class AgentRunner:
             logger.exception("[ClaudeSession] stream hatası")
             yield AgentEvent("error", {"message": f"Claude session hatası: {_redact(str(e))}"})
 
+    def _defer_rebuild_notice(self, reasons: List[str]) -> str:
+        """Record a rebuild deferred for background work. A reason set not yet
+        announced sets the user's row and returns the model's line; else ""."""
+        _key = tuple(reasons)
+        if _DEFERRED_REASONS.get(self.conversation_id) == _key:
+            return ""
+        _DEFERRED_REASONS[self.conversation_id] = _key
+        self.session_defer_notice = (f"Ayar değişikliği ({_gerekce_sozcukleri(reasons)}) "
+                                     f"arka plan işleri bitince uygulanacak.")
+        return (f"[Sistem] Ayar değişikliği ({', '.join(reasons)}) "
+                f"arka plan işleri bitince uygulanacak.")
+
     # ═══════════════════════════════════════════════
     # CODEX KALICI SESSION (codex app-server, native onay)
     # ═══════════════════════════════════════════════
@@ -3460,6 +3466,22 @@ class AgentRunner:
                                      _lvl).get("cli_config", {}).get("model_reasoning_effort")
         _existing = _SESSIONS.get(self.conversation_id)
         _workspace = os.path.abspath(self.workspace_path or ".")
+        desired_model = self.model_name or None
+        # Model/effort go per turn (turn/start overrides): switched live, never a
+        # rebuild that would kill the app-server's background commands/subagents.
+        # A None value cannot be sent as an override, so it still rebuilds.
+        if _existing is not None:
+            _switch = {}
+            if desired_model and getattr(_existing, "model", None) != desired_model:
+                _switch["model"] = desired_model
+            if desired_effort and getattr(_existing, "effort", None) != desired_effort:
+                _switch["effort"] = desired_effort
+            if _switch:
+                _existing.set_turn_overrides(**_switch)
+                for _attr, _value in _switch.items():
+                    setattr(_existing, _attr, _value)
+                logger.info("[CodexSession] %s canlı oturumda değiştirildi (tur başına)",
+                            ", ".join(f"{k}={v}" for k, v in _switch.items()))
         _effort_changed = (
             _existing is not None
             and getattr(_existing, "effort", None) != desired_effort
@@ -3488,6 +3510,7 @@ class AgentRunner:
             _existing is not None
             and getattr(_existing, "connectors", ((), "")) != desired_connectors
         )
+        _defer_note = ""
         if _existing is not None and (
             _effort_changed or _workspace_changed or _ro_changed or _unity_changed or _computer_changed
             or _browser_changed or _connectors_changed
@@ -3507,12 +3530,24 @@ class AgentRunner:
                 reasons.append("tarayıcı kullanımı açıldı" if desired_browser_use else "tarayıcı kullanımı kapandı")
             if _connectors_changed:
                 reasons.append("bağlayıcılar değişti")
-            logger.info(
-                "[CodexSession] %s; session yeniden kuruluyor",
-                ", ".join(reasons),
-            )
-            await close_session(self.conversation_id)
-            _existing = None
+            _running = _existing.running_work() if hasattr(_existing, "running_work") else []
+            if _running:
+                # Closing kills the app-server's whole process tree: keep the
+                # session as is (get_session returns it unchanged) and rebuild
+                # on the first turn start with no running work, as Claude does.
+                logger.info("[CodexSession] %s; yeniden kurma %d çalışan iş bitene kadar bekliyor",
+                            ", ".join(reasons), len(_running))
+                _defer_note = self._defer_rebuild_notice(reasons)
+            else:
+                _DEFERRED_REASONS.pop(self.conversation_id, None)
+                logger.info(
+                    "[CodexSession] %s; session yeniden kuruluyor",
+                    ", ".join(reasons),
+                )
+                await close_session(self.conversation_id)
+                _existing = None
+        else:
+            _DEFERRED_REASONS.pop(self.conversation_id, None)
 
         if _existing is None:
             # Kalıcı app-server yolu, BaseCLIProvider.analyze_code üzerinden
@@ -3582,6 +3617,8 @@ class AgentRunner:
                     _session_guide = agent_guide.with_connectors(_session_guide)
                 message = _session_guide + "\n\n" + message
             session._ctx_injected = True
+        if _defer_note:
+            message = f"{_defer_note}\n\n{message}"
         if self.generation_mode in ("auto", "balanced") and not getattr(self, "read_only", False):
             # Native requestApproval zaten otomatik kabul ediliyor (balanced'da
             # rutin olanlar; kritik olan kartla sorulur). Bu kısa talimat

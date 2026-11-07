@@ -448,6 +448,9 @@ def _context_fallback(db, conv_id: int, empty: dict) -> dict:
 
 _COMPACT_FAILED_KEPT = ("Claude oturumu yerinde özetlenemedi; arka plan işleri çalıştığı "
                        "için oturum yenilenmedi, bağlamı küçülmedi.")
+# Provider-neutral twin of the line above (EN entry in error_i18n.EN).
+_COMPACT_FAILED_KEPT_BG = ("Oturum yerinde özetlenemedi; arka plan işleri çalıştığı için "
+                           "oturum yenilenmedi, bağlamı küçülmedi.")
 
 
 async def _cli_baglamini_kucult(db, conv_id: int) -> Optional[str]:
@@ -471,6 +474,22 @@ async def _cli_baglamini_kucult(db, conv_id: int) -> Optional[str]:
         if sess._active_tasks:
             logger.warning(f"[Compact] conv={conv_id}: yerinde özetleme başarısız; arka plan işleri için oturum korunuyor")
             return _COMPACT_FAILED_KEPT
+    # Codex: same rule. close_session kills the app-server's whole process
+    # tree, its background commands and subagents included.
+    from providers.codex_session import peek_session as _peek_codex
+    codex = _peek_codex(conv_id)
+    if codex is not None:
+        try:
+            ok = await codex.compact()
+        except Exception:
+            logger.exception(f"[Compact] conv={conv_id} Codex yerinde özetleme hatası")
+            ok = False
+        if ok:
+            logger.info(f"[Compact] conv={conv_id}: Codex oturumu yerinde özetlendi")
+            return None
+        if codex.running_work() or codex.turn_live:
+            logger.warning(f"[Compact] conv={conv_id}: Codex yerinde özetleme başarısız; çalışan iş için oturum korunuyor")
+            return _COMPACT_FAILED_KEPT_BG
     await _cli_bagalamini_sifirla(db, conv_id)
     return None
 
@@ -1919,11 +1938,18 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
         # Each provider on its own: one failing close used to skip the rest
         # (Codex verifyb). One-shot = Cursor/Copilot/OpenCode/Kimi, whose
         # running child of a deleted chat otherwise keeps working.
+        # Background shell jobs too: they otherwise ran until backend shutdown.
         from providers import agy_session, claude_sdk_session, codex_session, oneshot_cli
+        from agentic import shell_jobs
+
+        async def _stop_jobs(cid: int) -> None:
+            await asyncio.to_thread(shell_jobs.stop_conversation, cid)
+
         for name, close in (("claude", claude_sdk_session.close_session),
                             ("codex", codex_session.close_session),
                             ("agy", agy_session.close_session),
-                            ("oneshot", oneshot_cli.close_conversation_sessions)):
+                            ("oneshot", oneshot_cli.close_conversation_sessions),
+                            ("shell_jobs", _stop_jobs)):
             try:
                 await close(conv_id)
             except Exception as e:
@@ -2784,11 +2810,17 @@ Max 300 kelime. Türkçe yaz.
         # Each inject is a CLI turn's worth of input, like a chat message.
         _check_chat_rate_limit(user_id)
         from providers.claude_sdk_session import peek_session as _peek_claude
+        from providers.codex_session import peek_session as _peek_codex
+        if not body.message.strip():
+            return {"status": "not_running"}
         sess = _peek_claude(conversation_id)
-        if sess is None or not body.message.strip():
+        # Codex: turn/steer into the running turn, never turn/interrupt.
+        codex = None if sess is not None else _peek_codex(conversation_id)
+        if sess is None and codex is None:
             return {"status": "not_running"}
         try:
-            ok = await sess.inject(body.message, body.client_id)
+            ok = await (sess.inject(body.message, body.client_id) if sess is not None
+                        else codex.steer(body.message, body.client_id))
         except Exception:
             logger.exception("[chat-inject] conv=%s inject failed", conversation_id)
             ok = False

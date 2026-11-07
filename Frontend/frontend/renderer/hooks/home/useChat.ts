@@ -1500,14 +1500,15 @@ export const useChat = (
   }, [patchConv, rt]);
   drainQueueRef.current = drainQueue;
 
-  // Only a plain typed message goes into a running Claude turn: pictures,
-  // videos, browser notes, inlined files, editor code and phone messages keep
-  // the queue (the turn's /chat-stream is what carries those).
+  // Only a plain typed message goes into a running Claude or Codex turn
+  // (Codex: turn/steer): pictures, videos, browser notes, inlined files,
+  // editor code and phone messages keep the queue (the turn's /chat-stream is
+  // what carries those). Gemini/agy keep the stop-then-send path.
   const canInject = useCallback((item: QueuedMessage) => {
     const m = (aiConfig?.model_name || '').toLowerCase();
-    const claude = aiConfig?.provider_type === 'subscription'
-      && !m.startsWith('gpt-') && !(m.startsWith('gemini') || m.startsWith('agy-'));
-    return claude && !item.remote && !item.code && !item.images?.length && !item.videos?.length
+    const liveTurn = aiConfig?.provider_type === 'subscription'
+      && !(m.startsWith('gemini') || m.startsWith('agy-'));
+    return liveTurn && !item.remote && !item.code && !item.images?.length && !item.videos?.length
       && !item.chips?.length && !/\[File Attached: /.test(item.draft) && !!item.text.trim();
   }, [aiConfig?.provider_type, aiConfig?.model_name]);
 
@@ -2176,7 +2177,7 @@ export const useChat = (
     const key = keyOf(activeConvIdRef.current);
     const item = rt(key).queue.find(q => q.id === itemId);
     if (!item || item.state === 'sent' || sendingNowRef.current.has(itemId)) return false;
-    // A Claude turn reads it in the same turn; nothing is stopped.
+    // A Claude or Codex turn reads it in the same turn; nothing is stopped.
     if (rt(key).loading && canInject(item)) return injectQueued(key, itemId);
     sendingNowRef.current.add(itemId);
     try {
