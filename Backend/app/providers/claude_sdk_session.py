@@ -95,6 +95,33 @@ def add_bg_tasks_listener(fn: Callable[[int, List[dict]], None]) -> None:
     _BG_TASK_LISTENERS.append(fn)
 
 
+# Called as (conv_id, frame) for a `user_injected` / `user_injected_dropped`
+# frame no stream listens for (the CLI's own turn after a Stop, a closed
+# session); /wake-stream-all carries it to the chat's owner.
+_INJECT_LISTENERS: List[Callable[[int, dict], None]] = []
+
+# Stores the split of a turn no stream listens for, called as
+# (conv_id, assistant_text_before, injected_text, model); conversation_routes
+# registers it.
+_INJECT_SAVE_CB: Optional[Callable[..., None]] = None
+
+
+def set_inject_saver(cb: Callable[..., None]) -> None:
+    global _INJECT_SAVE_CB
+    _INJECT_SAVE_CB = cb
+
+
+def add_inject_listener(fn: Callable[[int, dict], None]) -> None:
+    _INJECT_LISTENERS.append(fn)
+
+
+def remove_inject_listener(fn: Callable[[int, dict], None]) -> None:
+    try:
+        _INJECT_LISTENERS.remove(fn)
+    except ValueError:
+        pass
+
+
 def remove_bg_tasks_listener(fn: Callable[[int, List[dict]], None]) -> None:
     try:
         _BG_TASK_LISTENERS.remove(fn)
@@ -390,6 +417,10 @@ _OWED_RESULT_IDLE_S = 120.0
 # A task that ends stopped/killed/failed this soon after a Stop was ended by it.
 _STOP_KILL_WINDOW_S = 15.0
 _STOP_KILLED_NOTICE = "[Sistem] Durdurma şu arka plan işlerini kesti: {names}. Gerekirse yeniden başlat."
+# Stop while a background subagent runs: sent into the turn instead of an
+# interrupt, which would kill that subagent (owner's rule, 7 Nov 2026).
+_STOP_NOTE = ("[Sistem] Kullanıcı durdurdu. Şu anki işi bırak, yeni araç çağırma, "
+              "arka plan işlerine dokunma; tek cümleyle dur ve kullanıcıyı bekle.")
 _SESSION_RESET_NOTICE = ("[Sistem] Oturum yenilendi (model/ayar değişikliği); şu arka plan işleri "
                          "kesildi: {names}. Gerekirse yeniden başlat.")
 # Background tasks a session close took with it (model/effort/workspace change,
@@ -1010,6 +1041,16 @@ class ClaudeSDKSession:
         # içerik gelmez ama ping akar → iki zaman ayrışınca "derin düşünme" teşhisi konur.
         self._last_progress_at: float = time.time()
         self._rate_limit: Optional[Dict[str, Any]] = None
+        # Messages sent into a running turn (inject), oldest first, until the
+        # CLI echoes them: {"client_id", "text", "answered"}. `answered`: a
+        # top-level Result came after the send, so the echo opens its own CLI
+        # turn instead of riding the one it was sent into.
+        self._pending_injects: List[Dict[str, Any]] = []
+        # The opening query of the stream's turn: its echo is not an injection.
+        self._opening_echo: Optional[str] = None
+        # The turn's text was split at an injected message: the Result text
+        # (the whole turn's last block) is no fallback for the rest.
+        self._injected_this_turn = False
 
     # ── Yaşam döngüsü ────────────────────────────────────────────────────
     @property
@@ -1050,6 +1091,10 @@ class ClaudeSDKSession:
             # Görsel taşıyan tek bir stdout satırı 1 MiB varsayılanını aşınca oturum
             # komple düşüyordu; gerekçe ve ölçüm _SDK_STDOUT_LIMIT_BYTES'ta.
             max_buffer_size=_SDK_STDOUT_LIMIT_BYTES,
+            # The CLI echoes each user message when it takes it in; a message
+            # sent mid-turn (inject) is matched by that echo (measured 7 Nov
+            # 2026: a plain-string UserMessage right after the tool_result).
+            extra_args={"replay-user-messages": None},
         )
         # Windows'ta npm kurulumu PATH'e yalnız `claude.cmd` koyuyor ve SDK toplu-iş
         # kabuğu çalıştırmayı reddediyor → gerçek exe'yi biz gösteriyoruz.
@@ -1084,6 +1129,7 @@ class ClaudeSDKSession:
         # Önce reader'ı durdur (transport kapanırken yarım okuma gürültüsü olmasın),
         # sonra client'ı kapat. Reader'ın KENDİ içinden çağrılırsa kendini iptal etmez.
         self._cancel_grace()
+        await self._drop_pending_injects()
         # Closing the session ends every card it opened. Without this the gate
         # and its owner outlived the session: the waiter sat out the full
         # approval timeout, and the stale owner entry kept blocking AUTO-WAKE
@@ -1294,7 +1340,9 @@ class ClaudeSDKSession:
         1) Bekleyen onay/soru gate'lerini 'reddedildi' ile çözer (yoksa can_use_tool
            300sn bloklu kalır). 2) SDK turunu interrupt() eder. 3) Tur makul sürede
            bitmezse session'ı ZORLA resetler — böylece sonraki mesaj asla eski kilide
-           takılmaz. _turn_lock ALMAZ (deadlock önlemi — cancel ayrı request task'ından gelir)."""
+           takılmaz. _turn_lock ALMAZ (deadlock önlemi — cancel ayrı request task'ından gelir).
+        A running background subagent replaces 2-3: only the foreground tool is
+        stopped and the model is told to stop; nothing in the background dies."""
         # No model turn: only background tasks may be running. interrupt() has
         # nothing to stop, no Result follows it, and the wait below ran out into
         # the hard reset that orphaned the background shells ("Background shell
@@ -1310,6 +1358,32 @@ class ClaudeSDKSession:
         if self._cancel_event is not None:
             self._cancel_event.set()
 
+        # interrupt() kills every background subagent (measured 7 Nov 2026;
+        # background Bash survives), and the owner's rule is that Stop never
+        # kills background work. With one running, end only the foreground
+        # tool and ask the model to stop; the turn then ends by itself and is
+        # kept like any turn no stream listens to. No forced reset here.
+        if self._bg_subagents_running():
+            foreground = [tid for tid in self._active_tasks
+                          if (self._task_meta.get(tid) or {}).get("foreground")]
+            self._cancel_at = time.time()
+            self._cancel_tasks = set(foreground)
+            for tid in foreground:
+                try:
+                    if self._client is not None:
+                        await asyncio.wait_for(self._client.stop_task(tid), timeout=8.0)
+                except Exception as e:
+                    logger.warning(f"[ClaudeSDKSession:{self.conversation_id}] stop_task {tid} hatası: {e}")
+            if self._turn_active and not self._broken:
+                await self._send_inject(_STOP_NOTE, None)
+            logger.info(f"[ClaudeSDKSession:{self.conversation_id}] Durdur: arka plan alt ajanı çalışıyor; "
+                        f"interrupt yok, {len(foreground)} ön plan görevi durduruldu")
+            return
+
+        # The turn may have ended while the gates were released: nothing to
+        # interrupt then, and an interrupt would only hit background work.
+        if not self._turn_active:
+            return
         interrupted = False
         self._cancel_at = time.time()
         self._cancel_tasks = set(self._active_tasks)
@@ -1331,6 +1405,7 @@ class ClaudeSDKSession:
         # Interrupt başarısız ya da tur hâlâ aktif → sert reset. Sonraki mesaj taze
         # session açar (session_id None → DB transcript'i yeniden enjekte edilir).
         logger.warning(f"[ClaudeSDKSession:{self.conversation_id}] interrupt işlemedi → session zorla resetleniyor")
+        await self._drop_pending_injects()
         await self._finish_turn(error="⏹ Tur durduruldu (session resetlendi).")
         _evict(self)
         await self.close()
@@ -1345,6 +1420,7 @@ class ClaudeSDKSession:
         except Exception as e:
             logger.exception(f"[ClaudeSDKSession:{self.conversation_id}] reader koptu")
             self._broken = True
+            await self._drop_pending_injects()
             await self._finish_turn(error=f"Claude session koptu: {e}")
             _evict(self)
             # Kendi içinden tam close çağrılmaz (kendini iptal etmesin) — subprocess
@@ -1362,6 +1438,111 @@ class ClaudeSDKSession:
             # An unprompted CLI turn: the ring is how the desktop and the
             # browser remote follow it live (turn_live frames).
             self._agent_tap.feed(_TapEvent(ev.get("type", ""), ev))
+
+    def _notify_inject(self, frame: dict) -> None:
+        for fn in list(_INJECT_LISTENERS):
+            try:
+                fn(self.conversation_id, frame)
+            except Exception:
+                logger.exception("[ClaudeSDKSession] inject listener failed")
+
+    async def inject(self, text: str, client_id: str) -> bool:
+        """Send a message into the running turn, as terminal Claude Code does
+        with a message typed while it works: the CLI reads it at the next tool
+        boundary of the same turn. Never interrupts, never takes `_turn_lock`
+        (the running stream holds it). False when no listened turn runs."""
+        if (not self._turn_active or self._out_q is None
+                or self._cancel_requested or self._broken):
+            return False
+        # getattr: a session built without __init__ (tests) has no list yet.
+        return await self._send_inject(text, client_id)
+
+    def _bg_subagents_running(self) -> bool:
+        """A subagent runs that is not the tool the main turn waits on."""
+        for tid in self._active_tasks:
+            meta = self._task_meta.get(tid) or {}
+            if meta.get("kind") == "agent" and not meta.get("foreground"):
+                return True
+        return False
+
+    async def _send_inject(self, text: str, client_id: Optional[str]) -> bool:
+        """Queue `text` into the CLI's running turn, with the owed-Result
+        accounting of a mid-turn message. client_id None: the app's own note
+        (Stop), never shown or stored as the user's message."""
+        pending = getattr(self, "_pending_injects", None)
+        if pending is None:
+            pending = self._pending_injects = []
+        entry = {"client_id": client_id, "text": text, "answered": False}
+        pending.append(entry)
+        self._owed_results += 1
+        try:
+            await self._client.query(text)
+        except Exception as e:
+            logger.warning(f"[ClaudeSDKSession:{self.conversation_id}] inject failed: {e}")
+            if entry in pending:
+                pending.remove(entry)
+            self._owed_results = max(0, self._owed_results - 1)
+            return False
+        return True
+
+    async def _drop_pending_injects(self) -> None:
+        """The session goes away: injected messages the CLI never took in go
+        back to the sender's queue as unsent."""
+        pending = getattr(self, "_pending_injects", None) or []
+        self._pending_injects = []
+        if not pending:
+            return
+        ids = [e["client_id"] for e in pending if e["client_id"] is not None]
+        if not ids:
+            return
+        frame = {"type": "user_injected_dropped", "client_ids": ids}
+        if self._out_q is not None:
+            await self._out_q.put(frame)
+        else:
+            self._notify_inject(frame)
+
+    async def _on_user_echo(self, text: str) -> None:
+        """The CLI took in a plain user message (replay-user-messages)."""
+        key = text.strip()
+        if self._opening_echo is not None and key == self._opening_echo.strip():
+            self._opening_echo = None
+            return
+        pending = self._pending_injects
+        if not pending or pending[0]["text"].strip() != key:
+            return
+        entry = pending.pop(0)
+        if not self._turn_active:
+            # A Stop ended the turn it was sent into: the CLI runs it as its
+            # own turn (measured 7 Nov 2026), whose Result pays the inject.
+            if self._owed_results == 0:
+                self._owed_results = 1
+            self._begin_turn(unprompted=True)
+        elif not entry["answered"]:
+            # Same turn: the CLI answers both with one Result.
+            self._owed_results = max(0, self._owed_results - 1)
+        if entry["client_id"] is None:
+            return  # the Stop note: no user row, nothing for a queue
+        await self._flush_deltas()
+        before = self._final_text
+        self._final_text = ""
+        self._stream_tail = ""
+        self.last_reply_text = ""
+        self._injected_this_turn = True
+        frame = {"type": "user_injected", "client_id": entry["client_id"], "text": entry["text"]}
+        if self._out_q is not None:
+            await self._out_q.put(frame)
+            return
+        # No stream listens: store the split now, and show the rest as a new
+        # followed turn, so a follower re-reads the stored rows first.
+        if _INJECT_SAVE_CB is not None:
+            try:
+                _INJECT_SAVE_CB(self.conversation_id, before, entry["text"], self.model)
+            except Exception:
+                logger.exception("[ClaudeSDKSession] injected message not stored")
+        if before and self._agent_tap is not None:
+            self._end_agent_tap("done")
+            self._start_agent_tap()
+        self._notify_inject(frame)
 
     def _start_agent_tap(self) -> None:
         try:
@@ -1471,6 +1652,7 @@ class ClaudeSDKSession:
         self._absorbed_result_at = 0.0
         self._turn_started_at = time.time()
         self._cancel_requested = False
+        self._injected_this_turn = False
         if not unprompted:
             # A Stop's window ends when the next user or wake turn starts. The
             # CLI's own turn can start between two kill notices of the same Stop
@@ -1498,7 +1680,8 @@ class ClaudeSDKSession:
         self._turn_active = False
         self._cancel_grace()
         await self._flush_deltas()
-        final = self._final_text or self._last_result_text
+        final = self._final_text or ("" if getattr(self, "_injected_this_turn", False)
+                                     else self._last_result_text)
         q = self._out_q
         if q is not None:
             if self._usage_event:
@@ -1654,7 +1837,14 @@ class ClaudeSDKSession:
         if isinstance(msg, TaskStartedMessage):
             desc = msg.description or "arka plan görevi"
             self._active_tasks[msg.task_id] = desc
-            self._task_meta[msg.task_id] = {"kind": self._task_kind(msg), "started_at": time.time()}
+            # Raw CLI fields (measured 7 Nov 2026; SDK 0.2.163 keeps them only
+            # in `data`): a Bash task says is_backgrounded, a subagent's own
+            # task says owned_by_subagent. A foreground task is the tool the
+            # main turn waits on; Stop may end it alone (stop_task).
+            raw = getattr(msg, "data", None) or {}
+            foreground = raw.get("is_backgrounded") is False and not raw.get("owned_by_subagent")
+            self._task_meta[msg.task_id] = {"kind": self._task_kind(msg), "started_at": time.time(),
+                                            "foreground": foreground}
             self._tasks_changed()
             await self._emit({"type": "status", "scope": "subagent",
                               "detail": f"🤖 Görev başladı: {desc}",
@@ -1721,6 +1911,7 @@ class ClaudeSDKSession:
                 await self._emit({"type": "status",
                                   "detail": f"⚠️ Claude API: {_err_tr} — CLI otomatik yeniden deniyor…",
                                   "tokens": self._turn_tokens})
+            self._opening_echo = None
             if self._owed_results == 0:
                 self._owed_results = 1
             if not self._turn_active:
@@ -1774,6 +1965,9 @@ class ClaudeSDKSession:
             if getattr(msg, "parent_tool_use_id", None):
                 return
             content = getattr(msg, "content", None)
+            if isinstance(content, str):
+                await self._on_user_echo(content)
+                return
             if not isinstance(content, list):
                 return
             for b in content:
@@ -1800,6 +1994,8 @@ class ClaudeSDKSession:
         if isinstance(msg, ResultMessage):
             if getattr(msg, "parent_tool_use_id", None):
                 return
+            for entry in getattr(self, "_pending_injects", None) or []:
+                entry["answered"] = True
             self._owed_results = max(0, self._owed_results - 1)
             if self._owed_results > 0 and self._out_q is not None and not self._cancel_requested:
                 # An earlier turn ended; this stream still awaits its own Result.
@@ -1850,6 +2046,7 @@ class ClaudeSDKSession:
         elif et in ("content_block_stop", "message_stop"):
             await self._flush_deltas()
         elif et == "message_start":
+            self._opening_echo = None
             if self._owed_results == 0:
                 self._owed_results = 1
             if not self._turn_active:
@@ -1932,6 +2129,7 @@ class ClaudeSDKSession:
                     await out_q.put({"type": "text", "content": carried})
             try:
                 self._owed_results += 1
+                self._opening_echo = message
                 await self._client.query(message)
             except BaseException:
                 self._owed_results = max(0, self._owed_results - 1)

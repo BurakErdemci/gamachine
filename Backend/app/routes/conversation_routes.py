@@ -14,6 +14,7 @@ from time import time
 
 from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
 import action_risk
 import chat_files
@@ -224,6 +225,18 @@ class _TurnRecord:
         if self._had_response or not self._streamed.strip():
             return self.saved
         return _append_turn_text(self._streamed.strip(), self.saved)
+
+    def split(self) -> str:
+        """The text so far, then start over: a message sent into the running
+        turn (user_injected) is stored between the two parts."""
+        part = self.value()
+        self.saved, self._streamed, self._had_response = "", "", False
+        return part
+
+
+class ChatInjectRequest(BaseModel):
+    message: str
+    client_id: str
 
 
 class _TurnReply:
@@ -1376,9 +1389,17 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
         except Exception:
             logger.exception("[mailbox] conv=%s detached reply not forwarded", cid)
 
+    def _save_injected_split(cid, before, text, model=None, provider="claude"):
+        """A message sent into a running turn: the assistant text so far, then
+        the user message, so a reload shows them in the order they happened."""
+        if before and before.strip():
+            db.add_message(cid, "assistant", before, provider=provider, model=model)
+        db.add_message(cid, "user", text)
+
     try:
-        from providers.claude_sdk_session import set_db_saver
+        from providers.claude_sdk_session import set_db_saver, set_inject_saver
         set_db_saver(_save_detached_claude_turn)
+        set_inject_saver(_save_injected_split)
     except Exception as e:
         logger.warning(f"[conversation_routes] db saver kaydedilemedi: {e}")
 
@@ -1583,9 +1604,18 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
                 except RuntimeError:
                     pass  # the loop is closed: the stream is gone
 
+            # A message sent into a turn no stream listens for (the CLI's own
+            # turn after a Stop): the renderer takes it out of its queue.
+            def inject_listener(conv_id: int, frame: dict) -> None:
+                try:
+                    loop.call_soon_threadsafe(offer_turn_live, {**frame, "conversation_id": conv_id})
+                except RuntimeError:
+                    pass  # the loop is closed: the stream is gone
+
             from providers import claude_sdk_session as _claude_sessions
             turn_events.RING.add_listener(ring_listener)
             _claude_sessions.add_bg_tasks_listener(bg_tasks_listener)
+            _claude_sessions.add_inject_listener(inject_listener)
             # A stream that connects while tasks run learns them at once.
             for _conv, _tasks in _claude_sessions.bg_tasks_snapshots().items():
                 offer_bg_tasks(_conv, _tasks)
@@ -1652,6 +1682,7 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
             finally:
                 turn_events.RING.remove_listener(ring_listener)
                 _claude_sessions.remove_bg_tasks_listener(bg_tasks_listener)
+                _claude_sessions.remove_inject_listener(inject_listener)
                 desktop_channel.CHANNEL.unlisten(remote_q)
 
         return StreamingResponse(localize_sse(gen(), x_ui_lang), media_type="text/event-stream")
@@ -2405,6 +2436,15 @@ Max 300 kelime. Türkçe yaz.
                     # stored one, so the screen shows what the chat really got.
                     yield f"data: {json.dumps({'type': 'wake_message', 'content': mail_note})}\n\n"
                 async for event in runner.run(combined_msg):
+                    if event.type == "user_injected":
+                        # A message sent into this turn reached the agent:
+                        # the text so far, then that message, then the rest.
+                        try:
+                            _save_injected_split(request.conversation_id, entry.split(),
+                                                 (event.data or {}).get("text") or "",
+                                                 model=model_name, provider=_turn_agent)
+                        except Exception:
+                            logger.exception("[chat-stream] injected message not stored")
                     entry.add(event)
                     turn_reply.add(event)
                     tap.feed(event)
@@ -2658,6 +2698,25 @@ Max 300 kelime. Türkçe yaz.
         """
         _check_token(x_session_token)
         return await stop_chat(conversation_id)
+
+    @router.post("/chat-inject/{conversation_id}")
+    async def chat_inject(conversation_id: int, body: ChatInjectRequest,
+                          x_session_token: str = Header(alias="X-Session-Token", default="")):
+        """A message sent while a Claude turn runs: it reaches the agent at the
+        next tool boundary of the same turn, as in terminal Claude Code. Never
+        stops the turn; `not_running` sends the client back to its queue."""
+        _check_token(x_session_token)
+        require_conversation_owner(db, x_session_token, conversation_id)
+        from providers.claude_sdk_session import peek_session as _peek_claude
+        sess = _peek_claude(conversation_id)
+        if sess is None or not body.message.strip():
+            return {"status": "not_running"}
+        try:
+            ok = await sess.inject(body.message, body.client_id)
+        except Exception:
+            logger.exception("[chat-inject] conv=%s inject failed", conversation_id)
+            ok = False
+        return {"status": "injected" if ok else "not_running"}
 
     def _is_ordinary_chat(conversation_id: int) -> bool | None:
         """True for a chat with a row that is not a side chat; None when the lookup fails."""

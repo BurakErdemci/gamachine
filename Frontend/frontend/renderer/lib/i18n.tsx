@@ -1226,6 +1226,7 @@ export const tr = {
   'queue.addHint': 'Çalışan iş bitince gönderilir',
   'queue.attachments': '{sayi} ek',
   'queue.attachmentsOnly': 'Yalnız ek',
+  'queue.sent': 'iletildi, sıradaki adımda okunacak',
   // Voice dictation. Text is inserted at the caret and is NEVER sent on its
   // own — sending stays the user's decision.
   'mic.start': 'Konuşarak yaz',
@@ -3327,6 +3328,7 @@ export const en: Record<keyof typeof tr, string> = {
   'queue.addHint': 'Sent when the running turn ends',
   'queue.attachments': '{sayi} attachment(s)',
   'queue.attachmentsOnly': 'Attachments only',
+  'queue.sent': 'sent, read at the next step',
   'mic.start': 'Type by speaking',
   'mic.stop': 'Finish recording and turn it into text',
   'mic.transcribing': 'Turning speech into text…',

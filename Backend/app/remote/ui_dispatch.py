@@ -76,6 +76,7 @@ _ALLOW: List[Tuple[Tuple[str, ...], str]] = [
     # chat
     (("POST",), r"/chat-stream"),
     (("POST",), rf"/chat-stop/{_ID}"),
+    (("POST",), rf"/chat-inject/{_ID}"),
     (("POST",), rf"/conversations/{_ID}/side-stream"),
     (("GET",), r"/wake-stream-all"),
     (("GET",), rf"/conversations/{_ID}/turn-events"),

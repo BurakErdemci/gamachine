@@ -98,7 +98,15 @@ export type QueuedMessage = {
   remote?: RemoteOrigin;
   /** The browser notes and pages the composer held when it was queued; they join the message (text, tab, picture) only when it is sent. */
   chips?: readonly BrowserChip[];
+  /** 'sent': handed to the running Claude turn (/chat-inject); it leaves the
+   *  queue when the agent takes it in (`user_injected`). */
+  state?: 'sent';
+  /** Names the message to the backend while it is 'sent'. */
+  clientId?: string;
 };
+
+/** Messages a running turn has not taken in: what drains and what blocks a wake. */
+const unsentOf = (queue: QueuedMessage[]) => queue.filter(q => q.state !== 'sent');
 
 /** A message that came from a paired phone or a terminal agent (`remote_message` frame); no kind = phone. */
 export type RemoteOrigin = { device: string; kind?: 'phone' | 'agent' };
@@ -875,6 +883,10 @@ export const useChat = (
 
   // Set once `drainQueue` exists; a finishing turn hands its chat on through it.
   const drainQueueRef = useRef<(convId: number) => boolean>(() => false);
+  // Set once `injectQueued` exists: hands a queued message to the running turn.
+  const injectQueuedRef = useRef<(convId: number, itemId: number) => Promise<boolean>>(async () => false);
+  // Set once `applyInjectFrame` exists: a `user_injected(_dropped)` frame's effect on the queue.
+  const applyInjectFrameRef = useRef<(convId: number, data: any) => QueuedMessage | null>(() => null);
 
   const sendMessage = useCallback(async (
     messageContent: string, 
@@ -917,11 +929,14 @@ export const useChat = (
         };
         patchConv(keyOf(requested), r => ({ queue: [...r.queue, item] }));
         if (targetOverride == null) setChatInput('');
+        // Terminal Claude Code: a message typed while Claude works reaches it
+        // at the next tool boundary of the same turn, without stopping it.
+        if (requested != null && requested === activeConvIdRef.current) void injectQueuedRef.current(requested, item.id);
       }
       return;
     }
     // A wake never jumps a queued user message (see `startWake`).
-    if (origin === 'wake' && slot.queue.length > 0) return;
+    if (origin === 'wake' && unsentOf(slot.queue).length > 0) return;
     const browserContext = formatBrowserContext(chips);
     if (browserContext) messageContent = messageContent.trim() ? `${messageContent}\n\n${browserContext}` : browserContext;
     patchConv(keyOf(requested), () => ({ loading: true }));
@@ -1011,7 +1026,8 @@ export const useChat = (
     if (_trimmed === '/usage' && (_isClaude || _isCodex)) slashCard = 'usage';
     else if (_trimmed === '/context' && _isClaude) slashCard = 'context';
 
-    const aiMsgId = nextClientMsgId();
+    // `let`: a message taken in mid-turn (`user_injected`) starts a new bubble.
+    let aiMsgId = nextClientMsgId();
     let currentAiMsg: Message = { id: aiMsgId, role: 'assistant', content: '', smells: [], timestamp: new Date().toISOString(), thinking: null, tool_calls: [], slashCommand: slashCard };
     updateMessages(prev => [...prev, currentAiMsg]);
     if (slashCard) lossy = true;
@@ -1113,6 +1129,39 @@ export const useChat = (
                 // A mail wake: the server ran the turn on the stored note, not
                 // on the notice text this row was drawn with.
                 updateMessages(prev => prev.map(msg => (msg.id === userMsg.id ? { ...msg, content: data.content } : msg)));
+                continue;
+              }
+              if (data.type === 'user_injected_dropped') {
+                applyInjectFrameRef.current(targetConvId, data);
+                continue;
+              }
+              if (data.type === 'user_injected') {
+                // The agent took in a message sent mid-turn: it joins the
+                // thread here and the answer after it is a new bubble.
+                const taken = applyInjectFrameRef.current(targetConvId, data);
+                if (taken) {
+                  const injected: Message = {
+                    id: nextClientMsgId(), role: 'user', content: typeof data.text === 'string' ? data.text : taken.text,
+                    smells: [], timestamp: new Date().toISOString(),
+                  };
+                  const prevAi = currentAiMsg;
+                  const prevEmpty = !prevAi.content && !prevAi.thinking && !(prevAi.tool_calls?.length);
+                  if (prevEmpty) {
+                    // Nothing answered yet: the message goes before the empty bubble.
+                    updateMessages(prev => {
+                      const at = prev.findIndex(m => m.id === aiMsgId);
+                      return at < 0 ? [...prev, injected] : [...prev.slice(0, at), injected, ...prev.slice(at)];
+                    });
+                  } else {
+                    aiMsgId = nextClientMsgId();
+                    currentAiMsg = {
+                      id: aiMsgId, role: 'assistant', content: '', smells: [], timestamp: new Date().toISOString(),
+                      thinking: null, tool_calls: [], provider: prevAi.provider, model: prevAi.model,
+                    };
+                    const nextAi = currentAiMsg;
+                    updateMessages(prev => [...prev, injected, nextAi]);
+                  }
+                }
                 continue;
               }
               updateMessages(prev => prev.map(msg => {
@@ -1401,9 +1450,10 @@ export const useChat = (
   // composer. A busy chat keeps the message at the head for its next turn end.
   const drainQueue = useCallback((convId: number) => {
     const r = rt(convId);
-    if (r.loading || r.queuePaused || r.queue.length === 0) return false;
-    const [next, ...rest] = r.queue;
-    patchConv(convId, () => ({ queue: rest }));
+    // A 'sent' message is the running agent's already; it never goes out again.
+    const next = r.queue.find(q => q.state !== 'sent');
+    if (r.loading || r.queuePaused || !next) return false;
+    patchConv(convId, rr => ({ queue: rr.queue.filter(q => q.id !== next.id) }));
     void sendMessageRef.current(
       next.text, next.code, next.lang, next.genMode, next.thinkingLevel,
       next.setPendingGenFiles, next.setPendingDelete,
@@ -1412,6 +1462,65 @@ export const useChat = (
     return true;
   }, [patchConv, rt]);
   drainQueueRef.current = drainQueue;
+
+  // Only a plain typed message goes into a running Claude turn: pictures,
+  // videos, browser notes, inlined files, editor code and phone messages keep
+  // the queue (the turn's /chat-stream is what carries those).
+  const canInject = useCallback((item: QueuedMessage) => {
+    const m = (aiConfig?.model_name || '').toLowerCase();
+    const claude = aiConfig?.provider_type === 'subscription'
+      && !m.startsWith('gpt-') && !(m.startsWith('gemini') || m.startsWith('agy-'));
+    return claude && !item.remote && !item.code && !item.images?.length && !item.videos?.length
+      && !item.chips?.length && !/\[File Attached: /.test(item.draft) && !!item.text.trim();
+  }, [aiConfig?.provider_type, aiConfig?.model_name]);
+
+  // Hands a queued message to the chat's running Claude turn. It stays in the
+  // strip as 'sent' until the agent takes it in; `not_running` or a failed
+  // request makes it an ordinary queued message again.
+  const injectQueued = useCallback(async (convId: number, itemId: number) => {
+    const item = rt(convId).queue.find(q => q.id === itemId);
+    if (!user || !API || !convId || !item || item.state === 'sent' || !canInject(item)) return false;
+    const clientId = `inj-${nextClientMsgId()}`;
+    const mark = (state: 'sent' | undefined) => patchConv(convId, r => ({
+      queue: r.queue.map(q => (q.id === itemId ? { ...q, state, clientId: state ? clientId : undefined } : q)),
+    }));
+    mark('sent');
+    let injected = false;
+    try {
+      const res = await fetch(`${API}/chat-inject/${convId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Session-Token': user.sessionToken },
+        body: JSON.stringify({ message: item.text, client_id: clientId }),
+      });
+      const body = await res.json().catch(() => null);
+      injected = !!res.ok && body?.status === 'injected';
+    } catch { injected = false; }
+    const now = rt(convId).queue.find(q => q.id === itemId);
+    if (!injected && now?.clientId === clientId) {
+      mark(undefined);
+      // The turn may have ended meanwhile; nothing else would send it then.
+      drainQueueRef.current(convId);
+    }
+    return injected;
+  }, [API, canInject, patchConv, rt, user]);
+  injectQueuedRef.current = injectQueued;
+
+  const applyInjectFrame = useCallback((convId: number, data: any): QueuedMessage | null => {
+    if (data?.type === 'user_injected_dropped') {
+      const ids = new Set<string>(Array.isArray(data.client_ids) ? data.client_ids.map(String) : []);
+      if (ids.size === 0) return null;
+      patchConv(convId, r => ({
+        queue: r.queue.map(q => (q.clientId && ids.has(q.clientId) ? { ...q, state: undefined, clientId: undefined } : q)),
+      }));
+      drainQueueRef.current(convId);
+      return null;
+    }
+    const clientId = typeof data?.client_id === 'string' ? data.client_id : '';
+    const taken = clientId ? rt(convId).queue.find(q => q.clientId === clientId) ?? null : null;
+    if (taken) patchConv(convId, r => ({ queue: r.queue.filter(q => q.id !== taken.id) }));
+    return taken;
+  }, [patchConv, rt]);
+  applyInjectFrameRef.current = applyInjectFrame;
 
   const fetchMessagesRef = useRef(fetchMessages);
   fetchMessagesRef.current = fetchMessages;
@@ -1716,7 +1825,7 @@ export const useChat = (
       // A queued user message owns the chat's next turn, paused or not. The
       // backend drops pending wake notices on a user message anyway, and
       // queued mail is offered again once this frame's ticket expires.
-      if (!args || rt(convId).loading || rt(convId).queue.length > 0) return;
+      if (!args || rt(convId).loading || unsentOf(rt(convId).queue).length > 0) return;
       // A chat never opened here has no history in its runtime; the wake
       // turn's live copy would otherwise be all the user sees on opening it.
       if (rt(convId).messages.length === 0) await fetchMessagesRef.current(convId);
@@ -1775,6 +1884,14 @@ export const useChat = (
                 if (data?.type === 'bg_tasks') {
                   const bgId = Number(data.conversation_id);
                   if (Number.isSafeInteger(bgId) && bgId > 0 && !iptal) setBgTasks(bgId, data.tasks);
+                  continue;
+                }
+                if (data?.type === 'user_injected' || data?.type === 'user_injected_dropped') {
+                  // A turn no stream of ours listens to (the CLI's own turn
+                  // after a Stop) took in, or dropped, a message we sent; the
+                  // followed turn re-reads the stored thread itself.
+                  const injId = Number(data.conversation_id);
+                  if (Number.isSafeInteger(injId) && injId > 0 && !iptal) applyInjectFrameRef.current(injId, data);
                   continue;
                 }
                 if (data?.type === 'turn_live') {
@@ -1895,7 +2012,7 @@ export const useChat = (
   // leave with the next `/mcp-pending` poll; the rest stay decidable.
   // Resolves once the backend has answered the stop request (it cancels the
   // turn before answering), so a caller can start the next turn after it.
-  const stopMessage = useCallback((): Promise<void> => {
+  const stopTurn = useCallback((drainAfter: boolean): Promise<void> => {
     const convId = activeConvIdRef.current;
     const key = keyOf(convId);
     turnRef.current.delete(key);
@@ -1916,14 +2033,24 @@ export const useChat = (
     patchConv(key, r => ({
       pendingCommand: null, commandQueue: [], pendingQuestion: null, questionQueue: [],
       activity: null, loading: false,
-      queuePaused: r.queue.length > 0,
+      // "Send now" without inject keeps its old rule: the queue waits paused
+      // unless that message is still there to go out.
+      ...(drainAfter ? {} : { queuePaused: r.queue.length > 0 }),
     }));
+    // Claude Code's Stop: "If you have messages queued, Claude Code sends them
+    // next" - once the backend has cancelled the turn. 'sent' ones wait for
+    // their `user_injected` (the CLI runs them itself after the interrupt).
+    if (drainAfter) stopped = stopped.then(() => { drainQueueRef.current(key); });
     return stopped;
   }, [API, patchConv, user]);
+  // No arguments: it is also a click handler, and the event is not a flag.
+  const stopMessage = useCallback((): Promise<void> => stopTurn(true), [stopTurn]);
 
   // ── Message queue actions (the chat on screen) ──────────────────────────
   const removeQueued = useCallback((key: number, itemId: number) => {
     const item = rt(key).queue.find(q => q.id === itemId) ?? null;
+    // A 'sent' message is the agent's already: it can be neither edited nor taken back.
+    if (item?.state === 'sent') return null;
     if (item) {
       patchConv(key, r => {
         const queue = r.queue.filter(q => q.id !== itemId);
@@ -1963,11 +2090,13 @@ export const useChat = (
   const sendQueuedNow = useCallback(async (itemId: number) => {
     const key = keyOf(activeConvIdRef.current);
     const item = rt(key).queue.find(q => q.id === itemId);
-    if (!item || sendingNowRef.current.has(itemId)) return false;
+    if (!item || item.state === 'sent' || sendingNowRef.current.has(itemId)) return false;
+    // A Claude turn reads it in the same turn; nothing is stopped.
+    if (rt(key).loading && canInject(item)) return injectQueued(key, itemId);
     sendingNowRef.current.add(itemId);
     try {
       patchConv(key, r => ({ queue: [item, ...r.queue.filter(q => q.id !== itemId)] }));
-      if (rt(key).loading) await stopMessage();
+      if (rt(key).loading) await stopTurn(false);
       // The user may have deleted or edited this message while Stop was
       // pending; draining then sent a different one they never asked for, so
       // the queue stays as Stop left it (Codex queueaudit, 28 Sep 2026).
@@ -1980,7 +2109,7 @@ export const useChat = (
     } finally {
       sendingNowRef.current.delete(itemId);
     }
-  }, [drainQueue, patchConv, rt, stopMessage]);
+  }, [canInject, drainQueue, injectQueued, patchConv, rt, stopTurn]);
 
   // The chat holding a gate; the screen's chat when none does (a card set
   // directly through `setPendingQuestion`).

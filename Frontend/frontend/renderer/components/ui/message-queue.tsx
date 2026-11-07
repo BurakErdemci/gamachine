@@ -8,6 +8,8 @@ export type QueueItemView = {
     draft: string;
     images?: string[];
     videos?: any[];
+    /** 'sent': already handed to the running turn; read at its next step. */
+    state?: 'sent';
 };
 
 export type MessageQueueProps = {
@@ -51,12 +53,16 @@ export function MessageQueue({
                 {items.map(item => {
                     const extra = (item.images?.length ?? 0) + (item.videos?.length ?? 0);
                     const preview = item.draft.replace(/\s+/g, ' ').trim();
+                    const sent = item.state === 'sent';
                     return (
-                        <li key={item.id} data-queue-item className="queue-item">
+                        <li key={item.id} data-queue-item data-queue-sent={sent ? '' : undefined} className="queue-item">
                             <span className="queue-text" title={item.draft}>
                                 {preview || t('queue.attachmentsOnly')}
                                 {extra > 0 && <span className="queue-extra"> · {t('queue.attachments', { sayi: extra })}</span>}
+                                {sent && <span className="queue-extra"> · {t('queue.sent')}</span>}
                             </span>
+                            {/* The running agent has it: no edit, no second send, no taking it back. */}
+                            {!sent && <>
                             <button
                                 type="button"
                                 data-queue-edit
@@ -87,6 +93,7 @@ export function MessageQueue({
                             >
                                 <XIcon size={14} aria-hidden="true" />
                             </button>
+                            </>}
                         </li>
                     );
                 })}

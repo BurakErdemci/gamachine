@@ -40,6 +40,8 @@ const API = 'http://127.0.0.1:8000'
 const USER = { id: 1, name: 'b', sessionToken: 'tok' } as any
 // `subscription` keeps the `done` branch away from `parseGeneratedFiles`.
 const CONFIG = { provider_type: 'subscription', model_name: 'claude-opus-5' } as any
+// A chat on Codex: a message typed mid-turn keeps the plain queue (no inject).
+const CODEX = { provider_type: 'subscription', model_name: 'gpt-6-luna' } as any
 
 const enc = (ev: object) => new TextEncoder().encode(`data: ${JSON.stringify(ev)}\n\n`)
 
@@ -73,10 +75,15 @@ let turns: Turn[]
 let stops: number[]
 let fetchMock: ReturnType<typeof vi.fn>
 let pushWake: (frame: object) => void
+/** Bodies of /chat-inject requests, and what the backend answers them. */
+let injects: Array<{ convId: number; message: string; client_id: string }>
+let injectStatus: string
 
 const installFetch = () => {
   turns = []
   stops = []
+  injects = []
+  injectStatus = 'not_running'
   let wakeWaiter: ((v: any) => void) | null = null
   const wakeFrames: Uint8Array[] = []
   pushWake = (frame: object) => {
@@ -107,6 +114,12 @@ const installFetch = () => {
         },
       })
     }
+    const inject = u.match(/\/chat-inject\/(\d+)$/)
+    if (inject) {
+      injects.push({ convId: Number(inject[1]), ...JSON.parse(init.body) })
+      const status = injectStatus
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ status }) })
+    }
     const stop = u.match(/\/chat-stop\/(\d+)$/)
     if (stop) stops.push(Number(stop[1]))
     return Promise.resolve({ ok: true, status: 200, json: async () => ({ status: 'ok' }) })
@@ -114,7 +127,7 @@ const installFetch = () => {
   vi.stubGlobal('fetch', fetchMock)
 }
 
-const hook = () => renderHook(() => useChat(API, USER, CONFIG, '/ws', vi.fn(), vi.fn(), (n: string) => n))
+const hook = (config: any = CONFIG) => renderHook(() => useChat(API, USER, config, '/ws', vi.fn(), vi.fn(), (n: string) => n))
 
 /** Lets pending promise callbacks (fetch resolution, reader reads) run. */
 const flush = async () => { await act(async () => { for (let i = 0; i < 15; i++) await Promise.resolve() }) }
@@ -217,7 +230,8 @@ describe('message queue · drain', () => {
 })
 
 describe('message queue · pause', () => {
-  it('Stop pauses the queue; "send next" resumes it', async () => {
+  // Claude Code's Stop: "If you have messages queued, Claude Code sends them next".
+  it('Stop sends the queued messages next, once the backend has stopped the turn', async () => {
     const { result } = hook()
     await open(result, 1)
     send(result, 'first')
@@ -228,12 +242,10 @@ describe('message queue · pause', () => {
     await act(async () => { await result.current.stopMessage() })
     await flush()
     expect(stops).toEqual([1])
-    expect(result.current.queuePaused).toBe(true)
-    expect(userTurns()).toEqual(['first'])
-    expect(result.current.queue.length).toBe(1)
-
-    act(() => { result.current.resumeQueue() })
-    await flush()
+    const stopAt = fetchMock.mock.calls.findIndex(c => String(c[0]).endsWith('/chat-stop/1'))
+    const secondAt = fetchMock.mock.calls.findIndex(
+      c => String(c[0]).endsWith('/chat-stream') && JSON.parse(c[1].body).message === 'second')
+    expect(secondAt).toBeGreaterThan(stopAt)
     expect(userTurns()).toEqual(['first', 'second'])
     expect(result.current.queuePaused).toBe(false)
     expect(result.current.queue).toEqual([])
@@ -304,14 +316,16 @@ describe('message queue · edit, delete, send now', () => {
     await flush()
     send(result, 'second')
     await flush()
-    await act(async () => { await result.current.stopMessage() })
+    turns[0].stream.push({ type: 'error', message: 'boom' })
+    turns[0].stream.close()
+    await flush()
     expect(result.current.queuePaused).toBe(true)
     act(() => { result.current.deleteQueued(result.current.queue[0].id) })
     expect(result.current.queuePaused).toBe(false)
   })
 
-  it('"send now" stops the running turn, then sends that message first', async () => {
-    const { result } = hook()
+  it('"send now" on a Codex chat stops the running turn, then sends that message first', async () => {
+    const { result } = hook(CODEX)
     await open(result, 1)
     send(result, 'first')
     await flush()
@@ -352,8 +366,8 @@ describe('message queue · edit, delete, send now', () => {
   }
 
   // Codex queueaudit, 28 Sep 2026: the next queued message went out unasked.
-  it('"send now" whose message is deleted while Stop is pending sends nothing', async () => {
-    const { result } = hook()
+  it('"send now" on a Codex chat whose message is deleted while Stop is pending sends nothing', async () => {
+    const { result } = hook(CODEX)
     await open(result, 1)
     send(result, 'first')
     await flush()
@@ -376,8 +390,8 @@ describe('message queue · edit, delete, send now', () => {
     expect(result.current.queuePaused).toBe(true)
   })
 
-  it('"send now" whose message is taken back for editing while Stop is pending sends nothing', async () => {
-    const { result } = hook()
+  it('"send now" on a Codex chat whose message is taken back for editing while Stop is pending sends nothing', async () => {
+    const { result } = hook(CODEX)
     await open(result, 1)
     send(result, 'first')
     await flush()
@@ -398,8 +412,8 @@ describe('message queue · edit, delete, send now', () => {
     expect(result.current.queuePaused).toBe(true)
   })
 
-  it('a second "send now" click on the same message does not send it before Stop is answered', async () => {
-    const { result } = hook()
+  it('a second "send now" on a Codex chat click on the same message does not send it before Stop is answered', async () => {
+    const { result } = hook(CODEX)
     await open(result, 1)
     send(result, 'first')
     await flush()
@@ -511,7 +525,8 @@ describe('message queue · wake turns and busy chats', () => {
     await flush()
     send(result, 'second')
     await flush()
-    await act(async () => { await result.current.stopMessage() })
+    turns[0].stream.push({ type: 'error', message: 'boom' })
+    turns[0].stream.close()
     await flush()
 
     act(() => { pushWake({ type: 'wake', conversation_id: 1, count: 1, notices: ['n'], text: 'wake text' }) })
@@ -539,7 +554,8 @@ describe('message queue · wake turns and busy chats', () => {
     await flush()
     send(result, 'queued')
     await flush()
-    await act(async () => { await result.current.stopMessage() })
+    turns[0].stream.push({ type: 'error', message: 'boom' })
+    turns[0].stream.close()
     await flush()
 
     // The paused chat is idle, so a new message goes straight out.
@@ -556,6 +572,148 @@ describe('message queue · wake turns and busy chats', () => {
 
     await finish(1)
     expect(userTurns()).toEqual(['first', 'direct', 'queued'])
+  })
+})
+
+describe('message queue · mid-turn send on a Claude chat', () => {
+  it('Enter while the turn runs goes to /chat-inject as "sent" and never stops the turn', async () => {
+    injectStatus = 'injected'
+    const { result } = hook()
+    await open(result, 1)
+    send(result, 'first')
+    await flush()
+    send(result, 'also check the lights')
+    await flush()
+
+    expect(injects.map(i => [i.convId, i.message])).toEqual([[1, 'also check the lights']])
+    expect(stops).toEqual([])
+    expect(fetchMock.mock.calls.some(c => String(c[0]).includes('/chat-stop/'))).toBe(false)
+    expect(result.current.queue.map((q: any) => [q.draft, q.state])).toEqual([['also check the lights', 'sent']])
+    expect(result.current.loading).toBe(true)
+
+    // A 'sent' message never goes out again at the turn end, and cannot be taken back.
+    let taken: any
+    act(() => { taken = result.current.editQueued(result.current.queue[0].id) })
+    expect(taken).toBeNull()
+    await finish(0)
+    expect(userTurns()).toEqual(['first'])
+  })
+
+  it('user_injected moves the message into the thread; the answer after it is a new bubble', async () => {
+    injectStatus = 'injected'
+    const { result } = hook()
+    await open(result, 1)
+    send(result, 'build the scene')
+    await flush()
+    turns[0].stream.push({ type: 'text', content: 'placing the floor' })
+    await flush()
+    send(result, 'use the red cube')
+    await flush()
+    const clientId = injects[0].client_id
+    expect(clientId).toBeTruthy()
+
+    turns[0].stream.push({ type: 'user_injected', client_id: clientId, text: 'use the red cube' })
+    turns[0].stream.push({ type: 'text', content: 'red cube placed' })
+    await flush()
+
+    expect(result.current.queue).toEqual([])
+    expect(result.current.messages.map((m: any) => [m.role, m.content])).toEqual([
+      ['user', 'build the scene'],
+      ['assistant', 'placing the floor'],
+      ['user', 'use the red cube'],
+      ['assistant', 'red cube placed'],
+    ])
+    await finish(0)
+    expect(userTurns()).toEqual(['build the scene'])
+  })
+
+  it('user_injected_dropped puts the message back in the queue as unsent', async () => {
+    injectStatus = 'injected'
+    const { result } = hook()
+    await open(result, 1)
+    send(result, 'first')
+    await flush()
+    send(result, 'second')
+    await flush()
+    turns[0].stream.push({ type: 'user_injected_dropped', client_ids: [injects[0].client_id] })
+    await flush()
+    expect(result.current.queue.map((q: any) => [q.draft, q.state])).toEqual([['second', undefined]])
+    await finish(0)
+    expect(userTurns()).toEqual(['first', 'second'])
+  })
+
+  it('a user_injected frame on the wake channel takes the message out of the queue', async () => {
+    injectStatus = 'injected'
+    const { result } = hook()
+    await open(result, 1)
+    send(result, 'first')
+    await flush()
+    send(result, 'after the stop')
+    await flush()
+    act(() => { pushWake({ type: 'user_injected', conversation_id: 1, client_id: injects[0].client_id, text: 'after the stop' }) })
+    await flush()
+    expect(result.current.queue).toEqual([])
+  })
+
+  it('"send now" on a Claude chat injects the message and does not call /chat-stop', async () => {
+    const { result } = hook()
+    await open(result, 1)
+    send(result, 'first')
+    await flush()
+    send(result, 'second')  // answered not_running: an ordinary queued message
+    await flush()
+    expect(result.current.queue.map((q: any) => q.state)).toEqual([undefined])
+
+    injectStatus = 'injected'
+    let sent: boolean | undefined
+    await act(async () => { sent = await result.current.sendQueuedNow(result.current.queue[0].id) })
+    await flush()
+
+    expect(sent).toBe(true)
+    expect(stops).toEqual([])
+    expect(injects.map(i => i.message)).toEqual(['second', 'second'])
+    expect(userTurns()).toEqual(['first'])
+    expect(result.current.loading).toBe(true)
+    expect(result.current.queue.map((q: any) => q.state)).toEqual(['sent'])
+  })
+
+  it('not_running keeps the message an ordinary queued one, sent at the turn end', async () => {
+    const { result } = hook()
+    await open(result, 1)
+    send(result, 'first')
+    await flush()
+    send(result, 'second')
+    await flush()
+    expect(injects.map(i => i.message)).toEqual(['second'])
+    expect(result.current.queue.map((q: any) => [q.draft, q.state])).toEqual([['second', undefined]])
+    await finish(0)
+    expect(userTurns()).toEqual(['first', 'second'])
+  })
+
+  it('a message with a picture keeps the plain queue', async () => {
+    injectStatus = 'injected'
+    const { result } = hook()
+    await open(result, 1)
+    send(result, 'first')
+    await flush()
+    act(() => {
+      void result.current.sendMessage('see this', '', 'tr', 'auto', 'medium', vi.fn(), vi.fn(),
+        ['data:image/png;base64,AA'], false, undefined, 'user')
+    })
+    await flush()
+    expect(injects).toEqual([])
+    expect(result.current.queue.map((q: any) => q.state)).toEqual([undefined])
+  })
+
+  it('a chat on Codex keeps the plain queue', async () => {
+    injectStatus = 'injected'
+    const { result } = hook(CODEX)
+    await open(result, 1)
+    send(result, 'first')
+    await flush()
+    send(result, 'second')
+    await flush()
+    expect(injects).toEqual([])
   })
 })
 
@@ -607,6 +765,30 @@ describe('message queue · composer', () => {
     fireEvent.click(document.querySelector('[data-queue-edit]')!)
     expect(queue.onEdit).toHaveBeenCalledWith(7)
     expect(textarea.value).toBe('queued text')
+  })
+
+  it('Esc while the chat runs is Stop', () => {
+    const { onStop, textarea } = mount(true)
+    fireEvent.keyDown(textarea, { key: 'Escape' })
+    expect(onStop).toHaveBeenCalledTimes(1)
+  })
+
+  it('Esc with nothing running stops nothing', () => {
+    const { onStop, textarea } = mount(false)
+    fireEvent.keyDown(textarea, { key: 'Escape' })
+    expect(onStop).not.toHaveBeenCalled()
+  })
+
+  it('a sent message shows its label and no edit, send-now or delete', () => {
+    const queue = {
+      items: [{ id: 8, draft: 'read it next', state: 'sent' }], paused: false,
+      onEdit: vi.fn(), onDelete: vi.fn(), onSendNow: vi.fn(), onResume: vi.fn(),
+    }
+    mount(true, queue)
+    expect(screen.getByText(cevir('queue.sent'), { exact: false })).toBeTruthy()
+    expect(document.querySelector('[data-queue-edit]')).toBeNull()
+    expect(document.querySelector('[data-queue-send-now]')).toBeNull()
+    expect(document.querySelector('[data-queue-delete]')).toBeNull()
   })
 
   it('draws nothing for an empty queue', () => {

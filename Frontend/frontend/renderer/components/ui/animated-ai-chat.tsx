@@ -723,6 +723,10 @@ export function AnimatedChatInput({
         } else if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault();
             if (internalValue.trim() || attachments.length > 0 || chips.length > 0) handleSendMessage();
+        } else if (e.key === 'Escape' && isLoading && onStop && !showSkillsGallery) {
+            // Claude Code's Esc: stops the running turn (menus and dictation took theirs above).
+            e.preventDefault();
+            onStop();
         }
     };
 

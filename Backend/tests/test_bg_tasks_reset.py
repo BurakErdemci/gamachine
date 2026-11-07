@@ -309,7 +309,11 @@ def test_the_hard_reset_path_retires_before_its_slow_close():
         seen = []
         cs.add_bg_tasks_listener(lambda cid, tasks: seen.append((cid, [t["desc"] for t in tasks])))
         old = _live(CONV)
-        await old._on_message(_started("o", "old audit"))
+        # A foreground tool of the turn: with a background subagent running,
+        # Stop never interrupts or resets (test_claude_stop_keeps_background).
+        msg = _started("o", "old audit", "local_bash")
+        msg.data["is_backgrounded"] = False
+        await old._on_message(msg)
         old._turn_active = True
 
         async def no_interrupt():

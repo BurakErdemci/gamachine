@@ -585,8 +585,12 @@ def test_a_stop_that_kills_tasks_tells_the_next_turn_and_wakes_nothing():
         sess = _live_session()
         sess.close = AsyncMock()
         with patch.object(cs, "_TASKS_DONE_GRACE_S", GRACE):
-            await sess._on_message(_started("a", "audit"))
-            await sess._on_message(_started("b", "dev server", "local_bash"))
+            # The turn's own foreground tools: a background subagent would
+            # keep Stop off interrupt (test_claude_stop_keeps_background).
+            for tid, desc in (("a", "audit"), ("b", "dev server")):
+                msg = _started(tid, desc, "local_bash")
+                msg.data["is_backgrounded"] = False
+                await sess._on_message(msg)
             events = []
             current = await _start_stream(sess, "go", events)
 
