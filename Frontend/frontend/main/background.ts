@@ -41,7 +41,7 @@ import { createProject, cancelCreate } from './helpers/unity-create'
 import { loadCatalog, planInstall, startInstall, cancelInstall, type InstallDeps } from './helpers/unity-install'
 import { openProject } from './helpers/unity-launch'
 import { trashProject, trashPrompt } from './helpers/project-trash'
-import { readUnityVersion } from './helpers/unity-project'
+import { readUnityVersion, isEditorOpen } from './helpers/unity-project'
 import * as pty from 'node-pty'
 import {
   DOCKER_WORKSPACE_MOUNT,
@@ -484,6 +484,8 @@ handleSecure('hub-open-project', async (_event, arg: any) => {
     isTrusted: isTrustedRoot,
     isProject: isUnityProjectDir,
     readVersion: readUnityVersion,
+    isEditorOpen,
+    now: Date.now,
     spawn: (command, args, options) => spawn(command, args, options),
   })
 })

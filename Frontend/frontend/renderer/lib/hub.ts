@@ -115,10 +115,37 @@ export async function cancelCreate(): Promise<boolean> {
 }
 
 /** Launches the Unity editor on a trusted project, retaining the failure's translation data. */
-export async function launchProject(path: string, version?: string): Promise<{ opened: boolean; error?: string } & HubFailureDetails> {
+export async function launchProject(path: string, version?: string): Promise<{ opened: boolean; alreadyOpen?: boolean; error?: string } & HubFailureDetails> {
   const res = await call('hub-open-project', version ? { path, version } : { path });
-  if (res && res.opened === true) return { opened: true };
+  if (res && res.opened === true) return res.alreadyOpen === true ? { opened: true, alreadyOpen: true } : { opened: true };
   return { opened: false, error: res && typeof res.error === 'string' ? res.error : undefined, ...failureDetails(res) };
+}
+
+// Launches whose IPC call is still awaiting, by project: a second press joins the first instead of
+// asking main for another editor.
+const pendingLaunches = new Map<string, Promise<boolean>>();
+
+/** Launches and toasts the outcome; every Launch Unity button goes through here. Resolves whether Unity is (being) opened. */
+export function launchWithToast(
+  path: string, version: string | undefined,
+  showToast: (message: string, type: 'success' | 'error' | 'info') => void,
+  t: (key: TKey, values?: TValues) => string,
+): Promise<boolean> {
+  const key = path.replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase();
+  const pending = pendingLaunches.get(key);
+  if (pending) return pending;
+  const run = (async () => {
+    try {
+      const res = await launchProject(path, version);
+      if (res.opened) showToast(res.alreadyOpen ? t('hub.alreadyOpen') : t('hub.launched'), res.alreadyOpen ? 'info' : 'success');
+      else showToast(t('hub.launchFailed', { error: hubFailureText(res, t) }), 'error');
+      return res.opened;
+    } finally {
+      pendingLaunches.delete(key);
+    }
+  })();
+  pendingLaunches.set(key, run);
+  return run;
 }
 
 /** Subscribes to creation progress; returns the unsubscribe. */

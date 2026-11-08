@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 
 import { useLang } from '../../../lib/i18n';
 import {
-  cancelInstallRun, cancelRun, clearInstall, clearRun, clearRunIf, getInstall, getRun, hubFailureText, launchProject, listEditors, listTemplates,
+  cancelInstallRun, cancelRun, clearInstall, clearRun, clearRunIf, getInstall, getRun, launchWithToast, listEditors, listTemplates,
   nameProblem, pickParentDir, runInstall, sortTemplates, startCreate, subscribeInstall, subscribeRun,
   type HubEditor, type HubRun, type HubTemplate, type InstallRun, type InstallTarget, type NameProblem,
 } from '../../../lib/hub';
@@ -158,9 +158,7 @@ export function useHub({ recent, onSelectWorkspace, showToast, onCreated }: HubD
   };
 
   const launch = async (path: string, v?: string) => {
-    const res = await launchProject(path, v);
-    if (res.opened) showToast(t('hub.launched'), 'success');
-    else showToast(t('hub.launchFailed', { error: hubFailureText(res, t) }), 'error');
+    await launchWithToast(path, v, showToast, t);
   };
 
   /** How many recent projects were last saved with each editor version. */

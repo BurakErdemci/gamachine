@@ -1,11 +1,15 @@
 import { listEditors, EditorDeps } from './unity-editors'
 import type { HubFailure } from './unity-create'
+import path from 'path'
 
 export interface LaunchDeps {
   editors: EditorDeps
   isTrusted: (p: string) => boolean
   isProject: (dir: string) => boolean
   readVersion: (dir: string) => string | null
+  // Optional: without them there is no memory of earlier launches and no running-editor check.
+  isEditorOpen?: (dir: string) => boolean
+  now?: () => number
   spawn: (command: string, args: string[], options: { detached: boolean; stdio: 'ignore' }) =>
     {
       unref: () => void
@@ -19,12 +23,38 @@ export function bundleOf(editorPath: string): string | null {
   return /^(.+\.app)\/Contents\/MacOS\/[^/]+$/.exec(editorPath)?.[1] ?? null
 }
 
-export async function openProject(
-  opts: { path: string; version?: string },
-  deps: LaunchDeps,
-): Promise<{ opened: true; error?: never; code?: never; params?: never } | ({ opened: false } & HubFailure)> {
+export const LAUNCH_MEMORY_MS = 30_000
+
+type LaunchResult = { opened: true; alreadyOpen?: true; error?: never; code?: never; params?: never } | ({ opened: false } & HubFailure)
+
+// project -> launch time; null while that launch still awaits its 'spawn'/'exit'. Unity takes a while
+// before it writes Library/EditorInstance.json, so a second press in that window must not spawn again.
+const launches = new Map<string, number | null>()
+
+export function _resetLaunchMemory(): void {
+  launches.clear()
+}
+
+function launchKey(dir: string, platform: string): string {
+  const resolved = (platform === 'win32' ? path.win32 : path).resolve(dir)
+  return platform === 'win32' || platform === 'darwin' ? resolved.toLowerCase() : resolved
+}
+
+export async function openProject(opts: { path: string; version?: string }, deps: LaunchDeps): Promise<LaunchResult> {
   if (!deps.isTrusted(opts.path)) return { opened: false, error: 'Project folder is not trusted.', code: 'notTrusted' }
   if (!deps.isProject(opts.path)) return { opened: false, error: 'Not a Unity project folder.', code: 'notProject' }
+  const key = launchKey(opts.path, deps.editors.platform)
+  const remembered = launches.get(key)
+  const recent = remembered === null || (remembered !== undefined && deps.now !== undefined && deps.now() - remembered < LAUNCH_MEMORY_MS)
+  if (recent || deps.isEditorOpen?.(opts.path)) return { opened: true, alreadyOpen: true }
+  launches.set(key, null)
+  const result = await launchEditor(opts, deps)
+  if (result.opened && deps.now) launches.set(key, deps.now())
+  else launches.delete(key)
+  return result
+}
+
+async function launchEditor(opts: { path: string; version?: string }, deps: LaunchDeps): Promise<LaunchResult> {
   const version = opts.version || deps.readVersion(opts.path)
   if (!version) return { opened: false, error: 'Unity version of the project is unknown.', code: 'versionUnknown' }
   const editor = listEditors(deps.editors).editors.find(e => e.version === version)

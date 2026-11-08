@@ -12,7 +12,7 @@ export const UNITY: GuideTopic[] = [
     steps: [
       { anchor: "unity-switch", side: "below", align: "start",
         title: T("Unity anahtarı", "The Unity switch"),
-        text: T("Açıkken Unity Editor'ü ben sürerim: sahne, nesne, prefab. Kapatırsan Unity'ye hiç dokunmam, yalnız dosyalarla çalışırım. Projenin Editor'ü kapalıyken proje kartında ve bu anahtarın yanında bir Unity'yi başlat düğmesi çıkar.", "While it's on I drive the Unity Editor: scenes, objects, prefabs. Turn it off and I don't touch Unity at all, I only work with files. While the project's Editor is closed, the project card and this switch show a Launch Unity button."),
+        text: T("Açıkken Unity Editor'ü ben sürerim: sahne, nesne, prefab. Kapatırsan Unity'ye hiç dokunmam, yalnız dosyalarla çalışırım. Proje kartında her zaman bir Unity'yi başlat düğmesi vardır; bu anahtarın yanında da projenin Editor'ü kapalıyken çıkar. Editor'ü açık bir proje için ikinci bir Editor başlatmam.", "While it's on I drive the Unity Editor: scenes, objects, prefabs. Turn it off and I don't touch Unity at all, I only work with files. The project card always offers Launch Unity, and this switch offers it while the project's Editor is closed. I never start a second Editor for a project that's already open."),
       },
     ],
   },

@@ -34,6 +34,23 @@ export function readUnityVersion(dir: string): string | null {
   }
 }
 
+// Unity keeps Library/EditorInstance.json (with its process_id) while the editor runs; the backend reads the same file.
+export function isEditorOpen(dir: string): boolean {
+  try {
+    const info = JSON.parse(fs.readFileSync(path.join(dir, 'Library', 'EditorInstance.json'), 'utf8'))
+    const pid = info?.process_id
+    if (!Number.isInteger(pid) || pid <= 1) return false
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch (err: any) {
+      return err?.code === 'EPERM'
+    }
+  } catch {
+    return false
+  }
+}
+
 export function inspectProject(dir: string): { exists: boolean; unityVersion: string | null } {
   const exists = isDirectory(dir)
   return { exists, unityVersion: exists ? readUnityVersion(dir) : null }

@@ -155,6 +155,8 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
   // The poll's interval keeps the first render's callback, so the workspace is read through a ref.
   const workspacePathRef = useRef(workspacePath);
   workspacePathRef.current = workspacePath;
+  // The previous project's answer must not stay on screen for the new one until the next poll.
+  useEffect(() => { setUnityEditorOpen(null); }, [workspacePath]);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Yoklama kuşağı sayacı + montaj bayrağı; ikisi de `fetchUnityMcpStatus`'ta
   // kullanılıyor, gerekçe orada.
@@ -199,7 +201,10 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
       const statusWorkspace = hostWorkspace ? await backendWorkspacePath(hostWorkspace) : null;
       const res = await axios.get(`${API}/mcp/unity/status`, statusWorkspace ? { params: { workspace: statusWorkspace } } : undefined);
       if (!guncelMi()) return;
-      setUnityEditorOpen(statusWorkspace && typeof res.data?.editor_open === 'boolean' ? res.data.editor_open : null);
+      // An answer sent for a project the user has since left says nothing about the current one.
+      if (workspacePathRef.current === hostWorkspace) {
+        setUnityEditorOpen(statusWorkspace && typeof res.data?.editor_open === 'boolean' ? res.data.editor_open : null);
+      }
       const status = unityMcpStatusOku(res.data?.status);
       const reason = typeof res.data?.reason === 'string' ? res.data.reason : null;
 

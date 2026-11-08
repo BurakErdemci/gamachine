@@ -33,7 +33,7 @@ import { ProjectFiles } from '../components/home/FileTree';
 import { ControlPanel, ThinkingLevel, EffortCaps } from '../components/home/ControlPanel';
 import { SessionReportPanel } from '../components/home/SessionReportPanel';
 import { UnityMcpToggle } from '../components/home/UnityMcpToggle';
-import { launchProject, hubFailureText } from '../lib/hub';
+import { launchWithToast } from '../lib/hub';
 import { isRemotePage } from '../lib/remote/transport';
 import { AnimatedChatInput, type ComposerPickers, type ComposerDraft } from '../components/ui/animated-ai-chat';
 import { ToastContainer } from '../components/ui/Toast';
@@ -318,10 +318,7 @@ export default function Home() {
   // Same toasts as the project card's launch (useHub.launch); a remote browser cannot spawn Unity on the host.
   const launchWorkspaceUnity = fs.workspacePath && typeof window !== 'undefined' && (window as any).ipc && !isRemotePage()
     ? async () => {
-        const res = await launchProject(fs.workspacePath);
-        if (res.opened) showToast(t('hub.launched'), 'success');
-        else showToast(t('hub.launchFailed', { error: hubFailureText(res, t) }), 'error');
-        return res.opened;
+        return launchWithToast(fs.workspacePath, undefined, showToast, t);
       }
     : undefined;
   // Announce state to non-React consumers before they render translated text.
