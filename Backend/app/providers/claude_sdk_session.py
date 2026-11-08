@@ -1160,6 +1160,11 @@ class ClaudeSDKSession:
         for gid in list(self._active_gate_ids):
             release_gate(gid, wake=True)
         self._active_gate_ids.clear()
+        # A post-compact read waiting for a turn's lock would keep the closed session alive.
+        crt = getattr(self, "_compact_read_task", None)
+        self._compact_read_task = None
+        if crt is not None and not crt.done() and crt is not asyncio.current_task():
+            crt.cancel()
         rt = self._reader_task
         self._reader_task = None
         if rt is not None and rt is not asyncio.current_task():
@@ -1513,25 +1518,31 @@ class ClaudeSDKSession:
         # getattr: a session built without __init__ (tests) has no list yet.
         return await self._send_inject(text, client_id)
 
-    async def _refresh_context_reading(self) -> bool:
+    async def _refresh_context_reading(self, after_compact: bool = False) -> bool:
         """Read the CLI's context usage into `context_reading`. False (old value
-        kept) when the session is not live or the CLI does not answer."""
-        if not self.is_live or self._client is None:
-            return False
-        try:
-            # Query outside the reader: its control response needs that reader to avoid deadlock.
-            usage = await asyncio.wait_for(self._client.get_context_usage(), 5.0)
-            self.context_reading = {
-                "used": int(usage["totalTokens"]),
-                "window": int(usage.get("rawMaxTokens") or usage["maxTokens"]),
-                "percent": float(usage["percentage"]),
-                "model": str(usage.get("model") or ""),
-            }
-            return True
-        except Exception:
-            logger.debug("[ClaudeSDKSession:%s] context reading unavailable",
-                         self.conversation_id, exc_info=True)
-            return False
+        kept) when the session is not live or the CLI does not answer; with
+        `after_compact` a failure clears the stale pre-compact value instead.
+        A read that started before the one already stored never overwrites it."""
+        self._read_seq = seq = getattr(self, "_read_seq", 0) + 1
+        reading = None
+        if self.is_live and self._client is not None:
+            try:
+                # Query outside the reader: its control response needs that reader to avoid deadlock.
+                usage = await asyncio.wait_for(self._client.get_context_usage(), 5.0)
+                reading = {
+                    "used": int(usage["totalTokens"]),
+                    "window": int(usage.get("rawMaxTokens") or usage["maxTokens"]),
+                    "percent": float(usage["percentage"]),
+                    "model": str(usage.get("model") or ""),
+                }
+            except Exception:
+                logger.debug("[ClaudeSDKSession:%s] context reading unavailable",
+                             self.conversation_id, exc_info=True)
+        if (reading is None and not after_compact) or seq < getattr(self, "_written_seq", 0):
+            return reading is not None
+        self.context_reading = reading
+        self._written_seq = seq
+        return reading is not None
 
     async def compact(self, timeout: Optional[float] = None) -> bool:
         """Compact the CLI's context in place, as terminal Claude Code's
@@ -1562,12 +1573,37 @@ class ClaudeSDKSession:
             # Its Result may still come: it stays absorbed (_compact_result_owed).
             logger.warning(f"[ClaudeSDKSession:{self.conversation_id}] /compact zaman aşımı")
             return False
-        # The pre-compact reading is stale now. A running turn holds the lock
-        # and its stream() refreshes the reading at its end; reading here would
-        # wait on a reader that turn is using.
-        if ok and not self._turn_lock.locked() and not await self._refresh_context_reading():
-            self.context_reading = None
+        if not ok:
+            return ok
+        # The pre-compact reading is stale now: readings started from here on
+        # are post-compact ones.
+        self._read_seq = getattr(self, "_read_seq", 0) + 1
+        self._compact_mark = self._read_seq
+        if not self._turn_lock.locked():
+            # Not under the lock: a turn sent meanwhile must not wait on this
+            # read; the sequence number keeps that turn's newer reading.
+            await self._refresh_context_reading(after_compact=True)
+        else:
+            # A running turn holds the lock and its reader; reading here could
+            # wait on a reader that turn is using. Its stream() reads again at
+            # its end; this task covers a stream whose end reading was cut off.
+            self._schedule_post_compact_read()
         return ok
+
+    def _post_compact_read_owed(self) -> bool:
+        mark = getattr(self, "_compact_mark", 0)
+        return mark > 0 and getattr(self, "_written_seq", 0) <= mark
+
+    def _schedule_post_compact_read(self) -> None:
+        task = getattr(self, "_compact_read_task", None)
+        if task is not None and not task.done():
+            return
+
+        async def read_after_turn():
+            async with self._turn_lock:
+                if self._post_compact_read_owed():
+                    await self._refresh_context_reading(after_compact=True)
+        self._compact_read_task = asyncio.ensure_future(read_after_turn())
 
     async def hand_to_running_turn(self, text: str) -> bool:
         """A plain send that found the turn still running and its lock held (a
@@ -2350,6 +2386,10 @@ class ClaudeSDKSession:
             self._out_q = None
             try:
                 await self._refresh_context_reading()
+                if self._post_compact_read_owed():
+                    # A /compact queued behind this turn ran while that reading
+                    # was in flight: it is the pre-compact value.
+                    await self._refresh_context_reading(after_compact=True)
             finally:
                 # NOT: reader'ı BEKLEMEYİZ/iptal etmeyiz (eski 'await task' kilidi burdaydı).
                 # SSE koptuysa tur CLI'da sürer; reader biten turun metnini DB'ye kaydeder.

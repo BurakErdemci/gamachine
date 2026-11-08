@@ -55,17 +55,22 @@ def test_a_failed_compact_leaves_the_reading_untouched():
     assert sess.context_reading == _BEFORE
 
 
-def test_compact_queued_behind_a_running_turn_does_not_read_inside_compact():
+def test_compact_queued_behind_a_running_turn_reads_only_after_the_turn():
     async def main():
         sess = _gauged(4604)
-        await sess._turn_lock.acquire()  # a turn is running: its stream() refreshes
+        await sess._turn_lock.acquire()  # a turn is running: its reader may be busy
         try:
             ok = await sess.compact(timeout=2)
+            for _ in range(5):
+                await asyncio.sleep(0)
+            during = dict(sess.context_reading)
         finally:
             sess._turn_lock.release()
-        return sess, ok
-    sess, ok = asyncio.run(main())
-    assert ok is True and sess.context_reading == _BEFORE
+        await asyncio.wait_for(sess._compact_read_task, 2)
+        return sess, ok, during
+    sess, ok, during = asyncio.run(main())
+    assert ok is True and during == _BEFORE
+    assert sess.context_reading["percent"] == 8.0
 
 
 def test_the_gauge_route_shows_the_fresh_value_after_compact(db, client, monkeypatch):  # noqa: F811

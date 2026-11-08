@@ -2072,13 +2072,15 @@ export const useChat = (
         headers: { 'X-Session-Token': user.sessionToken }, timeout: 150000,
       });
       if (res.data.status === 'success') {
+        // First: the context shrank whatever happens to the message reload below, and an in-place
+        // compact of a short chat answers without a summary but shrank it too.
+        await refreshContextUsage(target);
         if (res.data.summary) {
           const msgRes = await axios.get(`${API}/conversations/${target}/messages`);
           patchConv(target, () => ({ messages: msgRes.data, loaded: true, unsynced: false, clientOnly: false }));
           // Eskiden buraya sabit `percent: 5` yazılıyordu — sıkıştırmadan sonra
           // doluluğun ne olduğu ölçülmeden, makul görünen bir sayıyla. Gösterge
           // artık tek kaynaktan tazeleniyor.
-          await refreshContextUsage(target);
           showToast(cevir('compact.done'), 'success');
         } else {
           // Backend'in `message`'ı sabit TÜRKÇE — İngilizce arayüzde Türkçe toast

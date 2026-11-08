@@ -1787,6 +1787,7 @@ class CodexSession:
             return False
         try:
             self._compacted_event.clear()
+            before = self.context_reading
             try:
                 resp = await self._request("thread/compact/start", {"threadId": self.thread_id}, timeout=30)
             except Exception as e:
@@ -1800,6 +1801,11 @@ class CodexSession:
             except asyncio.TimeoutError:
                 logger.warning(f"[CodexSession:{self.conversation_id}] compact: tamamlanma bildirimi gelmedi")
                 return False
+            # Codex reports usage only through tokenUsage notifications; there is
+            # nothing to ask. A pre-compact value is stale: the route falls back
+            # to its estimate until the next notification.
+            if self.context_reading is before:
+                self.context_reading = None
             return True
         finally:
             self._turn_lock.release()
