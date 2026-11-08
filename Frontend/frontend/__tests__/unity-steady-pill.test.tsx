@@ -45,7 +45,13 @@ it('inside the grace nothing on the pill contradicts "Bağlı"; after it the wai
   expect(screen.queryByText(tr['unity.hintBringForwardGeneric'])).toBeNull()
   expect(screen.queryByText(tr['unity.launch'])).toBeNull()
   expect(screen.queryByText(/CS1002/)).toBeNull()
+  view.rerender(<UnityMcpToggle {...base} {...extras} status="running" dialog={{ title: 'Save Scene', buttons: ['OK'] }} />)
+  expect(screen.queryByText(/Save Scene/)).toBeNull()
   act(() => { vi.advanceTimersByTime(15_000) })
+  // After the grace the compile reason takes the hint's place; without it the dialog hint shows.
+  view.rerender(<UnityMcpToggle {...base} {...extras} reasonCode={null} status="running"
+    dialog={{ title: 'Save Scene', buttons: ['OK'] }} />)
+  expect(screen.getByText(/Save Scene/)).toBeTruthy()
   expect(screen.getByText(OFF_WORD)).toBeTruthy()
   expect(screen.getByText(tr['unity.launch'])).toBeTruthy()
 })

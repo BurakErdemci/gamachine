@@ -50,12 +50,12 @@ export function useShownUnityStatus(status: UnityMCPStatus | undefined): UnityMC
   const [, rerender] = useState(0);
   if (status === 'connected') { seen.current = true; leftAt.current = null; }
   else if (status === 'off' || status === 'blocked') { seen.current = false; leftAt.current = null; }
-  else if (seen.current && leftAt.current === null) leftAt.current = Date.now();
+  else if (seen.current && leftAt.current === null) leftAt.current = performance.now();
   const left = leftAt.current;
-  const inGrace = left !== null && Date.now() - left < UNITY_DROP_GRACE_MS;
+  const inGrace = left !== null && performance.now() - left < UNITY_DROP_GRACE_MS;
   useEffect(() => {
     if (left === null) return;
-    const id = setTimeout(() => rerender(n => n + 1), Math.max(0, UNITY_DROP_GRACE_MS - (Date.now() - left)));
+    const id = setTimeout(() => rerender(n => n + 1), Math.max(0, UNITY_DROP_GRACE_MS - (performance.now() - left)));
     return () => clearTimeout(id);
   }, [left]);
   return inGrace ? 'connected' : status;
