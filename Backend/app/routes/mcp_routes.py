@@ -102,7 +102,8 @@ def stop_mcp(workspace_path=None):
     unity_mcp_manager.active_workspace = None
     from tools.unity_mcp_tools import unload_unity_tools
     unload_unity_tools()
-    if workspace_path:
+    # An isolated backend (GAMACHINE_NO_UNITY_MCP) must leave the project's autoconnect file alone.
+    if workspace_path and not unity_mcp_disabled():
         unity_mcp_manager._write_autoconnect_settings(workspace_path, auto_start=False)
     return {"status": "stopped"}
 

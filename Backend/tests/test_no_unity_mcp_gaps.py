@@ -127,3 +127,26 @@ def test_toggle_off_still_answers_stopped_under_switch(switch_on, mgr):
                                                headers={"X-Session-Token": TOKEN})
     assert response.status_code == 200, response.text
     assert response.json() == {"status": "stopped"}
+
+
+def test_toggle_off_with_a_workspace_leaves_its_autoconnect_file_under_switch(switch_on, mgr, tmp_path):
+    project = _unity_project(tmp_path / "project")
+    before = _snapshot(project)
+    response = _client(SimpleNamespace()).post(
+        "/mcp/unity/toggle", json={"enabled": False, "workspace_path": str(project)},
+        headers={"X-Session-Token": TOKEN})
+    assert response.status_code == 200, response.text
+    assert response.json() == {"status": "stopped"}
+    assert _snapshot(project) == before
+
+
+def test_toggle_off_with_a_workspace_still_writes_auto_start_false_without_switch(monkeypatch, mgr, tmp_path):
+    monkeypatch.delenv("GAMACHINE_NO_UNITY_MCP", raising=False)
+    monkeypatch.setenv("LOCAL_APP_TOKEN", TOKEN)
+    project = _unity_project(tmp_path / "project")
+    response = _client(SimpleNamespace()).post(
+        "/mcp/unity/toggle", json={"enabled": False, "workspace_path": str(project)},
+        headers={"X-Session-Token": TOKEN})
+    assert response.status_code == 200, response.text
+    written = json.loads(project.joinpath(*AUTOCONNECT).read_text(encoding="utf-8"))
+    assert written["autoStart"] is False
