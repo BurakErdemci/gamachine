@@ -1132,10 +1132,14 @@ class UnityMCPManager:
             error = "timeout"
         except Exception:
             error = "other"
+        self._note_unity_link(connected, error)
+        return connected
+
+    def _note_unity_link(self, connected: bool, error: Optional[str]) -> None:
+        """Log the editor link to the diag file only when it changes."""
         if connected != self._diag_unity_link:
             self._diag_unity_link = connected
             unity_diag("unity_link", connected=connected, error=error)
-        return connected
 
     def _blocked_reason(self, occupant: Occupant) -> str:
         """8080'i tutan yabancı süreci kullanıcıya ADIYLA anlat.
@@ -1282,6 +1286,9 @@ class UnityMCPManager:
             # One failed call keeps the last measured instances; a second in a row downgrades.
             instances = self._last_instances if (self._instances_misses < 2 and self._last_instances) else []
 
+        # The UI polls here every 3-15 s; check_unity_connected runs only when a turn starts, so a
+        # reconnect after a drop went unlogged until the next turn (8 Nov 2026).
+        self._note_unity_link(bool(instances), None)
         unity_status = UnityMCPStatus.CONNECTED if instances else UnityMCPStatus.RUNNING
         reason_code = None
         reason_lines = []

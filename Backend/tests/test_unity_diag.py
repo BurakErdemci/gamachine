@@ -229,6 +229,20 @@ def test_unity_link_logged_only_on_flip(mgr, home, monkeypatch):
     assert [r["connected"] for r in records(home) if r["event"] == "unity_link"] == [False, True, False]
 
 
+def test_status_poll_logs_the_editor_dropping_and_coming_back(mgr, home, monkeypatch):
+    # Only the UI status poll runs between turns; a reconnect must not wait for the next turn.
+    from unittest.mock import AsyncMock
+
+    up, down = _Resp(200, {"instances": [{"name": "p"}]}), _Resp(200, {"instances": []})
+    monkeypatch.setattr(mgr, "is_running", lambda: True)
+    monkeypatch.setattr(mgr, "check_health", AsyncMock(return_value=True))
+    monkeypatch.setattr(um, "bridge_compile_errors", lambda _path: [])
+    monkeypatch.setattr(um.httpx, "AsyncClient", _fake_client([up, down, down, up, up]))
+    statuses = [run(mgr.get_status())["status"] for _ in range(5)]
+    assert statuses == ["connected", "running", "running", "connected", "connected"]
+    assert [r["connected"] for r in records(home) if r["event"] == "unity_link"] == [True, False, True]
+
+
 def test_disabled_writes_no_diag(mgr, home, monkeypatch):
     monkeypatch.setenv("GAMACHINE_NO_UNITY_MCP", "1")
     assert not mgr.start_server()
