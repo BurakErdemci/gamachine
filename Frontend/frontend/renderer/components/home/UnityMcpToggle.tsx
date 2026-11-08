@@ -74,7 +74,15 @@ interface UnityMcpToggleProps {
   slowConnect?: boolean;
   /** A Unity dialog of this project that holds the connection until the user closes it. */
   dialog?: UnityMCPDialog | null;
+  /** Whether this project's Unity editor is open: null/undefined = unknown. */
+  editorOpen?: boolean | null;
+  /** Starts the editor for this project and says whether it opened (false = refused, the
+   * handler already told the user why); omitted where the page cannot (remote browser, no project). */
+  onLaunchUnity?: () => Promise<boolean | void> | boolean | void;
 }
+
+/** After a launch resolves the editor takes a while to appear; a second click in that window would spawn a second one. */
+export const LAUNCH_COOLDOWN_MS = 60000;
 
 const PlugGlyph = () => (
   <svg className="ic us-plug" viewBox="0 0 20 20" aria-hidden="true">
@@ -108,8 +116,31 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
   projectMismatch = false,
   slowConnect = false,
   dialog = null,
+  editorOpen = null,
+  onLaunchUnity,
 }) => {
   const { t } = useLang();
+  const [launching, setLaunching] = useState(false);
+  const [launched, setLaunched] = useState(false);
+  useEffect(() => { if (editorOpen === true) setLaunched(false); }, [editorOpen]);
+  useEffect(() => {
+    if (!launched) return;
+    const id = setTimeout(() => setLaunched(false), LAUNCH_COOLDOWN_MS);
+    return () => clearTimeout(id);
+  }, [launched]);
+  const launchUnity = async () => {
+    if (!onLaunchUnity || launching) return;
+    setLaunching(true);
+    try {
+      // A refused launch keeps the button: only a started editor needs the cooldown.
+      if ((await onLaunchUnity()) !== false) setLaunched(true);
+    } catch {
+      // The handler reports its own failure; the button stays so the user can retry.
+    } finally {
+      setLaunching(false);
+    }
+  };
+  const showLaunch = !!onLaunchUnity && editorOpen === false && status !== 'connected' && !launched;
   const state = STATE[status];
   const hint = state.hint ?? (state.visual === 'on' && projectMismatch ? 'unity.hintProjectMismatch'
     : state.visual === 'connecting' && dialog ? 'unity.dialogBlocking'
@@ -197,6 +228,17 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
           </button>
         )}
       </span>
+      {showLaunch && (
+        <button
+          className="shrink-0 text-[length:var(--fs-small)] text-[color:var(--shell-text-dim)] underline decoration-dotted underline-offset-[3px] hover:text-[color:var(--shell-text)] disabled:opacity-50"
+          type="button"
+          data-testid="unity-launch"
+          disabled={launching}
+          onClick={launchUnity}
+        >
+          {t('unity.launch')}
+        </button>
+      )}
       {(showReason || error) && (
         // Both can be up at once (a toggle on a blocked port gets a 500), so they stack in one
         // column under the bay instead of covering each other.

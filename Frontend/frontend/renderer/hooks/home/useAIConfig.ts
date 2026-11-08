@@ -150,6 +150,11 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
   const [unityMcpReasonCode, setUnityMcpReasonCode] = useState<string | null>(null);
   const [unityMcpReasonLines, setUnityMcpReasonLines] = useState<string[]>([]);
   const [unityMcpDialog, setUnityMcpDialog] = useState<UnityMCPDialog | null>(null);
+  // null = unknown (no workspace, backend gave no answer, or the poll failed).
+  const [unityEditorOpen, setUnityEditorOpen] = useState<boolean | null>(null);
+  // The poll's interval keeps the first render's callback, so the workspace is read through a ref.
+  const workspacePathRef = useRef(workspacePath);
+  workspacePathRef.current = workspacePath;
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Yoklama kuşağı sayacı + montaj bayrağı; ikisi de `fetchUnityMcpStatus`'ta
   // kullanılıyor, gerekçe orada.
@@ -190,8 +195,11 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
     const nesil = ++fetchNesilRef.current;
     const guncelMi = () => nesil === fetchNesilRef.current && mountedRef.current;
     try {
-      const res = await axios.get(`${API}/mcp/unity/status`);
+      const hostWorkspace = workspacePathRef.current;
+      const statusWorkspace = hostWorkspace ? await backendWorkspacePath(hostWorkspace) : null;
+      const res = await axios.get(`${API}/mcp/unity/status`, statusWorkspace ? { params: { workspace: statusWorkspace } } : undefined);
       if (!guncelMi()) return;
+      setUnityEditorOpen(statusWorkspace && typeof res.data?.editor_open === 'boolean' ? res.data.editor_open : null);
       const status = unityMcpStatusOku(res.data?.status);
       const reason = typeof res.data?.reason === 'string' ? res.data.reason : null;
 
@@ -248,6 +256,7 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
       setUnityMcpReasonCode(null);
       setUnityMcpReasonLines([]);
       setUnityMcpDialog(null);
+      setUnityEditorOpen(null);
       stopPolling();
       pollRef.current = setInterval(fetchUnityMcpStatus, 5000);
     }
@@ -632,6 +641,7 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
     unityMcpReasonCode,
     unityMcpReasonLines,
     unityMcpDialog,
+    unityEditorOpen,
     toggleUnityMcp,
     // Durumu dışarıdan tazelemek için. İki tüketicisi var ve ikisi de aynı
     // soruyu soruyor: "şu an gerçekten ne durumda" — hata sonrası ölçüm, ve

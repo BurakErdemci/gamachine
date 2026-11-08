@@ -104,17 +104,20 @@ def stop_mcp(workspace_path=None):
 
 
 @router.get("/unity/status")
-async def get_unity_mcp_status(x_session_token: str = Header(alias="X-Session-Token", default="")):
+async def get_unity_mcp_status(workspace: Optional[str] = None, x_session_token: str = Header(alias="X-Session-Token", default="")):
     """Unity MCP sunucusunun ve Unity Editor bağlantısının durumunu döner."""
     _check_token(x_session_token)
+    if workspace:
+        require_saved_workspace_when_remote(workspace, x_session_token)
     from tools.unity_mcp_tools import get_unity_tool_definitions, load_unity_tools_async
     status = await unity_mcp_manager.get_status()
 
     # Unity bağlandıysa ve tool listesi boşsa yükle
     if status["status"] == "connected" and not get_unity_tool_definitions():
-        import asyncio
         asyncio.create_task(load_unity_tools_async())
 
+    if workspace:
+        status["editor_open"] = await asyncio.to_thread(unity_project_presence.editor_pid, workspace) is not None
     return status
 
 

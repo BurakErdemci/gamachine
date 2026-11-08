@@ -293,6 +293,12 @@ export const WorkspaceScreen = ({
             <Ic><circle cx="5" cy="10" r=".9" /><circle cx="10" cy="10" r=".9" /><circle cx="15" cy="10" r=".9" /></Ic>
           </button>
         )}
+        {it.status === 'ok' && it.hostPath && !noEditor && (window as any).ipc && !isRemotePage() && (
+          <button type="button" className="wl-proj-launch" data-testid="welcome-launch"
+            onClick={e => { e.stopPropagation(); void hub.launch(it.hostPath!, it.unityVersion ?? undefined); }}>
+            {t('hub.launchUnity')}
+          </button>
+        )}
         {menuFor === key && (
           <div className="wl-menu" role="menu">
             {it.status === 'ok' && noEditor && (

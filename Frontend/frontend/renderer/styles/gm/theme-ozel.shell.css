@@ -423,6 +423,8 @@
 [data-theme="ozel"] .wl-proj.is-missing { background: transparent; border: 0; box-shadow: none; }
 [data-theme="ozel"] .wl-proj-more { top: 50%; transform: translateY(-50%); right: 10px; }
 [data-theme="ozel"] .wl-menu { top: calc(50% + 20px); }
+[data-theme="ozel"] .wl-proj:has(.wl-proj-launch) { padding-right: 192px; }
+[data-theme="ozel"] .wl-proj > .wl-proj-launch { top: 50%; bottom: auto; transform: translateY(-50%); right: 48px; border-radius: 4px; }
 [data-theme="ozel"] .wl-ver { border-radius: 4px; }
 [data-theme="ozel"] .wl-drop { min-height: 0; flex-direction: row; justify-content: flex-start; gap: 12px; padding: 14px 16px; text-align: left; border: 0; border-radius: 0; }
 [data-theme="ozel"] .wl-drop > .ic { width: 20px; height: 20px; }

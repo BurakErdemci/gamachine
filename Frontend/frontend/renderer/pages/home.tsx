@@ -33,6 +33,8 @@ import { ProjectFiles } from '../components/home/FileTree';
 import { ControlPanel, ThinkingLevel, EffortCaps } from '../components/home/ControlPanel';
 import { SessionReportPanel } from '../components/home/SessionReportPanel';
 import { UnityMcpToggle } from '../components/home/UnityMcpToggle';
+import { launchProject, hubFailureText } from '../lib/hub';
+import { isRemotePage } from '../lib/remote/transport';
 import { AnimatedChatInput, type ComposerPickers, type ComposerDraft } from '../components/ui/animated-ai-chat';
 import { ToastContainer } from '../components/ui/Toast';
 
@@ -313,6 +315,15 @@ export default function Home() {
     try { localStorage.setItem('app-lang', l); } catch { /* keep the in-memory choice */ }
   };
   const t = (key: string, degerler?: TValues) => ceviriUygula(lang, key, degerler);
+  // Same toasts as the project card's launch (useHub.launch); a remote browser cannot spawn Unity on the host.
+  const launchWorkspaceUnity = fs.workspacePath && typeof window !== 'undefined' && (window as any).ipc && !isRemotePage()
+    ? async () => {
+        const res = await launchProject(fs.workspacePath);
+        if (res.opened) showToast(t('hub.launched'), 'success');
+        else showToast(t('hub.launchFailed', { error: hubFailureText(res, t) }), 'error');
+        return res.opened;
+      }
+    : undefined;
   // Announce state to non-React consumers before they render translated text.
   // Storage alone cannot represent the initial English hydration state.
   // boyamadan önce bir toast üretilirse o da doğru dilde olmalı.
@@ -1299,6 +1310,8 @@ export default function Home() {
             projectMismatch={projectMismatch}
             slowConnect={ai.unityMcpSlow}
             dialog={ai.unityMcpDialog}
+            editorOpen={ai.unityEditorOpen}
+            onLaunchUnity={launchWorkspaceUnity}
           />
           {/* Not in the mockup: the sidebar toggle. The editor's controls that shared this spot (the
               terminal button, the open file's name / save / close) moved into the workspace: the
