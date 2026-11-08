@@ -173,10 +173,12 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
       setLaunching(false);
     }
   };
-  const showLaunch = !!onLaunchUnity && editorOpen === false && status !== 'connected' && !launched;
   const shown = useShownUnityStatus(status);
+  // Everything the pill shows follows `shown`: inside the drop grace it reads "connected", so no
+  // waiting hint, launch button or compile reason may contradict it. The switch itself stays real.
+  const showLaunch = !!onLaunchUnity && editorOpen === false && shown !== 'connected' && !launched;
   const state = STATE[shown];
-  const waiting = status === 'starting' || status === 'running';
+  const waiting = shown === 'starting' || shown === 'running';
   const hint = state.hint ?? (state.visual === 'on' && projectMismatch ? 'unity.hintProjectMismatch'
     : waiting && dialog ? 'unity.dialogBlocking'
     : waiting && slowConnect ? 'unity.hintBringForward' : null);
@@ -190,7 +192,7 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
   const whyId = `${ids}-why`;
   const bayRef = useRef<HTMLDivElement>(null);
   const linked = useUnityLinkPulse(shown);
-  const compileFailed = status === 'running' && reasonCode === 'bridge_compile_failed';
+  const compileFailed = shown === 'running' && reasonCode === 'bridge_compile_failed';
   const sebep = status === 'blocked' ? reason : compileFailed ? reasonLines.join('\n') : null;
   const showReason = status === 'blocked' || compileFailed;
   // The supervisor gave up restarting our own server: the port is free, so the foreign-server title is wrong.

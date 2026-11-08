@@ -17,9 +17,37 @@ it('a drop after connected keeps "Bağlı" for 60 s, then shows "Bağlı değil"
   act(() => { vi.advanceTimersByTime(30_000) })
   expect(screen.getByText(ON)).toBeTruthy()
   expect(screen.queryByText(OFF_WORD)).toBeNull()
-  act(() => { vi.advanceTimersByTime(UNITY_DROP_GRACE_MS - 30_000) })
+  act(() => { vi.advanceTimersByTime(29_000) })
+  expect(screen.getByText(ON)).toBeTruthy()
+  act(() => { vi.advanceTimersByTime(1_000) })
   expect(screen.getByText(OFF_WORD)).toBeTruthy()
   expect(screen.queryByText(/Bağlanıyor/)).toBeNull()
+  expect(UNITY_DROP_GRACE_MS).toBe(60_000)
+})
+
+it('unmounting mid-grace leaves no timer behind', () => {
+  vi.useFakeTimers()
+  const view = render(<UnityMcpToggle {...base} status="connected" />)
+  view.rerender(<UnityMcpToggle {...base} status="running" />)
+  expect(vi.getTimerCount()).toBeGreaterThan(0)
+  view.unmount()
+  expect(vi.getTimerCount()).toBe(0)
+})
+
+it('inside the grace nothing on the pill contradicts "Bağlı"; after it the waiting extras appear', () => {
+  vi.useFakeTimers()
+  const extras = { slowConnect: true, editorOpen: false, onLaunchUnity: vi.fn(),
+    reasonCode: 'bridge_compile_failed', reasonLines: ['A.cs(1,1): error CS1002'] }
+  const view = render(<UnityMcpToggle {...base} {...extras} status="connected" />)
+  view.rerender(<UnityMcpToggle {...base} {...extras} status="running" />)
+  act(() => { vi.advanceTimersByTime(45_000) })
+  expect(screen.getByText(ON)).toBeTruthy()
+  expect(screen.queryByText(tr['unity.hintBringForwardGeneric'])).toBeNull()
+  expect(screen.queryByText(tr['unity.launch'])).toBeNull()
+  expect(screen.queryByText(/CS1002/)).toBeNull()
+  act(() => { vi.advanceTimersByTime(15_000) })
+  expect(screen.getByText(OFF_WORD)).toBeTruthy()
+  expect(screen.getByText(tr['unity.launch'])).toBeTruthy()
 })
 
 it('connected -> running -> connected inside the grace never shows "Bağlı değil" and does not pulse', () => {

@@ -557,8 +557,8 @@
   /* theme-local */
 }
 :root[data-theme="sade"] {
-  /* Unity switch: a flat, fully round switch. No LEDs, no chamfer; connected = green, connecting =
-     the sky secondary, not open = gold, blocked = rose (colours in the palette block).
+  /* Unity switch: a flat, fully round switch. No LEDs, no chamfer; connected = green,
+     not open = gold, blocked = rose (colours in the palette block).
      Round 9: full size (72x36, near Arena's 84x38) and a fixed bay, so the bar never moves
      between states (widest state measured 356 px at this size: "Açık değil · Unity'yi açınca
      bağlanır"; 356 + 16). */
@@ -808,7 +808,7 @@
 
   /* Unity switch: a drafting-table breaker. Round 9: a VERTICAL breaker - an upright housing
      sunk in the navy desk edge, a slot down its middle, a pale paper-coloured lever handle
-     that sits DOWN when off and is thrown UP in every "intent on" state (connecting, on,
+     that sits DOWN when off and is thrown UP in every "intent on" state (on,
      closed, blocked). Live = blueprint blue, blocked = vermilion. The bay is fixed: widest
      state measured 346 px ("Açık değil · Unity'yi açınca bağlanır"); 346 + 16. */
   --us-w: 48px;                  /* housing */
@@ -839,7 +839,6 @@
   --us-track-shade: inset 0 2px 0 rgba(0, 0, 0, .35);
   --us-knob-shade: inset 0 -2px 0 rgba(24, 33, 44, .3);   /* the toggle block's lower lip */
   --us-led-h: 6px;
-  --us-connect-ink: #2C5B8A;        /* theme-local: glyph on the knob while connecting */
   --us-alert-text: #F29A86;
 }
 
@@ -1077,6 +1076,5 @@
   --us-hover: #29231D;
   --us-track-shade: inset 0 2px 0 rgba(0, 0, 0, .5);
   --us-knob-shade: inset 0 1px 0 rgba(255, 240, 200, .35), inset 0 -2px 0 rgba(60, 40, 10, .35);  /* brass bevel, no blur */
-  --us-connect-ink: #2F4D27;        /* theme-local: glyph on the knob while connecting */
   --us-alert-text: #EBB070;
 }
