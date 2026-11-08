@@ -60,6 +60,11 @@ let cancelRequested = false
 let waitingForHub = false
 
 export function cancelCreate(): { cancelled: boolean } {
+  // No child yet: the creation checks the flag when the Hub wait ends and never spawns.
+  if (!active && waitingForHub) {
+    cancelRequested = true
+    return { cancelled: true }
+  }
   if (!active) return { cancelled: false }
   if (active.exitCode != null || active.signalCode != null) return { cancelled: false }
   cancelRequested = true
@@ -95,7 +100,6 @@ export function createProject(opts: CreateOptions, deps: CreateDeps): Promise<Cr
   args.push(...HUB_FLAGS, '-logFile', logFile)
 
   const started = deps.now()
-  const startedAt = Date.now()
   const emit = (phase: CreatePhase) => {
     let logTail: string | undefined
     try { logTail = deps.readLogTail(logFile) } catch { /* The log may not exist yet. */ }
@@ -103,7 +107,8 @@ export function createProject(opts: CreateOptions, deps: CreateDeps): Promise<Cr
   }
 
   const run = () => new Promise<CreateResult>(resolve => {
-    cancelRequested = false
+    // Taken right before the spawn: a folder born during the Hub wait must not look like ours.
+    const startedAt = Date.now()
     let child: CreateChild
     try {
       child = deps.spawn(opts.editorPath, args)
@@ -205,8 +210,16 @@ export function createProject(opts: CreateOptions, deps: CreateDeps): Promise<Cr
       void failAndClean('Unity finished but the project was not created.', 'notCreated')
     })
   })
+  cancelRequested = false
   if (!deps.ensureHub) return run()
   waitingForHub = true
-  return deps.ensureHub().catch(() => false).finally(() => { waitingForHub = false }).then(ready =>
-    ready ? run() : fail('Unity Hub could not be started or its license is not ready.', 'hubNotReady'))
+  return deps.ensureHub().catch(() => false).finally(() => { waitingForHub = false }).then(ready => {
+    if (!ready) return fail('Unity Hub could not be started or its license is not ready.', 'hubNotReady')
+    if (cancelRequested) {
+      cancelRequested = false
+      return { ok: false, error: 'cancelled', code: 'cancelled', cleanup: 'none' } as CreateResult
+    }
+    if (deps.exists(target)) return fail('A folder with this name already exists.', 'exists')
+    return run()
+  })
 }

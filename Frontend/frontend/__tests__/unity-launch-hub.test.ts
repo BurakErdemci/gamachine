@@ -106,7 +106,7 @@ describe('one Hub start shared by every caller', () => {
     }
     const a = setup('win32', hub)
     const b = setup('win32', hub)
-    const [ra, rb] = await Promise.all([openProject({ path: 'C:\p\A' }, a.deps), openProject({ path: 'C:\p\B' }, b.deps)])
+    const [ra, rb] = await Promise.all([openProject({ path: 'C:\\p\\A' }, a.deps), openProject({ path: 'C:\\p\\B' }, b.deps)])
     expect(ra).toEqual({ opened: true })
     expect(rb).toEqual({ opened: true })
     expect(hub.startHub).toHaveBeenCalledTimes(1)
@@ -125,15 +125,15 @@ describe('one Hub start shared by every caller', () => {
 describe('a Hub helper that throws', () => {
   it('answers hubNotReady and lets a retry spawn', async () => {
     const bad = setup('win32', { isHubRunning: () => { throw new Error('boom') }, startHub: () => true, isLicensingReady: () => true })
-    expect(await openProject({ path: 'C:\p\Game' }, bad.deps)).toMatchObject({ opened: false, code: 'hubNotReady' })
+    expect(await openProject({ path: 'C:\\p\\Game' }, bad.deps)).toMatchObject({ opened: false, code: 'hubNotReady' })
     expect(bad.spawn).not.toHaveBeenCalled()
     const good = setup('win32', { isHubRunning: () => true, startHub: () => true, isLicensingReady: () => true })
-    expect(await openProject({ path: 'C:\p\Game' }, good.deps)).toEqual({ opened: true })
+    expect(await openProject({ path: 'C:\\p\\Game' }, good.deps)).toEqual({ opened: true })
     expect(good.spawn).toHaveBeenCalledTimes(1)
   })
 
   it('also covers a startHub that rejects', async () => {
     const bad = setup('win32', { isHubRunning: () => false, startHub: async () => { throw new Error('boom') }, isLicensingReady: () => false })
-    expect(await openProject({ path: 'C:\p\Game' }, bad.deps)).toMatchObject({ opened: false, code: 'hubNotReady' })
+    expect(await openProject({ path: 'C:\\p\\Game' }, bad.deps)).toMatchObject({ opened: false, code: 'hubNotReady' })
   })
 })

@@ -125,6 +125,50 @@ describe('createProject', () => {
     await promise
   })
 
+  it('a cancel during the Hub wait answers cancelled, never spawns and frees the slot', async () => {
+    let release!: (ready: boolean) => void
+    const ensureHub = vi.fn(() => new Promise<boolean>(r => { release = r }))
+    const { deps, opts } = setup({ ensureHub })
+    const promise = createProject(opts, deps)
+    expect(cancelCreate()).toEqual({ cancelled: true })
+    release(true)
+    await expect(promise).resolves.toMatchObject({ ok: false, code: 'cancelled' })
+    expect(deps.spawn).not.toHaveBeenCalled()
+    const retry = setup({ ensureHub: async () => true })
+    const next = createProject(retry.opts, retry.deps)
+    await vi.waitFor(() => expect(retry.deps.spawn).toHaveBeenCalledTimes(1))
+    retry.child.emit('exit', 0, null)
+    await next
+  })
+
+  it('a target created during the Hub wait answers exists without spawning', async () => {
+    let release!: (ready: boolean) => void
+    const ensureHub = vi.fn(() => new Promise<boolean>(r => { release = r }))
+    const { deps, opts, existing } = setup({ ensureHub })
+    const promise = createProject(opts, deps)
+    existing.add('/parent/My Game')
+    release(true)
+    await expect(promise).resolves.toMatchObject({ ok: false, code: 'exists' })
+    expect(deps.spawn).not.toHaveBeenCalled()
+  })
+
+  it('a folder born during the Hub wait is not removed when Unity then fails', async () => {
+    let release!: (ready: boolean) => void
+    const ensureHub = vi.fn(() => new Promise<boolean>(r => { release = r }))
+    const born = Date.now() + 5
+    const { child, deps, opts } = setup({
+      ensureHub,
+      lstat: () => ({ isDirectory: () => true, isSymbolicLink: () => false, birthtimeMs: born }),
+    })
+    const promise = createProject(opts, deps)
+    vi.advanceTimersByTime(30)
+    release(true)
+    await vi.waitFor(() => expect(deps.spawn).toHaveBeenCalledTimes(1))
+    child.emit('exit', 1, null)
+    await expect(promise).resolves.toMatchObject({ ok: false, code: 'exited', cleanup: 'notOurs' })
+    expect(deps.removeDir).not.toHaveBeenCalled()
+  })
+
   it('omits -cloneFromTemplate without a template', async () => {
     const { child, deps, opts } = setup()
     const promise = createProject(opts, deps)
