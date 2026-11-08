@@ -137,6 +137,7 @@ export function launchWithToast(
   if (pending) return pending;
   const run = (async () => {
     try {
+      showToast(t('hub.launching'), 'info');
       const res = await launchProject(path, version);
       if (res.opened) showToast(res.alreadyOpen ? t('hub.alreadyOpen') : t('hub.launched'), res.alreadyOpen ? 'info' : 'success');
       else showToast(t('hub.launchFailed', { error: hubFailureText(res, t) }), 'error');

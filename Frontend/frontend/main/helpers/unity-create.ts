@@ -1,11 +1,12 @@
 import fs from 'fs'
 import path from 'path'
+import { HUB_FLAGS } from './unity-launch'
 
 export type CreatePhase = 'starting' | 'running' | 'done' | 'failed'
 export interface CreateProgress { phase: CreatePhase; elapsedMs: number; logTail?: string }
 export type HubErrorCode = 'busy' | 'nameInvalid' | 'parentMissing' | 'exists' | 'pathTooLong' |
   'spawnFailed' | 'exited' | 'notCreated' | 'cancelled' | 'notProject' | 'notTrusted' |
-  'versionUnknown' | 'editorMissing' | 'invalidArguments' | 'parentNotPicked' | 'templateUnknown' | 'openExited'
+  'versionUnknown' | 'editorMissing' | 'invalidArguments' | 'parentNotPicked' | 'templateUnknown' | 'openExited' | 'hubNotReady'
 export type Cleanup = 'removed' | 'notOurs' | 'removeFailed' | 'pathChanged' | 'none'
 export interface HubFailure {
   error: string
@@ -30,6 +31,8 @@ export interface CreateDeps {
   removeDir: (dir: string) => Promise<void>
   delay?: (ms: number) => Promise<void>
   lstat?: (p: string) => { isDirectory: () => boolean; isSymbolicLink: () => boolean; birthtimeMs: number }
+  // Optional: without it the editor is spawned without making sure Unity Hub is up.
+  ensureHub?: () => Promise<boolean>
   spawn: (command: string, args: string[]) => CreateChild
   readLogTail: (file: string) => string
   isProject: (dir: string) => boolean
@@ -53,6 +56,8 @@ const NAME_PATTERN = /^[\p{L}\p{N} _-]{1,64}$/u
 
 let active: CreateChild | null = null
 let cancelRequested = false
+// True while waiting for Unity Hub, before the child exists: a second creation must still answer busy.
+let waitingForHub = false
 
 export function cancelCreate(): { cancelled: boolean } {
   if (!active) return { cancelled: false }
@@ -66,7 +71,7 @@ export function createProject(opts: CreateOptions, deps: CreateDeps): Promise<Cr
   const p = deps.platform === 'win32' ? path.win32 : path.posix
   const fail = (error: string, code: HubErrorCode, params?: HubFailure['params']): CreateResult =>
     ({ ok: false, error, code, ...(params ? { params } : {}) })
-  if (active) return Promise.resolve(fail('Another project is already being created.', 'busy'))
+  if (active || waitingForHub) return Promise.resolve(fail('Another project is already being created.', 'busy'))
   if (!NAME_PATTERN.test(opts.name) || opts.name !== opts.name.trim()) {
     return Promise.resolve(fail('Project name may use letters, digits, space, - and _ only (1-64 characters).', 'nameInvalid'))
   }
@@ -87,7 +92,7 @@ export function createProject(opts: CreateOptions, deps: CreateDeps): Promise<Cr
   const logFile = deps.logFile()
   const args = ['-batchmode', '-quit', '-createProject', target]
   if (opts.templatePath) args.push('-cloneFromTemplate', opts.templatePath)
-  args.push('-logFile', logFile)
+  args.push(...HUB_FLAGS, '-logFile', logFile)
 
   const started = deps.now()
   const startedAt = Date.now()
@@ -97,7 +102,7 @@ export function createProject(opts: CreateOptions, deps: CreateDeps): Promise<Cr
     opts.onProgress({ phase, elapsedMs: deps.now() - started, ...(logTail ? { logTail } : {}) })
   }
 
-  return new Promise<CreateResult>(resolve => {
+  const run = () => new Promise<CreateResult>(resolve => {
     cancelRequested = false
     let child: CreateChild
     try {
@@ -200,4 +205,8 @@ export function createProject(opts: CreateOptions, deps: CreateDeps): Promise<Cr
       void failAndClean('Unity finished but the project was not created.', 'notCreated')
     })
   })
+  if (!deps.ensureHub) return run()
+  waitingForHub = true
+  return deps.ensureHub().catch(() => false).finally(() => { waitingForHub = false }).then(ready =>
+    ready ? run() : fail('Unity Hub could not be started or its license is not ready.', 'hubNotReady'))
 }

@@ -39,7 +39,7 @@ import { findUnityHub, startHub, isHubRunning, isLicensingReady } from './helper
 import { listEditors, listTemplates, templatesDir, EditorDeps } from './helpers/unity-editors'
 import { createProject, cancelCreate } from './helpers/unity-create'
 import { loadCatalog, planInstall, startInstall, cancelInstall, type InstallDeps } from './helpers/unity-install'
-import { openProject } from './helpers/unity-launch'
+import { openProject, ensureHub } from './helpers/unity-launch'
 import { trashProject, trashPrompt } from './helpers/project-trash'
 import { readUnityVersion, isEditorOpen } from './helpers/unity-project'
 import * as pty from 'node-pty'
@@ -382,6 +382,12 @@ handleSecure('hub-pick-parent-dir', async () => {
   return { path: result.filePaths[0] }
 })
 
+const hubReadyDeps = {
+  isHubRunning: () => isHubRunning(),
+  startHub: () => startHub((p) => shell.openPath(p)),
+  isLicensingReady: () => isLicensingReady(),
+}
+
 handleSecure('hub-create-project', async (event, arg: any) => {
   if (!arg || typeof arg.parentDir !== 'string' || typeof arg.name !== 'string' ||
       typeof arg.version !== 'string' || (arg.templateId !== undefined && typeof arg.templateId !== 'string')) {
@@ -413,6 +419,7 @@ handleSecure('hub-create-project', async (event, arg: any) => {
     // To the Trash, not deleted: a project copied into the target during the attempt is born
     // after it started too, so no birth-time rule can tell it apart (measured 29 Oct 2026).
     removeDir: (dir) => shell.trashItem(dir),
+    ensureHub: () => ensureHub(hubReadyDeps),
     spawn: (command, args) => spawn(command, args, { stdio: 'ignore' }),
     readLogTail,
     isProject: isUnityProjectDir,
@@ -471,10 +478,7 @@ handleSecure('hub-open-project', async (_event, arg: any) => {
     readVersion: readUnityVersion,
     isEditorOpen,
     now: Date.now,
-    isHubRunning: () => isHubRunning(),
-    startHub: () => startHub((p) => shell.openPath(p)),
-    isLicensingReady: () => isLicensingReady(),
-    sleep: (ms) => new Promise(resolve => setTimeout(resolve, ms)),
+    ...hubReadyDeps,
     spawn: (command, args, options) => spawn(command, args, options),
   })
 })

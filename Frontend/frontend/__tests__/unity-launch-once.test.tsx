@@ -59,6 +59,16 @@ describe('card button', () => {
     expect(launches()).toBe(1)
   })
 
+  it('shows the launching toast once for two quick clicks, before the result', async () => {
+    const showToast = show()
+    const b = await screen.findByTestId('welcome-launch')
+    fireEvent.click(b); fireEvent.click(b)
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith(translations.en['hub.launched'], 'success'))
+    const launching = showToast.mock.calls.filter(c => c[0] === translations.en['hub.launching'])
+    expect(launching).toEqual([[translations.en['hub.launching'], 'info']])
+    expect(showToast.mock.calls[0][0]).toBe(translations.en['hub.launching'])
+  })
+
   it('tells the user when main finds the editor already open', async () => {
     openAnswers = [{ opened: true, alreadyOpen: true }]
     const showToast = show()

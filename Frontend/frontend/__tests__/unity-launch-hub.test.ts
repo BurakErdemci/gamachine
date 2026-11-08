@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { openProject, _resetLaunchMemory, LaunchDeps } from '../main/helpers/unity-launch'
+import { openProject, ensureHub, _resetLaunchMemory, LaunchDeps } from '../main/helpers/unity-launch'
 import { hubFailureText } from '../renderer/lib/hub'
 
 const winRoot = 'C:\\Program Files\\Unity\\Hub\\Editor'
@@ -92,5 +92,48 @@ describe('openProject makes sure Unity Hub is up', () => {
   it('shows the hubNotReady text to the user', () => {
     const t = (key: string) => key
     expect(hubFailureText({ code: 'hubNotReady', error: 'x' }, t as any)).toBe('hub.error.hubNotReady')
+  })
+})
+
+describe('one Hub start shared by every caller', () => {
+  it('two projects pressed while Hub starts call startHub once and both open', async () => {
+    let running = false
+    let polls = 0
+    const hub = {
+      isHubRunning: () => running,
+      startHub: vi.fn(async () => { await new Promise(r => setTimeout(r, 5)); running = true; return true }),
+      isLicensingReady: () => running && ++polls > 3,
+    }
+    const a = setup('win32', hub)
+    const b = setup('win32', hub)
+    const [ra, rb] = await Promise.all([openProject({ path: 'C:\p\A' }, a.deps), openProject({ path: 'C:\p\B' }, b.deps)])
+    expect(ra).toEqual({ opened: true })
+    expect(rb).toEqual({ opened: true })
+    expect(hub.startHub).toHaveBeenCalledTimes(1)
+  })
+
+  it('a later start is a new one once the first has finished', async () => {
+    let running = false
+    const hub = { isHubRunning: () => running, startHub: vi.fn(() => { running = true; return true }), isLicensingReady: () => running }
+    await ensureHub({ ...hub, sleep: async () => {} })
+    running = false
+    await ensureHub({ ...hub, sleep: async () => {} })
+    expect(hub.startHub).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('a Hub helper that throws', () => {
+  it('answers hubNotReady and lets a retry spawn', async () => {
+    const bad = setup('win32', { isHubRunning: () => { throw new Error('boom') }, startHub: () => true, isLicensingReady: () => true })
+    expect(await openProject({ path: 'C:\p\Game' }, bad.deps)).toMatchObject({ opened: false, code: 'hubNotReady' })
+    expect(bad.spawn).not.toHaveBeenCalled()
+    const good = setup('win32', { isHubRunning: () => true, startHub: () => true, isLicensingReady: () => true })
+    expect(await openProject({ path: 'C:\p\Game' }, good.deps)).toEqual({ opened: true })
+    expect(good.spawn).toHaveBeenCalledTimes(1)
+  })
+
+  it('also covers a startHub that rejects', async () => {
+    const bad = setup('win32', { isHubRunning: () => false, startHub: async () => { throw new Error('boom') }, isLicensingReady: () => false })
+    expect(await openProject({ path: 'C:\p\Game' }, bad.deps)).toMatchObject({ opened: false, code: 'hubNotReady' })
   })
 })

@@ -79,7 +79,7 @@ describe('createProject', () => {
     const promise = createProject({ ...opts, templatePath: '/t/template.tgz' }, deps)
     expect(deps.spawn).toHaveBeenCalledExactlyOnceWith('/Unity', [
       '-batchmode', '-quit', '-createProject', '/parent/My Game',
-      '-cloneFromTemplate', '/t/template.tgz', '-logFile', '/tmp/create.log',
+      '-cloneFromTemplate', '/t/template.tgz', '-useHub', '-hubIPC', '-cloudEnvironment', 'production', '-logFile', '/tmp/create.log',
     ])
     vi.advanceTimersByTime(2100)
     child.emit('exit', 0, null)
@@ -87,6 +87,42 @@ describe('createProject', () => {
     expect(events.map(e => e.phase)).toEqual(['starting', 'running', 'running', 'done'])
     expect(events[1].logTail).toBe('log line')
     expect(deps.registerTrusted).toHaveBeenCalledExactlyOnceWith('/parent/My Game')
+  })
+
+  it('passes the Hub flags before -logFile', async () => {
+    const { child, deps, opts } = setup()
+    const promise = createProject(opts, deps)
+    const args = (deps.spawn as any).mock.calls[0][1] as string[]
+    expect(args.slice(-6)).toEqual(['-useHub', '-hubIPC', '-cloudEnvironment', 'production', '-logFile', '/tmp/create.log'])
+    child.emit('exit', 0, null)
+    await promise
+  })
+
+  it('waits for Unity Hub before spawning and answers busy meanwhile', async () => {
+    let release!: (ready: boolean) => void
+    const ensureHub = vi.fn(() => new Promise<boolean>(r => { release = r }))
+    const { child, deps, opts } = setup({ ensureHub })
+    const promise = createProject(opts, deps)
+    expect(deps.spawn).not.toHaveBeenCalled()
+    const second = setup({ ensureHub })
+    expect(await createProject(second.opts, second.deps)).toMatchObject({ ok: false, code: 'busy' })
+    release(true)
+    await vi.waitFor(() => expect(deps.spawn).toHaveBeenCalledTimes(1))
+    child.emit('exit', 0, null)
+    await expect(promise).resolves.toEqual({ ok: true, path: '/parent/My Game' })
+  })
+
+  it('fails with hubNotReady without spawning when Unity Hub is not ready or throws', async () => {
+    for (const ensureHub of [async () => false, async () => { throw new Error('boom') }]) {
+      const { deps, opts } = setup({ ensureHub })
+      expect(await createProject(opts, deps)).toMatchObject({ ok: false, code: 'hubNotReady' })
+      expect(deps.spawn).not.toHaveBeenCalled()
+    }
+    const retry = setup({ ensureHub: async () => true })
+    const promise = createProject(retry.opts, retry.deps)
+    await vi.waitFor(() => expect(retry.deps.spawn).toHaveBeenCalledTimes(1))
+    retry.child.emit('exit', 0, null)
+    await promise
   })
 
   it('omits -cloneFromTemplate without a template', async () => {
