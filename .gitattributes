@@ -40,6 +40,10 @@
 *.sh     text eol=lf
 *.css    text eol=lf
 *.cs     text eol=lf
+# Contract suite recorded streams and golden files are compared byte for byte on every OS.
+contract/fixtures/**  text eol=lf
+contract/golden/**    text eol=lf
+contract/known_differences.txt text eol=lf
 
 # ── Windows'a ait betikler: CRLF kalmalı ─────────────────────────────────────
 # LF'li bir .bat/.cmd'yi cmd.exe yanlış yorumluyor; bu dosyalar zaten yalnız
