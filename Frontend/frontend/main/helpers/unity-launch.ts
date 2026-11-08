@@ -10,6 +10,11 @@ export interface LaunchDeps {
   // Optional: without them there is no memory of earlier launches and no running-editor check.
   isEditorOpen?: (dir: string) => boolean
   now?: () => number
+  // Optional: without them the editor is spawned without making sure Unity Hub is up.
+  isHubRunning?: () => boolean
+  startHub?: () => boolean | Promise<boolean>
+  isLicensingReady?: () => boolean
+  sleep?: (ms: number) => Promise<void>
   spawn: (command: string, args: string[], options: { detached: boolean; stdio: 'ignore' }) =>
     {
       unref: () => void
@@ -25,7 +30,31 @@ export function bundleOf(editorPath: string): string | null {
 
 export const LAUNCH_MEMORY_MS = 30_000
 
-type LaunchResult = { opened: true; alreadyOpen?: true; error?: never; code?: never; params?: never } | ({ opened: false } & HubFailure)
+const HUB_POLL_MS = 500
+const HUB_START_WAIT_MS = 30_000
+const HUB_RUNNING_WAIT_MS = 5_000
+
+// Without a running Hub the editor starts its own licensing client and shows "No valid Unity Editor license found".
+// Polling is counted in sleeps, not read from a clock, so a fake sleep needs no fake time.
+async function ensureHub(deps: LaunchDeps): Promise<boolean> {
+  const { isHubRunning, startHub, isLicensingReady } = deps
+  if (!isHubRunning || !startHub || !isLicensingReady) return true
+  const sleep = deps.sleep ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms)))
+  const wasRunning = isHubRunning()
+  if (!wasRunning && !await startHub()) return false
+  const polls = (wasRunning ? HUB_RUNNING_WAIT_MS : HUB_START_WAIT_MS) / HUB_POLL_MS
+  for (let i = 0; i <= polls; i++) {
+    if (isLicensingReady()) return true
+    if (i < polls) await sleep(HUB_POLL_MS)
+  }
+  return wasRunning
+}
+
+const HUB_FLAGS = ['-useHub', '-hubIPC', '-cloudEnvironment', 'production']
+
+// hubNotReady lives here, not in HubErrorCode (unity-create.ts), because only launching needs Unity Hub up.
+type LaunchFailure = Omit<HubFailure, 'code'> & { code: HubFailure['code'] | 'hubNotReady' }
+type LaunchResult = { opened: true; alreadyOpen?: true; error?: never; code?: never; params?: never } | ({ opened: false } & LaunchFailure)
 
 // project -> launch time; null while that launch still awaits its 'spawn'/'exit'. Unity takes a while
 // before it writes Library/EditorInstance.json, so a second press in that window must not spawn again.
@@ -59,12 +88,15 @@ async function launchEditor(opts: { path: string; version?: string }, deps: Laun
   if (!version) return { opened: false, error: 'Unity version of the project is unknown.', code: 'versionUnknown' }
   const editor = listEditors(deps.editors).editors.find(e => e.version === version)
   if (!editor) return { opened: false, error: `Unity ${version} is not installed.`, code: 'editorMissing', params: { version } }
+  if (!await ensureHub(deps)) {
+    return { opened: false, error: 'Unity Hub could not be started or its license is not ready.', code: 'hubNotReady' }
+  }
   try {
     // macOS: a direct child stays in Gamachine's responsibility group, so Dock keeps listing Gamachine after quit; open hands it to LaunchServices.
     const bundle = deps.editors.platform === 'darwin' ? bundleOf(editor.path) : null
     const child = bundle
-      ? deps.spawn('/usr/bin/open', ['-n', '-a', bundle, '--args', '-projectPath', opts.path], { detached: true, stdio: 'ignore' })
-      : deps.spawn(editor.path, ['-projectPath', opts.path], { detached: true, stdio: 'ignore' })
+      ? deps.spawn('/usr/bin/open', ['-n', '-a', bundle, '--args', '-projectPath', opts.path, ...HUB_FLAGS], { detached: true, stdio: 'ignore' })
+      : deps.spawn(editor.path, ['-projectPath', opts.path, ...HUB_FLAGS], { detached: true, stdio: 'ignore' })
     return await new Promise(resolve => {
       // EACCES/ENOENT arrive as an async 'error'; the listener stays so a late one cannot crash main.
       child.on('error', (err: Error) => {

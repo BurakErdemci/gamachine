@@ -35,7 +35,7 @@ import { applyContentSecurityPolicy } from './helpers/csp'
 import { assertRegistrableChannel } from './helpers/ipc-whitelist'
 import { mt, setUiLanguage } from './helpers/main-i18n'
 import { inspectProject, isUnityProjectDir } from './helpers/unity-project'
-import { findUnityHub, UNITY_HUB_MSIX_URI } from './helpers/unity-hub'
+import { findUnityHub, startHub, isHubRunning, isLicensingReady } from './helpers/unity-hub'
 import { listEditors, listTemplates, templatesDir, EditorDeps } from './helpers/unity-editors'
 import { createProject, cancelCreate } from './helpers/unity-create'
 import { loadCatalog, planInstall, startInstall, cancelInstall, type InstallDeps } from './helpers/unity-install'
@@ -341,22 +341,7 @@ handleSecure('authorize-workspace', (event, p: unknown) => {
   return { trusted: confirmRecentRoot(p, BrowserWindow.fromWebContents(event.sender) ?? undefined) }
 })
 
-handleSecure('open-unity-hub', async () => {
-  try {
-    const hub = findUnityHub(process.platform, process.env, os.homedir(), fs.existsSync)
-    if (hub === UNITY_HUB_MSIX_URI) {
-      // A Store app cannot be started from its exe path; explorer.exe resolves the AppsFolder URI.
-      // A spawn failure arrives as an 'error' event after this returns; without a listener it is an uncaught exception.
-      const child = spawn('explorer.exe', [hub], { detached: true, stdio: 'ignore', windowsHide: true })
-      child.once('error', (err) => console.error('[open-unity-hub] explorer.exe failed:', err))
-      child.unref()
-      return { opened: true }
-    }
-    return { opened: hub ? await shell.openPath(hub) === '' : false }
-  } catch {
-    return { opened: false }
-  }
-})
+handleSecure('open-unity-hub', async () => ({ opened: await startHub((p) => shell.openPath(p)) }))
 
 // --- MINI UNITY HUB: editors, templates, project creation, launch ---
 const editorDeps = (): EditorDeps => ({
@@ -486,6 +471,10 @@ handleSecure('hub-open-project', async (_event, arg: any) => {
     readVersion: readUnityVersion,
     isEditorOpen,
     now: Date.now,
+    isHubRunning: () => isHubRunning(),
+    startHub: () => startHub((p) => shell.openPath(p)),
+    isLicensingReady: () => isLicensingReady(),
+    sleep: (ms) => new Promise(resolve => setTimeout(resolve, ms)),
     spawn: (command, args, options) => spawn(command, args, options),
   })
 })

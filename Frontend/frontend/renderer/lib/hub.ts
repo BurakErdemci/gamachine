@@ -19,18 +19,19 @@ export interface HubFailureDetails {
 }
 export type HubCreateResult = { ok: true; path: string } | ({ ok: false; error: string } & HubFailureDetails);
 
-const ERROR_KEYS: Record<HubErrorCode, TKey> = {
+const ERROR_KEYS: Record<HubErrorCode | 'hubNotReady', TKey> = {
   busy: 'hub.error.busy', nameInvalid: 'hub.error.nameInvalid', parentMissing: 'hub.error.parentMissing',
   exists: 'hub.error.exists', pathTooLong: 'hub.error.pathTooLong', spawnFailed: 'hub.error.spawnFailed',
   exited: 'hub.error.exited', notCreated: 'hub.error.notCreated', cancelled: 'hub.error.cancelled',
   notProject: 'hub.error.notProject', notTrusted: 'hub.error.notTrusted', versionUnknown: 'hub.error.versionUnknown',
   editorMissing: 'hub.error.editorMissing', invalidArguments: 'hub.error.invalidArguments',
   parentNotPicked: 'hub.error.parentNotPicked', templateUnknown: 'hub.error.templateUnknown', openExited: 'hub.error.openExited',
+  hubNotReady: 'hub.error.hubNotReady',
 };
 
 /** Translate at render time so a stored result follows a language change. */
 export function hubFailureText(result: HubFailureDetails & { error?: string }, t: (key: TKey, values?: TValues) => string): string {
-  const key = Object.prototype.hasOwnProperty.call(ERROR_KEYS, result.code) ? ERROR_KEYS[result.code as HubErrorCode] : undefined;
+  const key = Object.prototype.hasOwnProperty.call(ERROR_KEYS, result.code) ? ERROR_KEYS[result.code as keyof typeof ERROR_KEYS] : undefined;
   const cancelled = result.code === 'cancelled' || isCancelled(result.error ?? '');
   if (cancelled) {
     if (result.cleanup === 'removed') {

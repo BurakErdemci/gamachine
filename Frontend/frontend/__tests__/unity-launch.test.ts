@@ -46,7 +46,7 @@ describe('openProject', () => {
     expect(await openProject({ path: '/p/Game' }, { ...deps, spawn })).toEqual({ opened: true })
     expect(spawn).toHaveBeenCalledExactlyOnceWith(
       '/usr/bin/open',
-      ['-n', '-a', `${macRoot}/2022.3.1f1/Unity.app`, '--args', '-projectPath', '/p/Game'],
+      ['-n', '-a', `${macRoot}/2022.3.1f1/Unity.app`, '--args', '-projectPath', '/p/Game', '-useHub', '-hubIPC', '-cloudEnvironment', 'production'],
       { detached: true, stdio: 'ignore' },
     )
     expect(child.unref).toHaveBeenCalled()
@@ -57,7 +57,7 @@ describe('openProject', () => {
     const spawn = openSpawn(child, 0)
     const path = '/Users/Burak Emre/Belgeler/Oyun Çalışması ğüşiöç'
     await openProject({ path }, { ...deps, spawn })
-    expect(spawn.mock.calls[0][1]).toEqual(['-n', '-a', `${macRoot}/2022.3.1f1/Unity.app`, '--args', '-projectPath', path])
+    expect(spawn.mock.calls[0][1]).toEqual(['-n', '-a', `${macRoot}/2022.3.1f1/Unity.app`, '--args', '-projectPath', path, '-useHub', '-hubIPC', '-cloudEnvironment', 'production'])
   })
 
   it('launches from a secondary install root whose path contains spaces', async () => {
@@ -95,7 +95,7 @@ describe('openProject', () => {
       exists: (p: string) => p in files, readdir: (p: string) => { const v = files[p]; if (!Array.isArray(v)) throw new Error('ENOENT'); return v },
     }
     expect(await openProject({ path: 'C:\\p\\Game' }, { ...deps, editors })).toEqual({ opened: true })
-    expect(spawn).toHaveBeenCalledExactlyOnceWith(winExe('2022.3.1f1'), ['-projectPath', 'C:\\p\\Game'], { detached: true, stdio: 'ignore' })
+    expect(spawn).toHaveBeenCalledExactlyOnceWith(winExe('2022.3.1f1'), ['-projectPath', 'C:\\p\\Game', '-useHub', '-hubIPC', '-cloudEnvironment', 'production'], { detached: true, stdio: 'ignore' })
     expect(child.unref).toHaveBeenCalled()
   })
 
