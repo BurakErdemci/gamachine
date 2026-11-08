@@ -24,7 +24,7 @@ export const UNITY: GuideTopic[] = [
     steps: [
       { anchor: "unity-light", side: "below", align: "start", prepare: ["screen:chat"],
         title: T("Işık ne diyor", "What the light says"),
-        text: T("Anahtar senin isteğin, ışık gerçek durum: Kapalı, Bağlanıyor, Bağlı (proje ve sahneyle), Unity açık değil, Engellendi.", "The switch is what you asked for, the light is what is true: Off, Connecting, Connected (with project and scene), Unity not open, Blocked."),
+        text: T("Anahtar senin isteğin, ışık gerçek durum: Kapalı, Bağlı değil, Bağlı (proje ve sahneyle), Unity açık değil, Engellendi.", "The switch is what you asked for, the light is what is true: Off, Not connected, Connected (with project and scene), Unity not open, Blocked."),
       },
       { anchor: "settings-unity-switch", side: "below", align: "start", prepare: ["settings:unity"],
         title: T("Bağlanmıyorsa", "If it won't connect"),

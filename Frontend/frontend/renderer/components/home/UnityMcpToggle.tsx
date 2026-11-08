@@ -5,8 +5,8 @@ import type { UnityMCPDialog, UnityMCPStatus } from '../../hooks/home/useAIConfi
 
 type Anahtar = Parameters<LangContextValue['t']>[0];
 
-/** The mockup's five looks (maket/base.css `.unity[data-unity]`). */
-export type UnityVisual = 'off' | 'connecting' | 'on' | 'closed' | 'blocked';
+/** The pill's looks (maket/base.css `.unity[data-unity]`); the pill never shows a "connecting" look. */
+export type UnityVisual = 'off' | 'on' | 'closed' | 'blocked';
 
 /**
  * Real status -> look, words and tooltip.
@@ -22,15 +22,44 @@ export type UnityVisual = 'off' | 'connecting' | 'on' | 'closed' | 'blocked';
  */
 const STATE: Record<UnityMCPStatus, { visual: UnityVisual; word: Anahtar; hint: Anahtar | null; title: Anahtar }> = {
   off: { visual: 'off', word: 'unity.wordOff', hint: 'unity.hintOff', title: 'home.unityOpen' },
-  // `blocked` is a stop that needs the user, not a wait, so it never shows the connecting chase.
   blocked: { visual: 'blocked', word: 'unity.wordBlocked', hint: null, title: 'home.unityBlocked' },
-  starting: { visual: 'connecting', word: 'unity.wordConnecting', hint: null, title: 'home.unityStarting' },
-  running: { visual: 'connecting', word: 'unity.wordConnecting', hint: null, title: 'home.unityConnecting' },
+  // The user sees only connected or not connected; a wait is "not connected" (see useShownUnityStatus).
+  starting: { visual: 'closed', word: 'unity.wordDisconnected', hint: null, title: 'home.unityStarting' },
+  running: { visual: 'closed', word: 'unity.wordDisconnected', hint: null, title: 'home.unityConnecting' },
   connected: { visual: 'on', word: 'unity.wordOn', hint: null, title: 'home.unityConnected' },
   unknown: { visual: 'closed', word: 'unity.wordUnknown', hint: 'unity.hintUnknown', title: 'home.unityUnknown' },
 };
 
 export const unityVisual = (status: UnityMCPStatus): UnityVisual => STATE[status].visual;
+
+/** A drop shorter than this after `connected` still shows as connected. */
+export const UNITY_DROP_GRACE_MS = 60_000;
+
+/**
+ * The status the pill and the sidebar show. A domain reload (the agent compiles) drops the editor
+ * link for 10-31 s and it comes back by itself, so once `connected` has been seen a following
+ * `starting`/`running`/`unknown` still reads `connected` until UNITY_DROP_GRACE_MS has passed since
+ * it left `connected`. `off`/`blocked` are the user's or a real stop: shown at once, grace reset.
+ * Display only: everything functional keeps reading the real status.
+ */
+export function useShownUnityStatus(status: UnityMCPStatus): UnityMCPStatus;
+export function useShownUnityStatus(status: UnityMCPStatus | undefined): UnityMCPStatus | undefined;
+export function useShownUnityStatus(status: UnityMCPStatus | undefined): UnityMCPStatus | undefined {
+  const seen = useRef(false);
+  const leftAt = useRef<number | null>(null);
+  const [, rerender] = useState(0);
+  if (status === 'connected') { seen.current = true; leftAt.current = null; }
+  else if (status === 'off' || status === 'blocked') { seen.current = false; leftAt.current = null; }
+  else if (seen.current && leftAt.current === null) leftAt.current = Date.now();
+  const left = leftAt.current;
+  const inGrace = left !== null && Date.now() - left < UNITY_DROP_GRACE_MS;
+  useEffect(() => {
+    if (left === null) return;
+    const id = setTimeout(() => rerender(n => n + 1), Math.max(0, UNITY_DROP_GRACE_MS - (Date.now() - left)));
+    return () => clearTimeout(id);
+  }, [left]);
+  return inGrace ? 'connected' : status;
+}
 
 /** How long the "link landed" moment stays on (mockup: replay(..., 'is-linked', 700)). */
 export const LINK_PULSE_MS = 700;
@@ -145,10 +174,12 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
     }
   };
   const showLaunch = !!onLaunchUnity && editorOpen === false && status !== 'connected' && !launched;
-  const state = STATE[status];
+  const shown = useShownUnityStatus(status);
+  const state = STATE[shown];
+  const waiting = status === 'starting' || status === 'running';
   const hint = state.hint ?? (state.visual === 'on' && projectMismatch ? 'unity.hintProjectMismatch'
-    : state.visual === 'connecting' && dialog ? 'unity.dialogBlocking'
-    : state.visual === 'connecting' && slowConnect ? 'unity.hintBringForward' : null);
+    : waiting && dialog ? 'unity.dialogBlocking'
+    : waiting && slowConnect ? 'unity.hintBringForward' : null);
   const hintText = hint === 'unity.dialogBlocking' && dialog ? t('unity.dialogBlocking', { title: dialog.title })
     : hint === 'unity.hintBringForward'
     ? typeof targetProject === 'string' && targetProject.length > 0
@@ -158,7 +189,7 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
   const stateId = `${ids}-state`;
   const whyId = `${ids}-why`;
   const bayRef = useRef<HTMLDivElement>(null);
-  const linked = useUnityLinkPulse(status);
+  const linked = useUnityLinkPulse(shown);
   const compileFailed = status === 'running' && reasonCode === 'bridge_compile_failed';
   const sebep = status === 'blocked' ? reason : compileFailed ? reasonLines.join('\n') : null;
   const showReason = status === 'blocked' || compileFailed;
@@ -189,7 +220,7 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
     .filter(Boolean).join(' ');
 
   return (
-    <div ref={bayRef} className={cls} data-unity={state.visual} data-status={status} data-testid="unity-bay" data-guide="unity-switch">
+    <div ref={bayRef} className={cls} data-unity={state.visual} data-status={shown} data-testid="unity-bay" data-guide="unity-switch">
       <button
         className="unity-switch"
         data-guide="unity-light"

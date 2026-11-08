@@ -25,11 +25,9 @@
 [data-theme="pafta"] .unity.is-linked .us-knob { animation: pafta-us-land 180ms var(--g-ease-press); }
 @keyframes pafta-us-land { 50% { transform: translateY(calc(-1 * var(--us-throw) - 2px)); } }
 /* the breaker's indicator window: three square flags stacked beside the housing; they fill
-   bottom to top while connecting (column-reverse: the first flag is the lowest) */
+   bottom to top (column-reverse: the first flag is the lowest) */
 [data-theme="pafta"] .us-leds { flex-direction: column-reverse; gap: 3px; }
 [data-theme="pafta"] .us-leds i { width: 8px; }
-/* connecting: the pale toggle carries the glyph in blueprint ink (the light blue vanished on it) */
-[data-theme="pafta"] .unity[data-unity="connecting"] .us-knob { color: var(--us-connect-ink); }
 /* closed (editor not running): the hollow knob shows its glyph in the shell dim ink */
 [data-theme="pafta"] .unity[data-unity="closed"] .us-knob { color: var(--shell-text-dim); }
 

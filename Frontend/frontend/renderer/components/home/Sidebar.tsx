@@ -9,7 +9,7 @@ import type { UnityMCPStatus } from '../../hooks/home/useAIConfig';
 import { STATUS_DOT, familyRootId, familyStatusOf, rootsOf } from '../../lib/convFamily';
 import { AwaitingChip, ChatStatusLamp } from '../phone/ChatRow';
 import { BrandLogo } from './BrandLogo';
-import { useUnityLinkPulse } from './UnityMcpToggle';
+import { useShownUnityStatus, useUnityLinkPulse } from './UnityMcpToggle';
 import { confirmDialog } from '../ui/ConfirmDialog';
 import { displayName } from '../../lib/displayName';
 import type { AchievementId } from '../../lib/profileStats';
@@ -74,7 +74,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
   } = props;
 
   const { t, lang } = useLang();
-  const linked = useUnityLinkPulse(unityStatus);
+  const linked = useUnityLinkPulse(useShownUnityStatus(unityStatus));
   const [sceneEditorSetting] = useSceneEditorSetting();
   const editorOn = sceneEditorSetting && unityStatus !== 'off';
   const [sideTab, setSideTab] = useState<'chats' | 'hierarchy'>('chats');

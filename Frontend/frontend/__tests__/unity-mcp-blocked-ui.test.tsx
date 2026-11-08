@@ -89,25 +89,24 @@ describe('UnityMcpToggle — blocked görünürlüğü', () => {
     expect((toggleButton() as HTMLButtonElement).disabled).toBe(false)
   })
 
-  it('3) blocked hareketsiz — yalnız starting/running "bağlanıyor" (LED koşusu) görünümünde', () => {
-    // The chase animation is bound to data-unity="connecting" in shell.css, so the
-    // look IS the motion switch: blocked must never land on it.
+  it('3) blocked keeps its own look; starting/running read as not connected', () => {
+    // Burak, 8 Nov 2026: the user sees connected or not connected, never a "connecting" look.
     const { rerender } = render(
       <UnityMcpToggle status="blocked" toggling={false} reason={BLOCKED_REASON}
                       error={null} onToggle={vi.fn()} />
     )
-    expect(look()).not.toBe('connecting')
+    expect(look()).toBe('blocked')
 
     rerender(
       <UnityMcpToggle status="running" toggling={false} reason={null}
                       error={null} onToggle={vi.fn()} />
     )
-    expect(look()).toBe('connecting')
+    expect(look()).toBe('closed')
     rerender(
       <UnityMcpToggle status="starting" toggling={false} reason={null}
                       error={null} onToggle={vi.fn()} />
     )
-    expect(look()).toBe('connecting')
+    expect(look()).toBe('closed')
   })
 
   it('sebep şeridi görünüyor ve süreç adını taşıyor', () => {

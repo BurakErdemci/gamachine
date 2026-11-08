@@ -25,8 +25,6 @@
 [data-theme="atolye"] .us-knob { z-index: 1; }
 [data-theme="atolye"] .unity.is-linked .us-knob { animation: atolye-us-land 200ms var(--g-ease-press); }
 @keyframes atolye-us-land { 50% { transform: translateX(calc(var(--us-w) - var(--us-knob-w) - 6px + 2px)); } }
-/* connecting: the sage glyph vanished on brass; it is cut in sage ink instead */
-[data-theme="atolye"] .unity[data-unity="connecting"] .us-knob { color: var(--us-connect-ink); }
 /* closed (editor not running): the hollow knob shows its glyph in the shell dim ink */
 [data-theme="atolye"] .unity[data-unity="closed"] .us-knob { color: var(--shell-text-dim); }
 
