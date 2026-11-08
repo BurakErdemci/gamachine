@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from database import DatabaseManager
 from routes import workspace_routes
 from tests.test_workspace_mcp_switch import switch  # noqa: F401
+from tests.unity_boundary import unity_os  # noqa: F401  (switch needs it)
 
 
 @pytest.fixture
@@ -52,7 +53,7 @@ def test_remember_route_does_not_touch_running_mcp(switch):  # noqa: F811
         "user_id": 1, "path": str(switch.new),
     }, headers={"X-Session-Token": "test-token"})
     assert response.status_code == 200 and response.json() == {"status": "success"}
-    assert switch.events == []
+    assert switch.os.events == []  # no process was stopped or spawned
     assert switch.manager.active_workspace == str(switch.old)
     switch.db.remember_workspace.assert_called_once_with(1, str(switch.new))
 
