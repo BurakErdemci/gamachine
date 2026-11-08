@@ -42,7 +42,7 @@ def create_workspace_router(db):
         user_id, _ = require_user(db, x_session_token, req.user_id)
         require_saved_workspace_when_remote(req.path, x_session_token)
         previous_workspace = None
-        from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
+        from unity_ai_mcp.unity_mcp_manager import unity_mcp_disabled, unity_mcp_manager
         # One switch at a time: the persisted workspace order must equal the MCP switch order.
         async with unity_mcp_manager.mcp_lock:
             try:
@@ -67,7 +67,8 @@ def create_workspace_router(db):
                         except HTTPException as e:
                             return {"status": "success", "mcp": {"state": "off", "reason": e.detail}}
                         return {"status": "success", "mcp": {"state": "switched"}}
-                else:
+                elif not unity_mcp_disabled():
+                    # Under the switch the project's autoconnect file belongs to the live Gamachine.
                     unity_mcp_manager.reset_autoconnect_off(
                         unity_mcp_manager.active_workspace or previous_workspace)
             except Exception as e:

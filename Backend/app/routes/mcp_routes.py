@@ -3,7 +3,7 @@ import asyncio
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException
 from pydantic import BaseModel
 from typing import Optional
-from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
+from unity_ai_mcp.unity_mcp_manager import unity_mcp_disabled, unity_mcp_manager
 from unity_ai_mcp import unity_project_presence
 from auth_utils import _check_token
 from routes.workspace_routes import require_saved_workspace_when_remote
@@ -34,6 +34,10 @@ async def toggle_unity_mcp(req: MCPToggleRequest, background_tasks: BackgroundTa
 
 
 async def start_mcp_for(workspace_path, background_tasks, language=None):
+    if unity_mcp_disabled():
+        # start_server refuses under the switch with no last_error, which surfaced as a bare 500.
+        raise HTTPException(status_code=409,
+                            detail="Unity MCP is disabled for this backend (GAMACHINE_NO_UNITY_MCP).")
     if language in ("tr", "en"):
         unity_mcp_manager.language = language
     # Unity açık değilse hemen hata dön

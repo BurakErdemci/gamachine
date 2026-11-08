@@ -477,6 +477,10 @@ def _unity_api_up() -> bool:
     nobody had toggled it and every sync attempt ended in WinError 10061
     (measured 28 Sep 2026). A refused connect is cheap; a sync that cannot
     connect is still a thread and a log line per attempt."""
+    from unity_ai_mcp.unity_mcp_manager import unity_mcp_disabled
+    # An isolated backend beside a live Gamachine must not even probe its 8080.
+    if unity_mcp_disabled():
+        return False
     try:
         with socket.create_connection(("localhost", 8080), timeout=0.5):
             return True
@@ -670,7 +674,9 @@ class OmniSharpManager:
             # `..unity_ai_mcp` raised "attempted relative import beyond top-level
             # package" and the refresh never ran (since e988258). It is also the
             # same module object whose singleton holds the secret.
-            from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
+            from unity_ai_mcp.unity_mcp_manager import unity_mcp_disabled, unity_mcp_manager
+            if unity_mcp_disabled():
+                raise RuntimeError("GAMACHINE_NO_UNITY_MCP is set")
             req = urllib.request.Request(
                 "http://localhost:8080/api/command", method="POST",
                 # project_path pins the editor: without it /api/command takes the

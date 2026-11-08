@@ -16,7 +16,7 @@ from pydantic import BaseModel, StrictBool, StrictFloat, StrictInt, StrictStr, f
 from auth_utils import _check_token, get_current_user
 from omnisharp.omnisharp_manager import _unwrap_unity_result
 from unity_ai_mcp import unity_project_presence
-from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
+from unity_ai_mcp.unity_mcp_manager import unity_mcp_disabled, unity_mcp_manager
 
 
 logger = logging.getLogger(__name__)
@@ -95,6 +95,9 @@ def _raise_unity_error(error: str, status: int = 200) -> None:
 
 
 def _post_unity(command: str, params: dict, project_path: str = "") -> dict:
+    if unity_mcp_disabled():
+        # Same answer as a refused connect, without contacting 8080.
+        raise HTTPException(status_code=503, detail="unity_unavailable")
     body = {"type": command, "params": params}
     if project_path:
         # Names the editor: /api/command otherwise takes the first connected session.
