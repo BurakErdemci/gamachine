@@ -953,6 +953,12 @@ def _session_has_running_work(session) -> bool:
 # gözlendi: alakasız bir CLI-flag konusunu araştırıp kafası karışmış "Clarification
 # Required" ile bitirdi). Codex/Claude aynı bağlamla doğru yanıt verdiği için context
 # içeriği sorunlu değildi — eksik olan yalnız "doğrudan bundan cevapla" talimatıydı.
+def _is_slash_command(text: str) -> bool:
+    """A message the agent CLI must see unchanged to run it as a slash command
+    (/context, /usage): any note put in front would turn it into plain text."""
+    return text.lstrip().startswith("/")
+
+
 _HANDOFF_HEADER = (
     "[ÖNCEKİ KONUŞMA BAĞLAMI — bu geçmiş sana YETERLİ bağlamı veriyor. Kullanıcı "
     "'kaldığımız yeri/ne yaptığımızı biliyor musun' tarzı bir şey soruyorsa, dosya "
@@ -2823,7 +2829,7 @@ class AgentRunner:
             provider._agent_guide = self._agent_guide
             provider._language = getattr(self, "language", "tr")
 
-            if getattr(self, "_unity_note", ""):
+            if getattr(self, "_unity_note", "") and not _is_slash_command(user_message):
                 user_message = f"{self._unity_note}\n\n{user_message}"
             prompt = f"{_PRODUCT_PROMPT}\n\n[BAĞLAM]\n{self.context}\n\n[KULLANICI]\n{user_message}"
 
@@ -2907,7 +2913,7 @@ class AgentRunner:
         if image_paths:
             message += "\n\nAttached images; open these files to inspect them:\n"
             message += "\n".join(f"- {path}" for path in image_paths)
-        if getattr(self, "_unity_note", ""):
+        if getattr(self, "_unity_note", "") and not _is_slash_command(user_message):
             message = f"{self._unity_note}\n\n{message}"
         turn_complete = False
         session.agent_guide = self._agent_guide
@@ -3045,7 +3051,7 @@ class AgentRunner:
             enriched_prompt += ("\n\n[EKLİ GÖRSELLER] Kullanıcı bu turda görsel ekledi. "
                                 "İncelemen için (read aracıyla aç):\n" + _lines)
 
-        if _unity_note:
+        if _unity_note and not _is_slash_command(user_message):
             enriched_prompt = f"{_unity_note}\n\n{enriched_prompt}"
 
         # Effort seviyesi provider'a attr olarak geçer (agy _resume_uuid deseni):
@@ -3312,7 +3318,10 @@ class AgentRunner:
             # discard it either) and rebuild on the first turn with none running.
             logger.info(f"[ClaudeSession] {', '.join(_reasons)}; yeniden kurma "
                         f"{len(_existing._active_tasks)} arka plan işi bitene kadar bekliyor")
-            _defer_note = self._defer_rebuild_notice(_reasons)
+            # A slash turn neither announces nor records the reason, so the
+            # next ordinary message still carries it.
+            if not _is_slash_command(user_message):
+                _defer_note = self._defer_rebuild_notice(_reasons)
         else:
             _DEFERRED_REASONS.pop(self.conversation_id, None)
             if _decision == "rebuild":
@@ -3398,15 +3407,18 @@ class AgentRunner:
             message = f"{message}{_img_suffix}"
             # The close above (or a reset) killed background tasks: the new
             # session's model hears it in this turn, never after a delay.
-            _reset_notice = take_reset_notice(self.conversation_id)
-            if _reset_notice:
-                self.session_reset_notice = "\n".join(filter(None, (self.session_reset_notice, _reset_notice)))
-            if self.session_reset_notice:
-                message = f"{self.session_reset_notice}\n\n{message}"
-            if getattr(self, "_unity_note", ""):
-                message = f"{self._unity_note}\n\n{message}"
-            if _defer_note:
-                message = f"{_defer_note}\n\n{message}"
+            # A slash command takes and carries no note: the reset notice stays
+            # queued for the next ordinary message.
+            if not _is_slash_command(user_message):
+                _reset_notice = take_reset_notice(self.conversation_id)
+                if _reset_notice:
+                    self.session_reset_notice = "\n".join(filter(None, (self.session_reset_notice, _reset_notice)))
+                if self.session_reset_notice:
+                    message = f"{self.session_reset_notice}\n\n{message}"
+                if getattr(self, "_unity_note", ""):
+                    message = f"{self._unity_note}\n\n{message}"
+                if _defer_note:
+                    message = f"{_defer_note}\n\n{message}"
 
             _yielded = 0
             try:
@@ -3624,7 +3636,8 @@ class AgentRunner:
                 # on the first turn start with no running work, as Claude does.
                 logger.info("[CodexSession] %s; yeniden kurma %d çalışan iş bitene kadar bekliyor",
                             ", ".join(reasons), len(_running))
-                _defer_note = self._defer_rebuild_notice(reasons)
+                if not _is_slash_command(user_message):
+                    _defer_note = self._defer_rebuild_notice(reasons)
             else:
                 _DEFERRED_REASONS.pop(self.conversation_id, None)
                 logger.info(
@@ -3709,7 +3722,7 @@ class AgentRunner:
                     _session_guide = agent_guide.with_connectors(_session_guide)
                 message = _session_guide + "\n\n" + message
             session._ctx_injected = True
-        if getattr(self, "_unity_note", ""):
+        if getattr(self, "_unity_note", "") and not _is_slash_command(user_message):
             message = f"{self._unity_note}\n\n{message}"
         if _defer_note:
             message = f"{_defer_note}\n\n{message}"
