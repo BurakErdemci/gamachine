@@ -1513,6 +1513,26 @@ class ClaudeSDKSession:
         # getattr: a session built without __init__ (tests) has no list yet.
         return await self._send_inject(text, client_id)
 
+    async def _refresh_context_reading(self) -> bool:
+        """Read the CLI's context usage into `context_reading`. False (old value
+        kept) when the session is not live or the CLI does not answer."""
+        if not self.is_live or self._client is None:
+            return False
+        try:
+            # Query outside the reader: its control response needs that reader to avoid deadlock.
+            usage = await asyncio.wait_for(self._client.get_context_usage(), 5.0)
+            self.context_reading = {
+                "used": int(usage["totalTokens"]),
+                "window": int(usage.get("rawMaxTokens") or usage["maxTokens"]),
+                "percent": float(usage["percentage"]),
+                "model": str(usage.get("model") or ""),
+            }
+            return True
+        except Exception:
+            logger.debug("[ClaudeSDKSession:%s] context reading unavailable",
+                         self.conversation_id, exc_info=True)
+            return False
+
     async def compact(self, timeout: Optional[float] = None) -> bool:
         """Compact the CLI's context in place, as terminal Claude Code's
         /compact: only the main agent's context shrinks, the session stays and
@@ -1536,12 +1556,18 @@ class ClaudeSDKSession:
                 self._compact_waiter = None
                 return False
         try:
-            return await asyncio.wait_for(asyncio.shield(waiter),
-                                          _COMPACT_TIMEOUT_S if timeout is None else timeout)
+            ok = await asyncio.wait_for(asyncio.shield(waiter),
+                                        _COMPACT_TIMEOUT_S if timeout is None else timeout)
         except asyncio.TimeoutError:
             # Its Result may still come: it stays absorbed (_compact_result_owed).
             logger.warning(f"[ClaudeSDKSession:{self.conversation_id}] /compact zaman aşımı")
             return False
+        # The pre-compact reading is stale now. A running turn holds the lock
+        # and its stream() refreshes the reading at its end; reading here would
+        # wait on a reader that turn is using.
+        if ok and not self._turn_lock.locked() and not await self._refresh_context_reading():
+            self.context_reading = None
+        return ok
 
     async def hand_to_running_turn(self, text: str) -> bool:
         """A plain send that found the turn still running and its lock held (a
@@ -2323,19 +2349,7 @@ class ClaudeSDKSession:
             # (audit CC-1). The lock stays held until the reading is done.
             self._out_q = None
             try:
-                if self.is_live and self._client is not None:
-                    try:
-                        # Query outside the reader: its control response needs that reader to avoid deadlock.
-                        usage = await asyncio.wait_for(self._client.get_context_usage(), 5.0)
-                        self.context_reading = {
-                            "used": int(usage["totalTokens"]),
-                            "window": int(usage.get("rawMaxTokens") or usage["maxTokens"]),
-                            "percent": float(usage["percentage"]),
-                            "model": str(usage.get("model") or ""),
-                        }
-                    except Exception:
-                        logger.debug("[ClaudeSDKSession:%s] context reading unavailable",
-                                     self.conversation_id, exc_info=True)
+                await self._refresh_context_reading()
             finally:
                 # NOT: reader'ı BEKLEMEYİZ/iptal etmeyiz (eski 'await task' kilidi burdaydı).
                 # SSE koptuysa tur CLI'da sürer; reader biten turun metnini DB'ye kaydeder.
