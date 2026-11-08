@@ -389,3 +389,31 @@ def test_unreachable_backend_leaves_the_target_ambiguous(scope, monkeypatch):
     mw = _workspace_middleware(monkeypatch, scope, lambda url: _raise_network())
     ctx, _ = _target_less_call(mw)
     assert "unity_instance" not in ctx.fastmcp_context.state
+
+
+@pytest.mark.parametrize("answer", [
+    lambda url: _reply({"workspace": "/p/A"}, status=500),
+    lambda url: _reply({"workspace": ["/p/A"]}),
+    lambda url: _reply(["/p/A"]),
+])
+def test_a_bad_workspace_answer_routes_nowhere(scope, monkeypatch, answer):
+    mw = _workspace_middleware(monkeypatch, scope, answer)
+    ctx, _ = _target_less_call(mw)
+    assert "unity_instance" not in ctx.fastmcp_context.state
+
+
+def test_an_explicit_target_wins_over_the_chat_workspace(scope, monkeypatch):
+    mw = _workspace_middleware(monkeypatch, scope, _workspace_answer("/p/A"))
+
+    async def instances(_ctx):
+        return [types.SimpleNamespace(id="A@aaaa111122223333", hash="aaaa111122223333"),
+                types.SimpleNamespace(id="B@bbbb111122223333", hash="bbbb111122223333")]
+
+    monkeypatch.setattr(mw, "_discover_instances", instances)
+    ctx = types.SimpleNamespace(
+        message=types.SimpleNamespace(name="manage_gameobject",
+                                      arguments={"action": "create", "unity_instance": "B@bbbb111122223333"}),
+        fastmcp_context=_State())
+    _run(mw._inject_unity_instance(ctx))
+    assert ctx.fastmcp_context.state["unity_instance"] == "B@bbbb111122223333"
+    assert not any(p[0].endswith("/mcp-chat-workspace") for p in scope.posts)
