@@ -54,6 +54,9 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 vi.setConfig({ testTimeout: 20_000 });
 async function setup(strict = false) {
   render(strict ? <React.StrictMode><Harness /></React.StrictMode> : <Harness />); await act(async () => {}); act(() => editor.select(7)); await screen.findByRole('button', { name: 'Bileşen ekle' }, { timeout: 5000 });
+  // findByRole resolves on the DOM commit, before React runs that commit's passive effects. InspectorPane's
+  // [objectId] effect closes the picker, so a click landing first was undone by it when the machine was busy.
+  await act(async () => {});
 }
 async function open() {
   fireEvent.click(screen.getByRole('button', { name: 'Bileşen ekle' })); await screen.findByRole('option', { name: 'Physics' }, { timeout: 5000 });
