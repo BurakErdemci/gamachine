@@ -1,0 +1,4 @@
+# Promises a reimplementation deliberately keeps differently, one per line:
+#   <test name>  <what differs>  <why it is accepted>  <date, who accepted it>
+# Parity of a rewrite = passing contract tests + the lines below. Keep it short and reviewed:
+# a line here is a decision, not a parking spot for a failing test.

@@ -1,0 +1,3 @@
+data: {"id":"chatcmpl-contract","object":"chat.completion.chunk","created":1762560000,"model":"contract-stall","choices":[{"index":0,"delta":{"role":"assistant","content":"Starting a long answer"},"finish_reason":null}]}
+
+: stall

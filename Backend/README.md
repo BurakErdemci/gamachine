@@ -26,3 +26,12 @@ venv\Scripts\python.exe app\main.py
 
 Warning: chat, usage and agent routes may still start provider CLIs. Do not call
 them from an isolated backend unless that is intended.
+
+The contract suite in `contract/` (repo root) starts exactly this kind of backend.
+It runs on a temp root, with fake provider CLIs on a restricted PATH and a fake
+OpenAI-compatible model server behind `OPENAI_BASE_URL`; see `contract/README.md`.
+Under the switch, three earlier gaps are closed. The C# project sync and the scene
+editor no longer contact 8080. Saving a workspace no longer rewrites the project's
+`UserSettings/Gamachine/autoconnect.json`. The Unity toggle no longer answers a
+bare 500; it answers 409 with "Unity MCP is disabled for this backend
+(GAMACHINE_NO_UNITY_MCP)." (`Backend/tests/test_no_unity_mcp_gaps.py`).

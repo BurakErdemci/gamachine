@@ -1,0 +1,9 @@
+data: {"id":"chatcmpl-contract","object":"chat.completion.chunk","created":1762560000,"model":"contract-text","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello from "},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-contract","object":"chat.completion.chunk","created":1762560000,"model":"contract-text","choices":[{"index":0,"delta":{"content":"the contract fake."},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-contract","object":"chat.completion.chunk","created":1762560000,"model":"contract-text","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: {"id":"chatcmpl-contract","object":"chat.completion.chunk","created":1762560000,"model":"contract-text","choices":[],"usage":{"prompt_tokens":12,"completion_tokens":6,"total_tokens":18}}
+
+data: [DONE]

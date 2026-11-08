@@ -1,0 +1,3 @@
+{"conversation_id": "<conversation_id>", "model": "contract-unauthorized", "provider": "api-openai", "type": "turn_meta"}
+{"conversation_id": "<conversation_id>", "message": "OpenAI/API error: Error code: 401 - {'error': {'message': 'Incorrect API key provided: sk-contr****. You can find your API key at https://platform.openai.com/account/api-keys.', 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_api_key'}}", "type": "error"}
+{"conversation_id": "<conversation_id>", "estimated": true, "max_chars": 200000, "message_count": 1, "percent": 0, "should_compact": false, "total_chars": 15, "type": "context_usage"}

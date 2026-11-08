@@ -1,0 +1,6 @@
+{"conversation_id": "<conversation_id>", "model": "contract-text", "provider": "api-openai", "type": "turn_meta"}
+{"content": "Hello from the contract fake.", "conversation_id": "<conversation_id>", "type": "text"}
+{"cache_creation_input_tokens": "<cache_creation_input_tokens>", "cache_read_input_tokens": "<cache_read_input_tokens>", "conversation_id": "<conversation_id>", "cost_usd": null, "duration_ms": "<duration_ms>", "input_tokens": "<input_tokens>", "output_tokens": "<output_tokens>", "type": "turn_usage"}
+{"content": "Hello from the contract fake.", "conversation_id": "<conversation_id>", "type": "response"}
+{"conversation_id": "<conversation_id>", "iterations": 1, "max_reached": false, "stop_reason": "complete", "type": "done"}
+{"conversation_id": "<conversation_id>", "estimated": false, "last_turn": {"cost_usd": null, "input_tokens": "<input_tokens>", "output_tokens": "<output_tokens>"}, "max_chars": 200000, "message_count": 2, "percent": 0, "real": {"model": "contract-text", "total": "128k", "used": "18"}, "should_compact": false, "total_chars": 39, "type": "context_usage"}
