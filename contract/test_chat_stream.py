@@ -1,6 +1,8 @@
 """Promises about a chat turn, with the model provider faked at its HTTP boundary."""
 import time
 
+import pytest
+
 import sse
 
 REPLY = "Hello from the contract fake."
@@ -74,3 +76,23 @@ def test_stopping_a_running_turn_ends_it_once_as_stopped(api, fake_openai):
         time.sleep(0.1)
     assert [e["status"] for e in ends] == ["stopped"], turn
     assert turn[-1]["kind"] == "turn_end", "events after the end of the turn"
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "Known product gap (8 Nov 2026): stop_chat cancels CLI sessions only; for an API-provider turn "
+    "/chat-stop answers no_session and the turn runs on until the streaming client hangs up, so a "
+    "Stop from another client (phone, a followed turn) does not stop it. Remove this mark with the fix."))
+def test_stop_ends_an_api_turn_while_the_client_keeps_listening(api, fake_openai):
+    """POST /chat-stop alone ends a running turn: the open stream gets one terminal event and the model request is cancelled."""
+    conv_id = api.new_conversation(model="contract-stall")
+    sent = {}
+
+    def stop_once(event, response):
+        if event.get("type") == "text" and not sent:
+            sent["answer"] = api.ok("POST", f"/chat-stop/{conv_id}")
+        return event.get("type") in sse.TERMINAL
+
+    events = api.chat(conv_id, "Write a long answer.", on_event=stop_once, max_seconds=8)
+    assert sent, "the turn never streamed text"
+    assert [e["type"] for e in events if e["type"] in sse.TERMINAL], "Stop did not end the open stream"
+    assert fake_openai.hung_up.wait(5), "the model request kept running after Stop"

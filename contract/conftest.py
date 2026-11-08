@@ -36,6 +36,8 @@ READY_DEADLINE_S = 30.0
 STOP_WAIT_S = 15.0
 SESSION_CAP_S = 300.0
 START_ATTEMPTS = 3
+ROOT_REMOVE_ATTEMPTS = 10
+ROOT_REMOVE_PAUSE_S = 0.5
 # Ports this suite must never take: the dev backend, the live Unity MCP server, the relay.
 RESERVED_PORTS = {8000, 8080, 8799}
 FAKE_CLIS = ("claude", "codex", "opencode", "agy", "gemini", "cursor-agent", "kimi", "copilot")
@@ -69,6 +71,22 @@ def pytest_sessionfinish(session, exitstatus):
     timer = getattr(session.config, "_contract_cap", None)
     if timer is not None:
         timer.cancel()
+
+
+def remove_root(root):
+    """Remove the temp root, retrying while a just-killed child still holds a file; None when gone, else the reason."""
+    last = None
+    for _ in range(ROOT_REMOVE_ATTEMPTS):
+        try:
+            shutil.rmtree(root)
+        except FileNotFoundError:
+            return None
+        except OSError as error:
+            last = error
+            time.sleep(ROOT_REMOVE_PAUSE_S)
+        else:
+            return None
+    return f"{root}: {last}"
 
 
 def free_port():
@@ -283,8 +301,10 @@ def backend(fake_openai):
         tail = server.log_tail()
         if os.environ.get("CONTRACT_KEEP_ROOT") == "1":
             sys.stderr.write(f"\ncontract: temp root kept at {root}\n")
+            leftover = None
         else:
-            shutil.rmtree(root, ignore_errors=True)
+            leftover = remove_root(root)
+    assert leftover is None, f"temp root not removed: {leftover}"
     assert not violations, "\n".join(violations) + "\n--- log tail ---\n" + tail
 
 

@@ -1,4 +1,6 @@
 """The suite's only way to talk to the backend: HTTP with the session token, and SSE for chat turns."""
+import time
+
 import httpx
 
 import sse
@@ -46,15 +48,25 @@ class Api:
                 "api_key": "sk-contract-fake-key", "conversation_id": conv["id"]})
         return conv["id"]
 
-    def chat(self, conversation_id, message, on_event=None):
-        """Send one chat turn and return its SSE events; `on_event(event, response)` may stop early by returning True."""
+    def chat(self, conversation_id, message, on_event=None, max_seconds=None):
+        """Send one chat turn and return its SSE events; `on_event(event, response)` may stop early by returning True.
+
+        `max_seconds` stops reading that long after the request, even while the stream stays open."""
         events = []
         body = {"conversation_id": conversation_id, "user_id": USER_ID, "message": message,
                 "language": "en"}
         with self.http.stream("POST", "/chat-stream", json=body, timeout=STREAM_TIMEOUT) as response:
             assert response.status_code == 200, response.read().decode("utf-8", "replace")[:500]
             assert response.headers["content-type"].startswith("text/event-stream")
-            for event in sse.parse(response.iter_lines()):
+            deadline = None if max_seconds is None else time.monotonic() + max_seconds
+
+            def lines():
+                for line in response.iter_lines():
+                    if deadline is not None and time.monotonic() > deadline:
+                        return
+                    yield line
+
+            for event in sse.parse(lines()):
                 events.append(event)
                 if on_event is not None and on_event(event, response):
                     break

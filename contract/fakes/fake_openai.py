@@ -70,7 +70,6 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _stall(self):
         """Hold the stream open until the backend hangs up (or the limit passes)."""
-        self.server.stalled.set()
         deadline = time.monotonic() + STALL_LIMIT_S
         while time.monotonic() < deadline and not self.server.closing.is_set():
             try:
@@ -89,7 +88,6 @@ class FakeOpenAI:
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
         self._server.daemon_threads = True
         self._server.requests = []
-        self._server.stalled = threading.Event()
         self._server.hung_up = threading.Event()
         self._server.closing = threading.Event()
         self._thread = threading.Thread(target=self._server.serve_forever,
@@ -103,10 +101,6 @@ class FakeOpenAI:
     @property
     def requests(self):
         return self._server.requests
-
-    @property
-    def stalled(self):
-        return self._server.stalled
 
     @property
     def hung_up(self):

@@ -38,10 +38,21 @@ def _placeholder(key, value):
     return value
 
 
+def _provider_error(event):
+    """An error event with the provider SDK's own wording replaced: only the backend's prefix stays.
+
+    The text after the first colon comes from the `openai` package (unpinned in requirements.txt),
+    so an SDK update would change it with no change in the product.
+    """
+    prefix, colon, _ = str(event.get("message", "")).partition(":")
+    return {**event, "message": f"{prefix}: <provider message>"} if colon else event
+
+
 def normalize(events):
     """Events with volatile fields replaced by `<key>` placeholders, heartbeats dropped, keys sorted.
 
     Consecutive `text` events are merged: where the stream cuts the text depends on timing.
+    The provider SDK's wording inside `error` messages is replaced by a placeholder.
     """
     merged = []
     for event in events:
@@ -50,7 +61,7 @@ def normalize(events):
         if event.get("type") == "text" and merged and merged[-1].get("type") == "text":
             merged[-1] = {**merged[-1], "content": merged[-1].get("content", "") + event.get("content", "")}
             continue
-        merged.append(dict(event))
+        merged.append(_provider_error(event) if event.get("type") == "error" else dict(event))
     return [_placeholder("", e) for e in merged]
 
 
