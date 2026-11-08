@@ -23,7 +23,7 @@ from auth_utils import require_conversation_owner, require_user, get_current_use
 from error_i18n import localize_sse, translate_detail
 from schemas import ChatRequest, HiddenRequest, NewConversationRequest, RenameRequest, SideChatRequest
 
-from agentic.agent_runner import AgentRunner
+from agentic.agent_runner import AgentRunner, _is_slash_command
 from agentic import api_compaction
 from agentic import approval_mode
 from agentic import cards as _cards
@@ -2451,15 +2451,18 @@ Max 300 kelime. Türkçe yaz.
 
         # Background tasks a Stop or a session close ended: one line in front
         # of this turn's message tells the model; the chat shows it as a system row.
+        # A slash command must reach the CLI bare: the notice stays pending for
+        # the next ordinary message.
         try:
-            from providers.claude_sdk_session import (peek_session as _peek_claude,
-                                                      take_reset_notice as _take_reset_notice)
-            _claude = _peek_claude(request.conversation_id)
-            _stop_notice = (_claude.take_stop_notice() if _claude is not None
-                            else _take_reset_notice(request.conversation_id))
-            if _stop_notice:
-                db.add_message(request.conversation_id, "system", _stop_notice)
-                turn_message = f"{_stop_notice}\n\n{turn_message}"
+            if not _is_slash_command(turn_message):
+                from providers.claude_sdk_session import (peek_session as _peek_claude,
+                                                          take_reset_notice as _take_reset_notice)
+                _claude = _peek_claude(request.conversation_id)
+                _stop_notice = (_claude.take_stop_notice() if _claude is not None
+                                else _take_reset_notice(request.conversation_id))
+                if _stop_notice:
+                    db.add_message(request.conversation_id, "system", _stop_notice)
+                    turn_message = f"{_stop_notice}\n\n{turn_message}"
         except Exception:
             logger.exception("[bg-tasks] conv=%s stop notice not stored", request.conversation_id)
 

@@ -953,10 +953,16 @@ def _session_has_running_work(session) -> bool:
 # gözlendi: alakasız bir CLI-flag konusunu araştırıp kafası karışmış "Clarification
 # Required" ile bitirdi). Codex/Claude aynı bağlamla doğru yanıt verdiği için context
 # içeriği sorunlu değildi — eksik olan yalnız "doğrudan bundan cevapla" talimatıydı.
+_SLASH_COMMAND_RE = re.compile(r"/[A-Za-z][A-Za-z0-9_:-]*")
+
+
 def _is_slash_command(text: str) -> bool:
     """A message the agent CLI must see unchanged to run it as a slash command
-    (/context, /usage): any note put in front would turn it into plain text."""
-    return text.lstrip().startswith("/")
+    (/context, /usage): any note put in front would turn it into plain text.
+    Only the first word counts, and it must be a command name: a message that
+    starts with a path ("/Users/me/Foo.cs is broken") is an ordinary one."""
+    first = text.split(None, 1)
+    return bool(first) and _SLASH_COMMAND_RE.fullmatch(first[0]) is not None
 
 
 _HANDOFF_HEADER = (
