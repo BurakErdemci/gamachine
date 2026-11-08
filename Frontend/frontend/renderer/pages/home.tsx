@@ -1309,6 +1309,7 @@ export default function Home() {
             dialog={ai.unityMcpDialog}
             editorOpen={ai.unityEditorOpen}
             onLaunchUnity={launchWorkspaceUnity}
+            projectKey={fs.workspacePath ?? ''}
           />
           {/* Not in the mockup: the sidebar toggle. The editor's controls that shared this spot (the
               terminal button, the open file's name / save / close) moved into the workspace: the

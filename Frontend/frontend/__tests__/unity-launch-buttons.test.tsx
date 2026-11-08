@@ -147,6 +147,15 @@ describe('Unity switch launch button', () => {
     expect(launchBtn()).toBeTruthy()
   })
 
+  it('comes back at once when the open project changes after a launch', async () => {
+    const onLaunchUnity = vi.fn(async () => {})
+    const { rerender } = render(toggle({ editorOpen: false, onLaunchUnity, projectKey: 'C:/A' }))
+    await act(async () => { fireEvent.click(launchBtn()!) })
+    expect(launchBtn()).toBeNull()
+    rerender(toggle({ editorOpen: false, onLaunchUnity, projectKey: 'C:/B' }))
+    expect(launchBtn()).toBeTruthy()
+  })
+
   it('stays available after a launch that threw', async () => {
     render(toggle({ editorOpen: false, onLaunchUnity: vi.fn(async () => { throw new Error('boom') }) }))
     await act(async () => { fireEvent.click(launchBtn()!) })

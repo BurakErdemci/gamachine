@@ -79,6 +79,8 @@ interface UnityMcpToggleProps {
   /** Starts the editor for this project and says whether it opened (false = refused, the
    * handler already told the user why); omitted where the page cannot (remote browser, no project). */
   onLaunchUnity?: () => Promise<boolean | void> | boolean | void;
+  /** Identifies the open project; a change drops the launch cooldown of the previous one. */
+  projectKey?: string;
 }
 
 /** After a launch resolves the editor takes a while to appear; a second click in that window would spawn a second one. */
@@ -118,11 +120,13 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
   dialog = null,
   editorOpen = null,
   onLaunchUnity,
+  projectKey,
 }) => {
   const { t } = useLang();
   const [launching, setLaunching] = useState(false);
   const [launched, setLaunched] = useState(false);
   useEffect(() => { if (editorOpen === true) setLaunched(false); }, [editorOpen]);
+  useEffect(() => { setLaunched(false); }, [projectKey]);
   useEffect(() => {
     if (!launched) return;
     const id = setTimeout(() => setLaunched(false), LAUNCH_COOLDOWN_MS);

@@ -100,8 +100,27 @@ describe('isEditorOpen', () => {
   }
   const withPid = (pid: unknown) => project(JSON.stringify({ process_id: pid }))
 
-  it('is true for a live process', () => {
-    expect(isEditorOpen(withPid(process.pid))).toBe(true)
+  const unityImage = process.platform === 'win32' ? 'Unity.exe' : 'Unity'
+
+  it('is true for a live process whose image is Unity', () => {
+    expect(isEditorOpen(withPid(process.pid), () => unityImage)).toBe(true)
+  })
+
+  it('is false for a live process with another image (reused pid)', () => {
+    expect(isEditorOpen(withPid(process.pid), () => 'node.exe')).toBe(false)
+  })
+
+  it('is false when the process query fails or times out', () => {
+    expect(isEditorOpen(withPid(process.pid), () => null)).toBe(false)
+    expect(isEditorOpen(withPid(process.pid), () => { throw new Error('timeout') })).toBe(false)
+  })
+
+  it('counts an EPERM process as live when its image is Unity', () => {
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => { throw Object.assign(new Error('eperm'), { code: 'EPERM' }) })
+    try {
+      expect(isEditorOpen(withPid(4242), () => unityImage)).toBe(true)
+      expect(isEditorOpen(withPid(4242), () => 'node.exe')).toBe(false)
+    } finally { kill.mockRestore() }
   })
 
   it('is false for a dead process', () => {
