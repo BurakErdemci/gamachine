@@ -61,6 +61,24 @@ def select_session_by_path(paths: dict[str, str], project_path: str) -> tuple[st
     return matches[0], None
 
 
+async def chat_workspace(conversation_id: int) -> str | None:
+    """The chat's workspace folder from the backend, or None on any failure."""
+    try:
+        async with httpx.AsyncClient(timeout=_CHECK_TIMEOUT) as client:
+            resp = await client.post(
+                f"{_BACKEND_URL}/mcp-chat-workspace",
+                json={"conversation_id": conversation_id},
+                headers=_headers(),
+            )
+        if resp.status_code != 200:
+            return None
+        body = resp.json()
+        workspace = body.get("workspace") if isinstance(body, dict) else None
+        return workspace if isinstance(workspace, str) and workspace else None
+    except Exception:
+        return None
+
+
 async def _resolve_project_path(ctx) -> str:
     # Lazy: manage_build imports the transport package, so a module-level
     # import here would be circular.

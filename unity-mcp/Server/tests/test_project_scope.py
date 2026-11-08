@@ -319,3 +319,73 @@ def test_counting_failure_is_a_refusal(scope, monkeypatch):
     monkeypatch.setattr(PluginHub, "session_project_paths", AsyncMock(side_effect=RuntimeError("boom")))
     assert _run(project_scope.project_scope_refusal(CTX, 5)) == UNREACHABLE
     assert scope.posts == []
+
+
+class _WsSession:
+    def __init__(self, name, project_hash, path):
+        self.project_name, self.project_hash, self.project_path = name, project_hash, path
+        self.unity_version, self.connected_at = "6000.6.0f1", __import__("datetime").datetime(2026, 11, 8)
+
+
+class _WsRegistry:
+    async def list_sessions(self, user_id=None):
+        return {"s1": _WsSession("A", "aaaa111122223333", "/p/A"),
+                "s2": _WsSession("B", "bbbb111122223333", "/p/B")}
+
+
+def _workspace_middleware(monkeypatch, scope, answer):
+    from core.config import config
+
+    scope.answer = lambda: answer(scope.posts[-1][0])
+    monkeypatch.setattr(PluginHub, "_registry", _WsRegistry())
+    monkeypatch.setattr(config, "http_remote_hosted", False)
+    mw = UnityInstanceMiddleware()
+    monkeypatch.setattr(mw, "_request_conversation_id", lambda: 5)
+    return mw
+
+
+class _State:
+    def __init__(self):
+        self.state = {}
+
+    async def set_state(self, key, value, serializable=True):
+        self.state[key] = value
+
+    async def get_state(self, key, default=None):
+        return self.state.get(key, default)
+
+
+def _target_less_call(mw):
+    ctx = types.SimpleNamespace(
+        message=types.SimpleNamespace(name="manage_gameobject", arguments={"action": "create"}),
+        fastmcp_context=_State())
+    return ctx, _run(mw._inject_unity_instance(ctx))
+
+
+def _workspace_answer(workspace):
+    return lambda url: (_reply({"workspace": workspace}) if url.endswith("/mcp-chat-workspace")
+                        else _reply({"ok": True, "detail": None}))
+
+
+def test_two_editors_no_target_goes_to_the_chat_workspace_editor(scope, monkeypatch):
+    mw = _workspace_middleware(monkeypatch, scope, _workspace_answer("/p/A"))
+    ctx, _ = _target_less_call(mw)
+    assert ctx.fastmcp_context.state["unity_instance"] == "A@aaaa111122223333"
+    assert scope.posts[0][1] == {"conversation_id": 5}
+    monkeypatch.setattr(mb, "_target_project_path", AsyncMock(return_value="/p/A"))
+    assert _run(project_scope.project_scope_refusal(ctx.fastmcp_context, 5)) is None
+    assert scope.posts[-1][0].endswith("/mcp-project-check") and scope.posts[-1][1]["project_path"] == "/p/A"
+
+
+def test_workspace_matching_no_editor_is_still_ambiguous(scope, monkeypatch):
+    mw = _workspace_middleware(monkeypatch, scope, _workspace_answer("/p/Other"))
+    ctx, _ = _target_less_call(mw)
+    assert "unity_instance" not in ctx.fastmcp_context.state
+    monkeypatch.setattr(PluginHub, "session_project_paths", AsyncMock(return_value={"s1": "/p/A", "s2": "/p/B"}))
+    assert _run(project_scope.project_scope_refusal(ctx.fastmcp_context, 5)) == project_scope._AMBIGUOUS_TARGET
+
+
+def test_unreachable_backend_leaves_the_target_ambiguous(scope, monkeypatch):
+    mw = _workspace_middleware(monkeypatch, scope, lambda url: _raise_network())
+    ctx, _ = _target_less_call(mw)
+    assert "unity_instance" not in ctx.fastmcp_context.state

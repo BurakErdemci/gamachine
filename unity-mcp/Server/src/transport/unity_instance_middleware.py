@@ -17,6 +17,7 @@ mode one client's set_active_instance re-routed every other client, and on the
 from threading import RLock
 import asyncio
 import logging
+import os
 import time
 import weakref
 
@@ -36,7 +37,7 @@ from services.registry import get_registered_tools
 from services.registry.tool_actions import READ, classify
 from transport.approval_gate import ApprovalDenied, parse_conversation_id
 from transport.plugin_hub import PluginHub
-from transport.project_scope import is_server_only_tool, project_scope_refusal
+from transport.project_scope import chat_workspace, is_server_only_tool, project_scope_refusal, select_session_by_path
 
 logger = logging.getLogger("mcp-for-unity-server")
 # Separate logger that propagates to root -> stderr so diagnostics show in console
@@ -397,6 +398,28 @@ class UnityInstanceMiddleware(Middleware):
 
         return None
 
+    async def _workspace_instance(self) -> str | None:
+        """With 2+ editors, the one whose project is the chat's workspace; None when unsure."""
+        conversation_id = self._request_conversation_id()
+        if conversation_id is None or not os.environ.get("LOCAL_APP_TOKEN", ""):
+            return None
+        try:
+            paths = await PluginHub.session_project_paths()
+            if len(paths) < 2:
+                return None
+            workspace = await chat_workspace(conversation_id)
+            if not workspace:
+                return None
+            session_id, _ = select_session_by_path(paths, workspace)
+            if session_id is None:
+                return None
+            details = (await PluginHub.get_sessions()).sessions.get(session_id)
+            if details is None or not details.hash:
+                return None
+            return f"{details.project or 'Unknown'}@{details.hash}"
+        except Exception:
+            return None
+
     async def _resolve_user_id(self) -> str | None:
         """Extract user_id from the current HTTP request's API key."""
         if not config.http_remote_hosted:
@@ -445,6 +468,8 @@ class UnityInstanceMiddleware(Middleware):
                 active_instance = await self._resolve_instance_value(default, ctx)
         if not active_instance:
             active_instance = await self._maybe_autoselect_instance(ctx)
+        if not active_instance:
+            active_instance = await self._workspace_instance()
         if active_instance:
             # If using HTTP transport (PluginHub configured), validate session
             # But for stdio transport (no PluginHub needed or maybe partially configured),

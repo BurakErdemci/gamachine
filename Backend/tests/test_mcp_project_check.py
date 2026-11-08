@@ -187,3 +187,26 @@ def test_csproj_sync_names_the_workspace_to_the_mcp_server(monkeypatch, tmp_path
     assert om.OmniSharpManager()._maybe_sync_csproj(str(tmp_path), reason="forced") is not None
     assert sent[0]["project_path"] == str(tmp_path)
     assert sent[0]["type"] == "manage_editor"
+
+
+def test_chat_workspace_returns_the_last_workspace(env):
+    client, chat, game, _, _ = env
+    response = client.post("/mcp-chat-workspace", json={"conversation_id": chat}, headers=HEADERS)
+    assert response.status_code == 200
+    assert response.json() == {"workspace": game}
+
+
+@pytest.mark.parametrize("chat_id", [999999, -1, "7", None])
+def test_chat_workspace_of_an_unknown_chat_is_null(env, chat_id):
+    client = env[0]
+    response = client.post("/mcp-chat-workspace", json={"conversation_id": chat_id}, headers=HEADERS)
+    assert response.status_code == 200
+    assert response.json() == {"workspace": None}
+
+
+def test_chat_workspace_rejects_a_wrong_token(env):
+    client, chat, _, _, _ = env
+    wrong = client.post("/mcp-chat-workspace", json={"conversation_id": chat}, headers={"X-Session-Token": "nope"})
+    expected = client.post("/mcp-project-check", json={"conversation_id": chat, "project_path": ""},
+                           headers={"X-Session-Token": "nope"})
+    assert wrong.status_code == expected.status_code != 200

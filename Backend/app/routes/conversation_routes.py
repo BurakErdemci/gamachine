@@ -3077,6 +3077,21 @@ Max 300 kelime. Türkçe yaz.
             project_path if isinstance(project_path, str) else "")
         return {"ok": detail is None, "detail": detail}
 
+    @router.post("/mcp-chat-workspace")
+    async def mcp_chat_workspace(body: dict, x_session_token: str = Header(alias="X-Session-Token", default="")):
+        """The workspace folder of a chat, so the MCP server can pick its Unity editor."""
+        _check_token(x_session_token)
+        conversation_id = body.get("conversation_id")
+        user_id = None
+        if type(conversation_id) is int and conversation_id > 0:
+            try:
+                user_id = db.get_conversation_owner(conversation_id)
+            except Exception:
+                user_id = None
+        if user_id is None:
+            return {"workspace": None}
+        return {"workspace": db.get_last_workspace(user_id) or None}
+
     @router.post("/mcp-approval-request")
     async def mcp_approval_request(body: dict, x_session_token: str = Header(alias="X-Session-Token", default="")):
         """MCP server'dan gelen onay isteğini saklar. Frontend /mcp-pending ile yoklar."""
