@@ -74,6 +74,19 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+describe('ChatPanel attached image', () => {
+  it('opens over the whole window, outside the thread, and the close button closes it', () => {
+    const { container } = panel({ messages: [{ id: 2, role: 'user', content: 'bak', images: ['data:image/png;base64,AAAA'], smells: [], timestamp: 't' }] })
+    fireEvent.click(container.querySelector('.msg-images img')!)
+    const dialog = screen.getByRole('dialog')
+    expect(dialog.parentElement).toBe(document.body)
+    expect(container.contains(dialog)).toBe(false)
+    expect(dialog.querySelector('img')?.getAttribute('src')).toBe('data:image/png;base64,AAAA')
+    fireEvent.click(screen.getByRole('button', { name: 'Kapat' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+})
+
 describe('ChatPanel write-file', () => {
   const fixProps = () => ({
     pendingFix: { data: { fixed_code: 'fixed' }, messageId: 1 },

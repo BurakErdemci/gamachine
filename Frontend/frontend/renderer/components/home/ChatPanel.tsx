@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { motion } from 'framer-motion';
 import { useLang } from '../../lib/i18n';
+import { ImageLightbox } from './ChatFileImage';
 import {
   User,
   Cpu,
@@ -283,15 +283,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   const turnStartRef = useRef<number | null>(null);
   const [elapsedSec, setElapsedSec] = useState(0);
 
-  // Resim lightbox: window.open(dataURI) Electron'da bembeyaz sekme açıyordu
-  // (data: URL yeni pencerede render edilmiyor) → uygulama içi tam ekran önizleme.
-  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
-  useEffect(() => {
-    if (!lightboxSrc) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); setLightboxSrc(null); } };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [lightboxSrc]);
+  // An attached image opens in the app: window.open(dataURI) showed a blank white window in Electron.
+  const [lightbox, setLightbox] = useState<{ src: string; label: string } | null>(null);
   useEffect(() => {
     if (!loading) { turnStartRef.current = null; setElapsedSec(0); return; }
     turnStartRef.current = Date.now();
@@ -681,7 +674,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                           key={i}
                           src={img}
                           alt="user upload"
-                          onClick={() => setLightboxSrc(img)}
+                          onClick={() => setLightbox({ src: img, label: t('chat.image.chip', { name: String(i + 1) }) })}
                         />
                       ))}
                     </div>
@@ -746,31 +739,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
         <div ref={messagesEndRef} className="thread-end" aria-hidden="true" />
 
-      {/* Resim lightbox (uygulama içi tam ekran önizleme) */}
-      {lightboxSrc && (
-        <div
-          role="dialog" aria-modal="true"
-          className="fixed inset-0 z-[300] bg-black/90 backdrop-blur-sm flex items-center justify-center cursor-zoom-out"
-          onClick={() => setLightboxSrc(null)}
-        >
-          <motion.img
-            initial={{ scale: 0.92, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            transition={{ duration: 0.15 }}
-            src={lightboxSrc}
-            alt="preview"
-            className="max-w-[92vw] max-h-[92vh] rounded-xl shadow-2xl object-contain"
-            onClick={e => e.stopPropagation()}
-          />
-          <button
-            onClick={() => setLightboxSrc(null)}
-            className="absolute top-4 right-4 h-9 w-9 rounded-full bg-white/10 hover:bg-white/20 text-white text-lg leading-none flex items-center justify-center transition-colors"
-            title={t('chat.closeEsc')}
-          >
-            ✕
-          </button>
-        </div>
-      )}
+      {lightbox && <ImageLightbox url={lightbox.src} label={lightbox.label} onClose={() => setLightbox(null)} />}
     </div>
   );
 };

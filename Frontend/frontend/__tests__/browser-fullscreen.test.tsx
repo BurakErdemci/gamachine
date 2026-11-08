@@ -6,6 +6,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { ConfirmDialogHost, confirmDialog } from '../renderer/components/ui/ConfirmDialog'
 import { translations } from '../renderer/lib/i18n'
 import { BrowserPanel } from '../renderer/components/home/BrowserPanel'
+import { ImageLightbox } from '../renderer/components/home/ChatFileImage'
 import { isBrowserFullShortcut, useBrowserFull } from '../renderer/lib/browserFull'
 
 const tr = translations.tr
@@ -323,10 +324,16 @@ describe('browser full screen keyboard rules', () => {
     hooked.unmount()
   })
 
-  it('keeps full mode when Esc closes the chat image lightbox (its handler uses the key)', () => {
-    const src = readFileSync(join(__dirname, '../renderer/components/home/ChatPanel.tsx'), 'utf8')
-    expect(src).toMatch(/\{lightboxSrc && \(\s*<div\s+role="dialog" aria-modal="true"/)
-    expect(src).toContain("if (e.key === 'Escape') { e.preventDefault(); setLightboxSrc(null); }")
+  it('keeps full mode when Esc closes the chat image lightbox (its handler uses the key)', async () => {
+    render(<Frame browserShown />)
+    await enter()
+    let open = true
+    render(<ImageLightbox url="blob:x" label="görüntü: 1" onClose={() => { open = false }} />)
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+    await flush()
+    expect(open).toBe(false)
+    expect(full()).toBe(true)
+    expect(escapes()).toBe(0)
   })
 
   it('names Esc in the leave tooltip, now that it works wherever focus is', () => {

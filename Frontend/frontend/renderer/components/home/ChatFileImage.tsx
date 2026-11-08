@@ -91,13 +91,19 @@ const Chip = ({ name, reason }: { name: string; reason: string }) => {
   return <span className="chip-file chat-img-chip">{t("chat.image.chip", { name })} · {reason}</span>;
 };
 
-const Lightbox = ({ url, label, onClose }: { url: string; label: string; onClose: () => void }) => {
+/**
+ * Every enlarged chat image, the agent's and the user's own. Portalled to <body>: drawn inside
+ * the thread, an ancestor became the containing block of `position: fixed`, so the picture was
+ * clipped to the thread and the header covered the close button (8 Nov 2026).
+ */
+export const ImageLightbox = ({ url, label, onClose }: { url: string; label: string; onClose: () => void }) => {
   const { t } = useLang();
   const closeRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     closeRef.current?.focus();
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      // preventDefault tells browser full mode (lib/browserFull.ts) the key was used here.
+      if (e.key === "Escape") { e.preventDefault(); onClose(); }
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
@@ -150,7 +156,7 @@ const StoredImage = ({ id, alt }: { id: string; alt: string }) => {
         <span className="chat-img-ph" role="status" aria-label={t("chat.image.loading")} />
       )}
       {alt && <figcaption>{alt}</figcaption>}
-      {open && url && <Lightbox url={url} label={name} onClose={close} />}
+      {open && url && <ImageLightbox url={url} label={name} onClose={close} />}
     </figure>
   );
 };
