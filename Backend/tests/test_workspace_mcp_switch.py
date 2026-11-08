@@ -51,14 +51,14 @@ def switch(monkeypatch, tmp_path):
     state = SimpleNamespace(running=True)
     events = []
 
-    def stop():
+    def stop(**_):
         events.append("stop")
         state.running = False
         for workspace in list(manager._autoconnect_workspaces):
             manager.reset_autoconnect_off(workspace)
         manager._autoconnect_workspaces.clear()
 
-    def start():
+    def start(**_):
         events.append("start")
         state.running = True
         return True
@@ -286,8 +286,8 @@ def test_overlapping_saves_leave_mcp_on_the_last_saved_workspace(switch, tmp_pat
     async def run():
         async with _async_client(switch) as client:
             first = asyncio.create_task(_post_save(client, b))
-            while not entered.is_set():
-                await asyncio.sleep(0.01)
+            # Bounded: a first save that fails before the presence check must fail the test, not hang CI.
+            assert await asyncio.to_thread(entered.wait, 5), "first save never reached the presence check"
             second = asyncio.create_task(_post_save(client, c))
             await asyncio.sleep(0.1)
             release.set()
@@ -306,7 +306,7 @@ def test_save_while_server_is_still_starting_retargets_mcp(switch):
     # Server passes its health check only later: is_running() stays False after the toggle.
     switch.state.running = False
     switch.manager.active_workspace = None
-    switch.manager.start_server.side_effect = lambda: switch.events.append("start") or True
+    switch.manager.start_server.side_effect = lambda **_: switch.events.append("start") or True
     tasks = BackgroundTasks()
 
     async def run():

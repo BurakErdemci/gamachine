@@ -33,7 +33,7 @@ def sup(monkeypatch, tmp_path):
     calls = {"start": 0, "stop": 0}
     state = {"healthy": True, "occupant": um.ServerIdentity.NONE, "timeouts": []}
 
-    def start():
+    def start(**_):
         calls["start"] += 1
         manager.process = _Proc(None)
         return True
@@ -43,7 +43,7 @@ def sup(monkeypatch, tmp_path):
         return state["healthy"]
 
     monkeypatch.setattr(manager, "start_server", start)
-    monkeypatch.setattr(manager, "stop_server", lambda: calls.__setitem__("stop", calls["stop"] + 1))
+    monkeypatch.setattr(manager, "stop_server", lambda **_: calls.__setitem__("stop", calls["stop"] + 1))
     monkeypatch.setattr(manager, "check_health", health)
     monkeypatch.setattr(manager, "port_occupant", lambda: um.Occupant(state["occupant"], "faked"))
     manager.enabled = True
@@ -254,7 +254,7 @@ def test_user_stop_still_turns_autoconnect_off(sup, monkeypatch, tmp_path):
 
 def test_failed_restart_is_retried_within_the_cap(sup, monkeypatch):
     manager, calls, _ = sup
-    monkeypatch.setattr(manager, "stop_server", lambda: setattr(manager, "process", None))
+    monkeypatch.setattr(manager, "stop_server", lambda **_: setattr(manager, "process", None))
 
     def start_fail():
         calls["start"] += 1
@@ -355,7 +355,7 @@ def test_cancel_during_restart_waits_for_the_start(sup, monkeypatch):
 
 def test_cancel_during_stop_never_starts(sup, monkeypatch):
     manager, calls, _ = sup
-    monkeypatch.setattr(manager, "stop_server", lambda: um.time.sleep(0.3))
+    monkeypatch.setattr(manager, "stop_server", lambda **_: um.time.sleep(0.3))
 
     async def scenario():
         task = asyncio.create_task(manager.supervise_once())
@@ -385,7 +385,7 @@ def test_workspace_switch_resets_supervision(sup, monkeypatch, tmp_path):
     monkeypatch.setattr(um, "unity_mcp_manager", manager)
     monkeypatch.setattr(mcp_routes, "unity_mcp_manager", manager)
     monkeypatch.setattr(workspace_routes, "require_user", lambda *args: (1, {}))
-    monkeypatch.setattr(manager, "stop_server", lambda: seen.append(manager._gave_up))
+    monkeypatch.setattr(manager, "stop_server", lambda **_: seen.append(manager._gave_up))
     monkeypatch.setattr(manager, "is_unity_running", lambda: True)
     monkeypatch.setattr(manager, "is_running", lambda: False)
     monkeypatch.setattr(manager, "install_package", lambda *a, **k: True)

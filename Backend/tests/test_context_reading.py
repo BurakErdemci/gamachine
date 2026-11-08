@@ -57,7 +57,8 @@ def test_claude_reads_after_the_reader_finishes_and_before_unlock(raw_window, ex
 
     async def read():
         assert not session._turn_active
-        assert session._out_q.empty()
+        # The stream's queue is detached before the reading: nothing lands on a queue nobody reads.
+        assert session._out_q is None
         assert session._turn_lock.locked()
         return {
             "totalTokens": 112_400, "maxTokens": 180_000, "rawMaxTokens": raw_window,

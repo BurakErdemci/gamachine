@@ -77,7 +77,7 @@ def _post(app):
 def test_the_session_error_path_queues_one_terminal_not_two():
     from providers.claude_sdk_session import ClaudeSDKSession
 
-    sess = ClaudeSDKSession.__new__(ClaudeSDKSession)
+    sess = ClaudeSDKSession(1)
     q: asyncio.Queue = asyncio.Queue()
     sess._turn_active = True
     sess._drain_state = None
@@ -102,7 +102,7 @@ def test_the_session_error_path_still_delivers_the_partial_text():
     hatasını veri kaybına çevirmiş oluruz."""
     from providers.claude_sdk_session import ClaudeSDKSession
 
-    sess = ClaudeSDKSession.__new__(ClaudeSDKSession)
+    sess = ClaudeSDKSession(1)
     q: asyncio.Queue = asyncio.Queue()
     sess._turn_active = True
     sess._drain_state = None
@@ -123,7 +123,7 @@ def test_the_session_success_path_still_sends_done():
     """Kapının ters yönü: başarılı tur hâlâ tam olarak bir `done` yolluyor."""
     from providers.claude_sdk_session import ClaudeSDKSession
 
-    sess = ClaudeSDKSession.__new__(ClaudeSDKSession)
+    sess = ClaudeSDKSession(1)
     q: asyncio.Queue = asyncio.Queue()
     sess._turn_active = True
     sess._drain_state = None

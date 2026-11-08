@@ -112,7 +112,7 @@ def test_toggle_allows_matching_or_unspecified_workspace(toggle, monkeypatch, wo
         mcp_routes.MCPToggleRequest(enabled=True, workspace_path=workspace), BackgroundTasks(), ""))
     assert response["status"] == "started"
     assert mismatch.call_count == bool(workspace)
-    toggle.start_server.assert_called_once_with()
+    toggle.start_server.assert_called_once_with(reason="toggle_on")
 
 
 def test_toggle_closed_editor_keeps_original_refusal(toggle, monkeypatch):
