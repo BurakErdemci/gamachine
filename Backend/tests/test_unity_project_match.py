@@ -15,6 +15,7 @@ from agentic import agent_runner, approval_policy, cards
 from computer_use import gate, settings
 from routes import conversation_routes, mcp_routes
 from unity_ai_mcp import unity_project_presence as presence
+from tests.unity_boundary import unity_os  # noqa: F401
 from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
 
 
@@ -81,16 +82,19 @@ def test_runner_reads_scene_each_turn_and_tolerates_failure(monkeypatch, scene, 
 
 
 @pytest.fixture
-def toggle(monkeypatch):
+def toggle(monkeypatch, unity_os):
+    # A fresh real manager (its start_server launches through tests/unity_boundary.py), not the
+    # singleton: a started server must not outlive the test.
+    manager = unity_os.manager()
+    monkeypatch.setattr(mcp_routes, "unity_mcp_manager", manager)
     monkeypatch.setattr(mcp_routes, "_check_token", lambda token: None)
-    monkeypatch.setattr(unity_mcp_manager, "is_unity_running", Mock(return_value=True))
-    monkeypatch.setattr(unity_mcp_manager, "is_running", Mock(return_value=False))
-    monkeypatch.setattr(unity_mcp_manager, "start_server", Mock(return_value=True))
-    monkeypatch.setattr(unity_mcp_manager, "install_package", Mock(return_value=True))
-    return unity_mcp_manager
+    monkeypatch.setattr(manager, "is_unity_running", Mock(return_value=True))
+    monkeypatch.setattr(manager, "is_running", Mock(return_value=False))
+    monkeypatch.setattr(manager, "install_package", Mock(return_value=True))
+    return manager
 
 
-def test_toggle_returns_409_with_project_detail_before_server_start(toggle, monkeypatch):
+def test_toggle_returns_409_with_project_detail_before_server_start(toggle, monkeypatch, unity_os):
     detail = "Unity'de bu proje açık değil: Our Game. Unity'de açık olan: Other Game."
     mismatch = Mock(return_value=detail)
     monkeypatch.setattr(presence, "mcp_mismatch_detail", mismatch)
@@ -101,18 +105,18 @@ def test_toggle_returns_409_with_project_detail_before_server_start(toggle, monk
     assert raised.value.detail == detail
     mismatch.assert_called_once_with("Our Game")
     toggle.is_running.assert_not_called()
-    toggle.start_server.assert_not_called()
+    assert unity_os.popen_calls == []  # no server launch was attempted
 
 
 @pytest.mark.parametrize("workspace", [None, "", "Our Game"])
-def test_toggle_allows_matching_or_unspecified_workspace(toggle, monkeypatch, workspace):
+def test_toggle_allows_matching_or_unspecified_workspace(toggle, monkeypatch, workspace, unity_os):
     mismatch = Mock(return_value=None)
     monkeypatch.setattr(presence, "mcp_mismatch_detail", mismatch)
     response = asyncio.run(mcp_routes.toggle_unity_mcp(
         mcp_routes.MCPToggleRequest(enabled=True, workspace_path=workspace), BackgroundTasks(), ""))
     assert response["status"] == "started"
     assert mismatch.call_count == bool(workspace)
-    toggle.start_server.assert_called_once_with(reason="toggle_on")
+    assert unity_os.kinds() == ["spawn"] and toggle.process is unity_os.events[0][1]
 
 
 def test_toggle_closed_editor_keeps_original_refusal(toggle, monkeypatch):

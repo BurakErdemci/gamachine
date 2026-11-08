@@ -16,6 +16,7 @@ import pytest
 from fastapi import BackgroundTasks
 
 from routes import mcp_routes
+from tests.unity_boundary import unity_os  # noqa: F401
 from unity_ai_mcp import unity_mcp_manager as module
 
 SETTINGS = ("UserSettings", "Gamachine", "autoconnect.json")
@@ -766,23 +767,21 @@ def test_an_old_staging_folder_is_kept_while_no_package_is_installed(tmp_path):
     assert [p.name for p in stage.iterdir()] == ["package.old-3-4"]
 
 
-def test_start_mcp_for_installs_off_the_event_loop(manager, tmp_path, monkeypatch):
+def test_start_mcp_for_installs_off_the_event_loop(manager, tmp_path, monkeypatch, unity_os):
     project = project_at(tmp_path / "Game")
     seen = {}
 
+    # Kept fake: the promise is where the install runs, and only a slow install shows it.
     def install(workspace, write_autoconnect=True):
         seen["thread"] = threading.current_thread()
         seen["args"] = (workspace, write_autoconnect)
         time.sleep(0.4)
         return True
 
+    unity_os.adopt(manager)
     monkeypatch.setattr(mcp_routes, "unity_mcp_manager", manager)
     monkeypatch.setattr(mcp_routes.unity_project_presence, "mcp_mismatch_detail", lambda workspace: None)
-    monkeypatch.setattr(manager, "is_unity_running", lambda: True)
-    monkeypatch.setattr(manager, "is_running", lambda: False)
-    monkeypatch.setattr(manager, "start_server", lambda **_: True)
     monkeypatch.setattr(manager, "install_package", install)
-    monkeypatch.setattr(manager, "write_autoconnect_when_ready", AsyncMock())
     ticks = []
 
     async def scenario():
@@ -799,6 +798,7 @@ def test_start_mcp_for_installs_off_the_event_loop(manager, tmp_path, monkeypatc
 
     result = asyncio.run(scenario())
     assert result["package_installed"] is True and seen["args"] == (str(project), False)
+    assert unity_os.kinds() == ["spawn"]  # the server was launched
     assert seen["thread"] is not threading.main_thread()
     assert len(ticks) >= 4  # the loop kept running during the 0.4 s install
 
@@ -1068,21 +1068,18 @@ def test_a_gitdir_that_is_itself_a_junction_is_refused(manager, tmp_path, caplog
     assert "is a link" in caplog.text and "did not write there" in manager.last_install_error
 
 
-def test_a_refused_install_stops_the_server_and_answers_409(manager, tmp_path, monkeypatch):
+def test_a_refused_install_stops_the_server_and_answers_409(manager, tmp_path, monkeypatch, unity_os):
     project = project_at(tmp_path / "Game")
     reason = "Packages/com.coplaydev.unity-mcp was changed by hand; Gamachine left it as it is."
 
+    # Kept fake: a real refusal also makes a create-only autoconnect call, which `writer` below forbids.
     def refuse(workspace, write_autoconnect=True):
         manager.last_install_error = reason
         return False
 
-    stopped = []
+    unity_os.adopt(manager)
     monkeypatch.setattr(mcp_routes, "unity_mcp_manager", manager)
     monkeypatch.setattr(mcp_routes.unity_project_presence, "mcp_mismatch_detail", lambda workspace: None)
-    monkeypatch.setattr(manager, "is_unity_running", lambda: True)
-    monkeypatch.setattr(manager, "is_running", lambda: False)
-    monkeypatch.setattr(manager, "start_server", lambda **_: True)
-    monkeypatch.setattr(manager, "stop_server", lambda **_: stopped.append(True))
     monkeypatch.setattr(manager, "install_package", refuse)
     writer = Mock()
     monkeypatch.setattr(manager, "_write_autoconnect_settings", writer)
@@ -1091,7 +1088,7 @@ def test_a_refused_install_stops_the_server_and_answers_409(manager, tmp_path, m
     with pytest.raises(mcp_routes.HTTPException) as caught:
         asyncio.run(mcp_routes.start_mcp_for(str(project), tasks, "tr"))
     assert caught.value.status_code == 409 and caught.value.detail == reason
-    assert stopped == [True]
+    assert unity_os.kinds() == ["spawn", "terminate"]  # the started server was stopped again
     assert manager.enabled is False and manager.active_workspace is None
     assert tasks.tasks == []
     writer.assert_not_called()
