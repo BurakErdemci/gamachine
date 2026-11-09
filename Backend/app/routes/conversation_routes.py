@@ -3005,6 +3005,15 @@ Max 300 kelime. Türkçe yaz.
             return _UNKNOWN_OWNER, f"conversation {claimed} does not exist or is not the local user's"
         from agentic.approval_policy import conversation_turn_in_flight
         if not conversation_turn_in_flight(claimed):
+            # The CLI's own continuation turn never enters AgentRunner.run, so the
+            # registry above does not know it; the session does.
+            try:
+                from providers.claude_sdk_session import peek_session
+                sess = peek_session(claimed)
+                if sess is not None and sess.unprompted_turn_active is True:
+                    return claimed, ""
+            except Exception:
+                pass
             return _UNKNOWN_OWNER, f"conversation {claimed} has no turn in flight"
         return claimed, ""
 
