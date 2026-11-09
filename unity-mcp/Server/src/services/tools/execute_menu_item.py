@@ -14,7 +14,11 @@ from transport.legacy.unity_connection import async_send_command_with_retry
 
 
 @mcp_for_unity_tool(
-    description="Execute a Unity menu item by path.",
+    description=(
+        "Execute a Unity menu item by path. A menu item that builds the player or otherwise blocks "
+        "the editor for over ~30 s times out and drops the connection; use manage_build "
+        "(action=build, then status/wait) for builds."
+    ),
     annotations=ToolAnnotations(
         title="Execute Menu Item",
         destructiveHint=True,

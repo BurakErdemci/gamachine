@@ -38,6 +38,8 @@ def _images(response):
         "seconds; stop finishes the current job. Optional seeds (1..50) restart through "
         "level.restart, with a 3600 game-second batch limit. Returns timelines, errors, "
         "editor-side timing, final state, a contact sheet and the final frame. "
+        "until {hook: state hook name, op: == != < > <= >=, value}: stop when true. "
+        "Seeds only seed UnityEngine.Random (see play_session). "
         "Input is applied only in each run's first segment (at most 600 frames, "
         "possibly shorter at the first sample or capture). "
         "capture_every_seconds applies to a single run; a batch captures each run's final frame. "
@@ -50,14 +52,14 @@ async def play_run(
     ctx: Context,
     action: Literal["start", "status", "wait", "stop"] = "start",
     seconds: Annotated[float, "game seconds per run, 1..1800"] = 120,
-    seeds: list[int] | None = None,
+    seeds: Annotated[list[int] | None, "1..50 ints; each run restarts via level.restart {seed}"] = None,
     autopilot: bool = True,
     input: list[dict[str, Any]] | None = None,
-    until: dict[str, Any] | None = None,
+    until: Annotated[dict[str, Any] | None, "{hook: state hook name, op: == != < > <= >=, value}"] = None,
     stop_on_error: bool = True,
     watch: list[str] | None = None,
-    sample_seconds: float = 5,
-    capture_every_seconds: float | None = None,
+    sample_seconds: Annotated[float, "game seconds between samples, 0.5..60"] = 5,
+    capture_every_seconds: Annotated[float | None, "single run only, >= 1"] = None,
     camera: str | None = None,
     timeout_seconds: float = 180,
 ) -> dict[str, Any] | ToolResult:

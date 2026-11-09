@@ -95,7 +95,7 @@ def _validate_capture(capture: Any, frames: int) -> tuple[Any, str | None]:
         "input: [{frame (0-based, relative), key|button|axis, do: press|release|tap, value?}]; "
         "key = Input System Key name (space, a, leftArrow), button = mouse0/mouse1 or gamepad "
         "control (buttonSouth), axis = leftStick/x. autopilot: call hook 'autopilot' each frame, its "
-        "return is that frame's input. watch: hooks to return in state. until {hook, op, value}: "
+        "return is that frame's input. watch: hooks to return in state. until {hook: state hook name, op: == != < > <= >=, value}: "
         "stop early. capture: none|end|[frames]; 'end' returns the last frame as an image. "
         "-> data {frame, frames_stepped, time, stopped_by: frames|until|error, stop_reason?, "
         "autopilot_error?, autopilot_missing?, state, errors, warnings, first_errors, "

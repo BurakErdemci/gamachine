@@ -16,9 +16,9 @@ FORMATS = ("jpeg", "png")
 @mcp_for_unity_tool(
     group=GROUP,
     description=(
-        "Render the game camera at the current (paused) play_session frame. Returns one image "
-        "(longest side <= max_size) plus data {frame, path (full-res PNG under "
-        "Library/GamachineCaptures/), width, height, full_width, full_height, camera, paused, "
+        "Render the game camera at the current (paused) play_session frame. Returns one downscaled preview "
+        "image (longest side <= max_size, default 640, up to 1280; small UI text may be unreadable) plus data {frame, path (full-resolution PNG under "
+        "Library/GamachineCaptures/; open it to read small UI text), width, height, full_width, full_height, camera, paused, "
         "render_ms, mime}. Needs play mode. Failures: {success: false, error}."
     ),
     annotations=ToolAnnotations(title="Play Capture", destructiveHint=False),

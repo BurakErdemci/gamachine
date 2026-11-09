@@ -1,4 +1,4 @@
-"""play_session: deterministic play mode session for stepping, input injection and capture."""
+"""play_session: play mode session for stepping, input injection and capture."""
 from typing import Annotated, Any, Literal
 
 from fastmcp import Context
@@ -50,12 +50,16 @@ def _confirm_stop(response: dict[str, Any]) -> dict[str, Any]:
 @mcp_for_unity_tool(
     group=GROUP,
     description=(
-        "Deterministic play mode session. start: optional scene load (refused if the open scene "
+        "Play mode session with fixed time step and seed. start: optional scene load (refused if the open scene "
         "has unsaved changes), enter play, wait for the domain reload and first frame, fix "
         "time step and seed, call hook level.restart {seed} if present, stay paused -> "
         "data {playing, paused, frame, time, scene, session, hooks, seed, fixed_dt, restarted, "
         "input}; ~6 s, the tool waits. stop: restore settings, exit play -> data {playing: false, "
-        "..., restored_scene}. status -> {playing, paused, frame, time, scene, session, hooks}. "
+        "..., restored_scene}. Seed only seeds UnityEngine.Random (InitState) and goes to level.restart; "
+        "System.Random, time-based seeds, Dictionary/HashSet order and timing-dependent code stay "
+        "non-deterministic unless level.restart reseeds them. start reports only a hook count: "
+        "after a scene change, check game_hooks action=list for the hooks registered in the "
+        "current scene before trusting a hook error. status -> {playing, paused, frame, time, scene, session, hooks}. "
         "Failures: {success: false, error, data?}."
     ),
     annotations=ToolAnnotations(title="Play Session", destructiveHint=True),
@@ -64,7 +68,7 @@ async def play_session(
     ctx: Context,
     action: Literal["start", "stop", "status"],
     scene: Annotated[str | None, "start: scene to load, Assets/... .unity"] = None,
-    seed: Annotated[int, "start: Random.InitState seed"] = 0,
+    seed: Annotated[int, "start: UnityEngine.Random.InitState seed, also passed to level.restart"] = 0,
     fixed_dt: Annotated[float, "start: seconds per frame (capture and fixed delta time)"] = 1 / 60,
     paused: Annotated[bool, "start: stay paused after the first frame"] = True,
 ) -> dict[str, Any]:
