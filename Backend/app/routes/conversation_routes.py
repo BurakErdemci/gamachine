@@ -3015,7 +3015,7 @@ Max 300 kelime. Türkçe yaz.
             try:
                 from providers.claude_sdk_session import peek_session
                 sess = peek_session(claimed)
-                if sess is not None and sess.unprompted_turn_active is True:
+                if sess is not None and sess.trusted_unprompted_turn is True:
                     return claimed, ""
             except Exception:
                 pass

@@ -990,6 +990,7 @@ class ClaudeSDKSession:
         # ── Sürekli reader + tur durum makinesi ──────────────────────────
         self._reader_task: Optional[asyncio.Task] = None
         self._turn_active = False
+        self._turn_unprompted = False  # the running turn was begun by the CLI itself
         self._final_text = ""          # tur boyunca biriken asistan metni (TextBlock'lardan)
         self._last_result_text = ""    # son ResultMessage.result (slash komut çıktıları için)
         # Text after the turn's last tool call: what a mail reply forwards,
@@ -1805,7 +1806,18 @@ class ClaudeSDKSession:
         """A CLI turn runs with no listener (unprompted, or its stream went away)."""
         return self._turn_active and self._out_q is None
 
+    @property
+    def trusted_unprompted_turn(self) -> bool:
+        """A CLI-begun turn that is provably running: the reader is alive and
+        the session unbroken. A stream() turn whose query raised, or a reader
+        that hit EOF, leaves _turn_active set on an idle chat; those must not
+        vouch for an approval claim."""
+        rt = self._reader_task
+        return (self._turn_active and self._out_q is None and self._turn_unprompted
+                and not self._broken and rt is not None and not rt.done())
+
     def _begin_turn(self, unprompted: bool = False):
+        self._turn_unprompted = unprompted
         if self._drain_state == "grace":
             # Tasks finished with no turn running. The CLI continuing by itself
             # IS the continuation; a user/wake turn sees the notification

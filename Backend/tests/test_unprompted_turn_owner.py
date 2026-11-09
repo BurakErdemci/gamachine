@@ -50,14 +50,45 @@ def owner_of(client, gate):
     return client.get("/mcp-pending").json()["pending"][gate]["conversation_id"]
 
 
+def _register(monkeypatch, *, reader_done=False, unprompted=True, broken=False, cid=7):
+    """A real session in the module registry, no CLI: only its turn state is set."""
+    sess = css.ClaudeSDKSession(conversation_id=cid)
+    sess._started = True
+    sess._client = MagicMock()
+    sess._reader_task = SimpleNamespace(done=lambda: reader_done)
+    sess._begin_turn(unprompted=unprompted)
+    sess._broken = broken
+    monkeypatch.setitem(css._SESSIONS, cid, sess)
+    return sess
+
+
 def test_unprompted_turn_owns_its_card(client, monkeypatch):
-    monkeypatch.setattr(css, "peek_session", lambda cid: SimpleNamespace(unprompted_turn_active=(cid == 7)))
+    _register(monkeypatch)
     assert owner_of(client, "unp-a") == 7
 
 
 def test_idle_chat_stays_unowned(client, monkeypatch):
-    monkeypatch.setattr(css, "peek_session", lambda cid: SimpleNamespace(unprompted_turn_active=False))
+    sess = _register(monkeypatch)
+    sess._turn_active = False
     assert owner_of(client, "unp-b") is None
+
+
+def test_turn_after_reader_eof_stays_unowned(client, monkeypatch):
+    _register(monkeypatch, reader_done=True)
+    assert owner_of(client, "unp-eof") is None
+
+
+def test_stream_begun_turn_whose_query_raised_stays_unowned(client, monkeypatch):
+    # stream() begins the turn, query() raises, the finally clears _out_q: the
+    # turn flag stays set on an idle chat.
+    sess = _register(monkeypatch, unprompted=False)
+    assert sess.unprompted_turn_active
+    assert owner_of(client, "unp-q") is None
+
+
+def test_broken_session_stays_unowned(client, monkeypatch):
+    _register(monkeypatch, broken=True)
+    assert owner_of(client, "unp-broken") is None
 
 
 def test_missing_session_stays_unowned(client, monkeypatch):

@@ -144,7 +144,8 @@ def test_send_is_refused_from_an_unprompted_claude_turn(env, auto, monkeypatch):
     from providers import claude_sdk_session
     a, b = _chat(env.db, "A"), _chat(env.db, "B")
     monkeypatch.setattr(claude_sdk_session, "peek_session",
-                        lambda cid: types.SimpleNamespace(unprompted_turn_active=(cid == a)))
+                        lambda cid: types.SimpleNamespace(
+                            unprompted_turn_active=(cid == a), trusted_unprompted_turn=(cid == a)))
     assert _send(env.client, a, b, in_flight=False).status_code == 403
     assert _rows(env.db, "SELECT * FROM mailbox") == []
 
