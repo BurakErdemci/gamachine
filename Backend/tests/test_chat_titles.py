@@ -151,36 +151,105 @@ def test_agy_title_model_is_one_gamachine_knows():
 
 # ── Trigger ─────────────────────────────────────────────────────────────────
 
-def test_fires_after_reply_1_and_3_only(db, monkeypatch):
-    rec = _Recorder()
-    _use(monkeypatch, rec)
-    cid = _chat(db, replies=1)
-    _run(_reply_and_wait(db, cid))
-    assert len(rec.calls) == 1 and _title(db, cid) == "Sahne Işıklandırma Ayarı"
-    for n in (2, 3, 4, 5):
-        rec.answer = f"Başlık {n}"
+def _reply_to(db, cid, upto, start=2):
+    for n in range(start, upto + 1):
         _reply(db, cid, n)
         _run(_reply_and_wait(db, cid))
-    assert len(rec.calls) == 2
-    assert _title(db, cid) == "Başlık 3"
 
 
-def test_never_more_than_two_generations(db, monkeypatch):
+def test_fires_at_replies_1_3_20_and_40_only(db, monkeypatch):
     rec = _Recorder()
     _use(monkeypatch, rec)
     cid = _chat(db, replies=1)
     _run(_reply_and_wait(db, cid))
-    _reply(db, cid, 2)
-    _reply(db, cid, 3)
+    fired = [1] if rec.calls else []
+    seen = len(rec.calls)
+    for n in range(2, 42):
+        _reply(db, cid, n)
+        rec.answer = f"Başlık {n}"
+        _run(_reply_and_wait(db, cid))
+        if len(rec.calls) > seen:
+            fired.append(n)
+            seen = len(rec.calls)
+    assert fired == [1, 3, 20, 40]
+    assert _title(db, cid) == "Başlık 40"
+
+
+def test_a_refresh_point_is_spent_at_most_once(db, monkeypatch):
+    rec = _Recorder()
+    _use(monkeypatch, rec)
+    cid = _chat(db, replies=1)
     _run(_reply_and_wait(db, cid))
-    # Compaction or deleted rows can bring the count back to 1 or 3.
+    _reply_to(db, cid, 20)
+    assert len(rec.calls) == 3
+    assert db.get_title_state(cid)["auto_title_runs"] == 3
+    # Compaction or deleted rows can bring the count back to 20.
     with sqlite3.connect(db.db_path) as conn:
-        conn.execute("DELETE FROM messages WHERE conversation_id = ? AND id > "
-                     "(SELECT MIN(id) + 1 FROM messages WHERE conversation_id = ?)", (cid, cid))
-    assert db.count_own_assistant_replies(cid) == 1
+        conn.execute("DELETE FROM messages WHERE conversation_id = ? AND id = "
+                     "(SELECT MAX(id) FROM messages WHERE conversation_id = ?)", (cid, cid))
+        conn.execute("DELETE FROM messages WHERE conversation_id = ? AND id = "
+                     "(SELECT MAX(id) FROM messages WHERE conversation_id = ?)", (cid, cid))
+    _reply(db, cid, 20)
+    assert db.count_own_assistant_replies(cid) == 20
     _run(_reply_and_wait(db, cid))
-    assert len(rec.calls) == 2
-    assert db.get_title_state(cid)["auto_title_runs"] == 2
+    assert len(rec.calls) == 3
+
+
+def test_refresh_input_is_the_tail_not_the_head():
+    msgs = [{"role": "user", "content": f"u{i}u " + "x" * 300} for i in range(30)]
+    head = ct.build_title_input(msgs)
+    tail = ct.build_title_input(msgs, tail=True)
+    assert "u0u " in head and "u29u " not in head
+    assert "u29u " in tail and "u0u " not in tail
+    assert len(tail) <= ct.INPUT_CAP
+    assert tail.index("u28u ") < tail.index("u29u ")
+
+
+def test_refresh_prompt_carries_the_current_title(db, monkeypatch):
+    rec = _Recorder("Boss Fazı Geliştirme")
+    _use(monkeypatch, rec)
+    cid = _chat(db, replies=1)
+    _run(_reply_and_wait(db, cid))
+    _reply_to(db, cid, 19)
+    for _ in range(4):
+        db.add_message(cid, "user", "dolgu " * 100)
+    _reply(db, cid, 20)
+    _run(_reply_and_wait(db, cid))
+    first, last = rec.calls[0][1], rec.calls[-1][1]
+    assert "<current_title>" not in first
+    assert "<current_title>\nBoss Fazı Geliştirme\n</current_title>" in last
+    assert "soru 20" in last and "soru 0" not in last
+
+
+def test_same_title_answer_writes_and_publishes_nothing(db, monkeypatch):
+    rec = _Recorder("Sahne Işıklandırma Ayarı")
+    _use(monkeypatch, rec)
+    cid = _chat(db, replies=1)
+    _run(_reply_and_wait(db, cid))
+    _reply_to(db, cid, 19)
+    events = len(ct._EVENTS)
+    _reply(db, cid, 20)
+    rec.answer = "Sahne Işıklandırma Ayarı."
+    _run(_reply_and_wait(db, cid))
+    assert len(rec.calls) == 3
+    assert len(ct._EVENTS) == events
+    assert _title(db, cid) == "Sahne Işıklandırma Ayarı"
+
+
+def test_user_renamed_and_side_chats_are_never_refreshed(db, monkeypatch):
+    rec = _Recorder()
+    _use(monkeypatch, rec)
+    cid = _chat(db, replies=19)
+    db.rename_conversation(cid, "Benim adım")
+    _reply(db, cid, 20)
+    assert _run(_reply_and_wait(db, cid)) is None
+    assert _title(db, cid) == "Benim adım"
+    main = _chat(db, replies=1)
+    side = db.create_side_chat(main, 1)
+    for n in range(20):
+        _reply(db, side, n)
+    assert _run(_reply_and_wait(db, side)) is None
+    assert rec.calls == []
 
 
 def test_chat_first_seen_at_reply_3_still_gets_one_title(db, monkeypatch):
