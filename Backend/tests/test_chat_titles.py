@@ -236,6 +236,19 @@ def test_same_title_answer_writes_and_publishes_nothing(db, monkeypatch):
     assert _title(db, cid) == "Sahne Işıklandırma Ayarı"
 
 
+def test_echo_of_a_bracketed_title_keeps_it(db, monkeypatch):
+    rec = _Recorder("GetComponent<Rigidbody> null")
+    _use(monkeypatch, rec)
+    cid = _chat(db, replies=1)
+    _run(_reply_and_wait(db, cid))
+    _reply_to(db, cid, 19)
+    _reply(db, cid, 20)
+    rec.answer = "GetComponentRigidbody null"
+    _run(_reply_and_wait(db, cid))
+    assert len(rec.calls) == 3
+    assert _title(db, cid) == "GetComponent<Rigidbody> null"
+
+
 def test_refresh_fires_once_when_the_count_steps_over_a_point(db, monkeypatch):
     rec = _Recorder()
     _use(monkeypatch, rec)

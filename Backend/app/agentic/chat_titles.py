@@ -161,13 +161,19 @@ def build_title_input(messages: List[Dict[str, Any]], cap: int = INPUT_CAP,
     return "\n".join(lines)
 
 
+def _prompt_title(title: str) -> str:
+    """The current title as the refresh prompt shows it: without angle
+    brackets, so it cannot close its own tag."""
+    return title.replace("<", "").replace(">", "")
+
+
 def build_title_prompt(conversation_text: str, current_title: Optional[str] = None) -> str:
     prompt = f"{TITLE_INSTRUCTION}\n\n<conversation>\n{conversation_text}\n</conversation>"
     if current_title is None:
         return prompt
     # The title is material like the conversation, never an instruction;
     # angle brackets are dropped so it cannot close its own tag.
-    current_title = current_title.replace("<", "").replace(">", "")
+    current_title = _prompt_title(current_title)
     return (f"{prompt}\n\nThe chat is already titled as below, but it may have moved on "
             "since that title was written. The conversation above is only its most recent "
             "part: name what that part is about. If the current title still fits it, answer "
@@ -812,7 +818,9 @@ async def _job(db, conv_id: int, state: Dict[str, Any], choice: TitleModel,
             logger.warning("[chat-title] conv=%s unusable answer (%s chars); title kept",
                            conv_id, len(raw or ""))
             return
-        if refresh and title == current:
+        # The model saw the title without angle brackets; echoing that back
+        # still means "unchanged" and must not rewrite e.g. "GetComponent<T>".
+        if refresh and title in (current, _prompt_title(current)):
             return
         if db.set_auto_title(conv_id, title):
             _publish(state["user_id"], conv_id, title)
