@@ -140,6 +140,26 @@ def test_fable_5_1_is_selectable_on_the_claude_code_side():
     assert subscription["claude-fable-5-1"]["name"] == "Claude Fable 5.1 (CLI)"
 
 
+@patch("providers.api_providers.anthropic.Anthropic")
+def test_fable_5_2_is_its_own_choice_with_its_own_price(anthropic_client):
+    """Measured 9 Nov 2026 (release day): `claude --model claude-fable-5-2 -p ...`
+    answers with modelUsage `claude-fable-5-2`. Before this, the API provider
+    sent the id as claude-fable-5 and the cost table priced it as Fable 5."""
+    from providers.model_catalog import turn_cost_usd
+
+    anthropic_client.return_value = MagicMock()
+    assert AnthropicProvider("test-key", "claude-fable-5-2").model_name == "claude-fable-5-2"
+    assert AnthropicProvider("test-key", "claude-fable-5.2").model_name == "claude-fable-5-2"
+
+    router = create_config_router(MagicMock())
+    route = next(route for route in router.routes if route.path == "/available-models")
+    subscription = {m["id"]: m for m in asyncio.run(route.endpoint())["subscription"]}
+    assert subscription["claude-fable-5-2"]["name"] == "Claude Fable 5.2 (CLI)"
+
+    # $8 in / $40 out per MTok: one million of each costs $48 (Fable 5.1 would be $60).
+    assert turn_cost_usd("anthropic", "claude-fable-5-2", 1_000_000, 1_000_000) == pytest.approx(48.0)
+
+
 # Valid ids per the claude-api skill model table (Sep 2026). The provider used to
 # emit "claude-4-6-sonnet" / "claude-4-5-haiku", which are not API ids, so every
 # call on a Sonnet 4.6 or Haiku choice 404'd.

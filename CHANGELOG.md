@@ -9,6 +9,12 @@ Bu dosya kullanıcıya görünen değişiklikleri taşır. Tam geçmiş için `g
 
 ## Unreleased
 
+### Claude Fable 5.2
+Claude Fable 5.2 (`claude-fable-5-2`), released 9 Nov 2026, is on the Claude Code
+list next to Fable 5.1 and Fable 5. With an Anthropic API key it is sent as itself
+and its cost is shown at its own lower price ($8 / $40 per million tokens); before
+this the API path sent it as Fable 5.
+
 ### Dictation understands you much better
 The microphone now uses Whisper (large-v3-turbo, running on your computer through
 whisper.cpp) instead of the small Vosk models. On the owner's own recordings it made

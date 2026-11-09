@@ -415,6 +415,10 @@ def clear_cache() -> None:
 # to the `claude-opus-5` row.
 _ANTHROPIC_MODELS: Dict[str, dict] = {
     # id prefix: window, input, output, cache read ($/MTok; None = 0.1x input)
+    # Fable 5.2 from the platform models overview (read 9 Nov 2026, release
+    # day): $8/$40, cache read 2.5% of input. Without this row the id fell to
+    # the claude-fable-5 prefix and was priced at $10/$50 with a $1 cache read.
+    "claude-fable-5-2":  {"window": 1_000_000, "in": 8.00, "out": 40.00, "read": 0.20},
     "claude-fable-5-1":  {"window": 1_000_000, "in": 10.00, "out": 50.00, "read": 0.25},
     "claude-mythos-5-1": {"window": 1_000_000, "in": 10.00, "out": 50.00, "read": 0.25},
     "claude-fable-5":    {"window": 1_000_000, "in": 10.00, "out": 50.00, "read": 1.00},
