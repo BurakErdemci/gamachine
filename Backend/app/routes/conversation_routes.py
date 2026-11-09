@@ -2979,7 +2979,8 @@ Max 300 kelime. Türkçe yaz.
     # eski yorum öyle diyordu ve yanlıştı) → kullanıcı karar verir →
     # /mcp-approval-respond/{gate_id} → köprü /mcp-approval-result ile öğrenir.
 
-    def _verified_mcp_owner(claimed: Any, token: str, lookup_failed: Optional[list] = None) -> tuple:
+    def _verified_mcp_owner(claimed: Any, token: str, lookup_failed: Optional[list] = None,
+                            allow_unprompted: bool = True) -> tuple:
         """(owner, "") when the claimed chat can be trusted, else (_UNKNOWN_OWNER, why).
 
         The claim arrives from another process, and a card shown in the wrong
@@ -2988,7 +2989,9 @@ Max 300 kelime. Türkçe yaz.
         user's, and have a turn in flight now: a card only comes out of a
         running turn, and a claim naming an idle chat is stale or wrong.
         A caller that must tell a failed lookup from a missing chat passes a list
-        and finds it non-empty after the call.
+        and finds it non-empty after the call. A caller that needs the turn's
+        mail depth passes allow_unprompted=False: the CLI's own continuation
+        turn has no registry entry, so its depth would read as 0.
         """
         if claimed is None:
             return _UNKNOWN_OWNER, "no conversation_id in the body"
@@ -3004,7 +3007,9 @@ Max 300 kelime. Türkçe yaz.
         if type(owner) is not int or owner != local_user:
             return _UNKNOWN_OWNER, f"conversation {claimed} does not exist or is not the local user's"
         from agentic.approval_policy import conversation_turn_in_flight
-        if not conversation_turn_in_flight(claimed):
+        if conversation_turn_in_flight(claimed):
+            return claimed, ""
+        if allow_unprompted:
             # The CLI's own continuation turn never enters AgentRunner.run, so the
             # registry above does not know it; the session does.
             try:
@@ -3014,8 +3019,7 @@ Max 300 kelime. Türkçe yaz.
                     return claimed, ""
             except Exception:
                 pass
-            return _UNKNOWN_OWNER, f"conversation {claimed} has no turn in flight"
-        return claimed, ""
+        return _UNKNOWN_OWNER, f"conversation {claimed} has no turn in flight"
 
     def _names_missing_chat(claimed: Any, fail_closed: bool = False) -> bool:
         if type(claimed) is not int or claimed <= 0:
@@ -3803,7 +3807,7 @@ Max 300 kelime. Türkçe yaz.
             raise _MailRefused(400, f"Not en fazla {mailbox.MAX_BODY_CHARS} karakter olabilir.")
         if _side_chat_claim_refusal(from_conv) is not None:
             raise _MailRefused(403, "Yan sohbet not gönderemez.")
-        owner, why = _verified_mcp_owner(from_conv, token)
+        owner, why = _verified_mcp_owner(from_conv, token, allow_unprompted=False)
         if owner is _UNKNOWN_OWNER:
             logger.warning("[mailbox] send refused: %s", why)
             raise _MailRefused(403, "Not yalnız şu an çalışan bir sohbetten gönderilebilir.")

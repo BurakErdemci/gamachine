@@ -138,6 +138,17 @@ def test_send_is_refused_from_a_chat_with_no_turn_in_flight(env, auto):
     assert _rows(env.db, "SELECT * FROM mailbox") == []
 
 
+def test_send_is_refused_from_an_unprompted_claude_turn(env, auto, monkeypatch):
+    # Such a turn owns its approval cards, but mail depth comes from the
+    # AgentRunner turn registry it is not in: a send would restart the chain at depth 1.
+    from providers import claude_sdk_session
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    monkeypatch.setattr(claude_sdk_session, "peek_session",
+                        lambda cid: types.SimpleNamespace(unprompted_turn_active=(cid == a)))
+    assert _send(env.client, a, b, in_flight=False).status_code == 403
+    assert _rows(env.db, "SELECT * FROM mailbox") == []
+
+
 @pytest.mark.parametrize("body", ["", "   ", "x" * (mailbox.MAX_BODY_CHARS + 1)])
 def test_send_refuses_an_empty_or_oversized_body(env, auto, body):
     a, b = _chat(env.db, "A"), _chat(env.db, "B")
