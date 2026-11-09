@@ -5,13 +5,15 @@
  * Such a request belongs to no chat, so it is drawn outside all of them and
  * stays put when the user switches chats. Showing it inside the open chat
  * would present another chat's (or an outside client's) action as part of
- * this conversation. Each entry decides itself through `postMcpDecision`, the
- * same path the in-chat cards use; nothing here approves on its own.
+ * this conversation. Each entry decides itself on the path the in-chat cards
+ * use: `postComputerDecision` for computer_*, `postBrowserDecision` for
+ * browser_*, `postMcpDecision` otherwise (the backend refuses computer and
+ * browser approvals that lack the UI secret); nothing here approves on its own.
  */
 import React, { useEffect, useRef, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { McpTrayGate, unityOzeti } from '../../hooks/home/useMCPApproval';
-import { postMcpDecision, decisionToast } from '../../hooks/home/gateResponse';
+import { postMcpDecision, postComputerDecision, postBrowserDecision, decisionToast } from '../../hooks/home/gateResponse';
 import { stripBidi } from '../../lib/modelText';
 import { useLang } from '../../lib/i18n';
 import { RiskReasonLine } from './RiskReasonLine';
@@ -58,7 +60,7 @@ export const McpUnknownTray: React.FC<McpUnknownTrayProps> = ({ gates, apiBase, 
   const visible = gates.filter(g => !sent.has(g.gateId));
   if (visible.length === 0) return null;
 
-  const decide = async (gateId: string, approved: boolean) => {
+  const decide = async (gateId: string, tool: string, approved: boolean) => {
     if (inFlightRef.current.has(gateId)) {
       showToast(t('mcp.suppressedInFlight'), 'warning');
       return;
@@ -66,7 +68,11 @@ export const McpUnknownTray: React.FC<McpUnknownTrayProps> = ({ gates, apiBase, 
     inFlightRef.current.add(gateId);
     setBusy(new Set(inFlightRef.current));
     try {
-      const failure = await postMcpDecision(apiBase, gateId, approved, sessionToken);
+      const failure = tool.startsWith('computer_')
+        ? await postComputerDecision(apiBase, gateId, approved, false, sessionToken)
+        : tool.startsWith('browser_')
+          ? await postBrowserDecision(gateId, approved)
+          : await postMcpDecision(apiBase, gateId, approved, sessionToken);
       const note = decisionToast(failure, t(approved ? 'mcp.trayApproved' : 'mcp.trayDenied'));
       showToast(note.message, note.type);
       if (!failure) setSent(prev => new Set(prev).add(gateId));
@@ -123,7 +129,7 @@ export const McpUnknownTray: React.FC<McpUnknownTrayProps> = ({ gates, apiBase, 
                   <button
                     type="button"
                     disabled={locked}
-                    onClick={() => { void decide(g.gateId, true); }}
+                    onClick={() => { void decide(g.gateId, g.tool, true); }}
                     className="btn btn-primary"
                   >
                     <CheckIcon /><span>{t('mcp.trayApprove')}</span>
@@ -131,7 +137,7 @@ export const McpUnknownTray: React.FC<McpUnknownTrayProps> = ({ gates, apiBase, 
                   <button
                     type="button"
                     disabled={locked}
-                    onClick={() => { void decide(g.gateId, false); }}
+                    onClick={() => { void decide(g.gateId, g.tool, false); }}
                     className="btn btn-ghost"
                   >
                     {t('mcp.trayDeny')}
