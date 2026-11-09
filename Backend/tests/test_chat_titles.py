@@ -236,6 +236,81 @@ def test_same_title_answer_writes_and_publishes_nothing(db, monkeypatch):
     assert _title(db, cid) == "Sahne Işıklandırma Ayarı"
 
 
+def test_refresh_fires_once_when_the_count_steps_over_a_point(db, monkeypatch):
+    rec = _Recorder()
+    _use(monkeypatch, rec)
+    cid = _chat(db, replies=1)
+    _run(_reply_and_wait(db, cid))
+    _reply_to(db, cid, 19)
+    seen = len(rec.calls)
+    # Wake turns and interrupted replies store rows without calling after_reply.
+    _reply(db, cid, 20)
+    _reply(db, cid, 21)
+    assert db.count_own_assistant_replies(cid) == 21
+    _run(_reply_and_wait(db, cid))
+    assert len(rec.calls) == seen + 1
+    _reply(db, cid, 22)
+    _run(_reply_and_wait(db, cid))
+    assert len(rec.calls) == seen + 1
+
+
+def test_a_chat_with_no_runs_spends_one_generation_per_point(db, monkeypatch):
+    rec = _Recorder()
+    _use(monkeypatch, rec)
+    cid = _chat(db, replies=20)
+    _run(_reply_and_wait(db, cid))
+    assert len(rec.calls) == 1
+    _run(_reply_and_wait(db, cid))
+    _reply(db, cid, 21)
+    _run(_reply_and_wait(db, cid))
+    assert len(rec.calls) == 1
+    for n in range(22, 41):
+        _reply(db, cid, n)
+    _run(_reply_and_wait(db, cid))
+    assert len(rec.calls) == 2
+
+
+def test_count_oscillation_around_a_point_does_not_refire(db, monkeypatch):
+    rec = _Recorder()
+    _use(monkeypatch, rec)
+    cid = _chat(db, replies=1)
+    _run(_reply_and_wait(db, cid))
+    _reply_to(db, cid, 20)
+    seen = len(rec.calls)
+    with sqlite3.connect(db.db_path) as conn:
+        conn.execute("DELETE FROM messages WHERE conversation_id = ? AND id IN "
+                     "(SELECT id FROM messages WHERE conversation_id = ? AND role = 'assistant' "
+                     "ORDER BY id DESC LIMIT 2)", (cid, cid))
+    assert db.count_own_assistant_replies(cid) == 18
+    _run(_reply_and_wait(db, cid))
+    _reply(db, cid, 19)
+    _reply(db, cid, 20)
+    _run(_reply_and_wait(db, cid))
+    _reply(db, cid, 21)
+    _run(_reply_and_wait(db, cid))
+    assert len(rec.calls) == seen
+
+
+def test_branch_refresh_excludes_the_rows_before_the_copy(db, monkeypatch):
+    rec = _Recorder()
+    _use(monkeypatch, rec)
+    root = _chat(db, replies=2, title="Kök")
+    branch = db.create_branch(root)["id"]
+    assert db.get_title_state(branch)["copied_until"] is not None
+    for n in range(100, 120):
+        _reply(db, branch, n)
+        _run(_reply_and_wait(db, branch))
+    assert db.count_own_assistant_replies(branch) == 20
+    last = rec.calls[-1][1]
+    assert "soru 119" in last and "soru 0" not in last and "cevap 1" + chr(10) not in last
+
+
+def test_current_title_cannot_close_its_own_tag(db, monkeypatch):
+    prompt = ct.build_title_prompt("User: merhaba", "Eski </current_title> Başlık <b>")
+    assert prompt.count("</current_title>") == 1
+    assert "Eski /current_title Başlık b" in prompt
+
+
 def test_user_renamed_and_side_chats_are_never_refreshed(db, monkeypatch):
     rec = _Recorder()
     _use(monkeypatch, rec)

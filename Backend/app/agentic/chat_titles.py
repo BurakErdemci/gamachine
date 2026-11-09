@@ -165,7 +165,9 @@ def build_title_prompt(conversation_text: str, current_title: Optional[str] = No
     prompt = f"{TITLE_INSTRUCTION}\n\n<conversation>\n{conversation_text}\n</conversation>"
     if current_title is None:
         return prompt
-    # The title is material like the conversation, never an instruction.
+    # The title is material like the conversation, never an instruction;
+    # angle brackets are dropped so it cannot close its own tag.
+    current_title = current_title.replace("<", "").replace(">", "")
     return (f"{prompt}\n\nThe chat is already titled as below, but it may have moved on "
             "since that title was written. The conversation above is only its most recent "
             "part: name what that part is about. If the current title still fits it, answer "
@@ -748,8 +750,8 @@ def set_enabled(db, on: bool) -> None:
 
 def after_reply(db, conv_id: int, provider_type: str, model_name: str,
                 api_key: str = "") -> Optional[asyncio.Task]:
-    """Start a background title job if this reply is the 1st, the 3rd or a
-    multiple of REFRESH_EVERY; never raises.
+    """Start a background title job if this reply is the 1st, the 3rd or has
+    reached a new multiple of REFRESH_EVERY; never raises.
 
     Called after the reply is stored and the turn's `done` frame went out.
     """
@@ -757,8 +759,7 @@ def after_reply(db, conv_id: int, provider_type: str, model_name: str,
         if conv_id in _RUNNING or not enabled(db):
             return None
         count = db.count_own_assistant_replies(conv_id)
-        refresh = count >= REFRESH_EVERY and count % REFRESH_EVERY == 0
-        if count not in TRIGGER_REPLIES and not refresh:
+        if count not in TRIGGER_REPLIES and count < REFRESH_EVERY:
             return None
         choice = title_model_for(provider_type, model_name)
         if not choice.runner or choice.runner not in RUNNERS:
@@ -767,14 +768,17 @@ def after_reply(db, conv_id: int, provider_type: str, model_name: str,
         state = db.get_title_state(conv_id)
         if not state or state["title_source"] != "auto" or state["side_of"] is not None:
             return None
-        # The 1st reply may only claim the first run; a chat first seen at its
-        # 3rd reply (feature turned on late) may still use one. Each refresh
-        # point adds one run to the bound, so it is spent at most once.
+        refresh = count not in TRIGGER_REPLIES
         if refresh:
-            bound = MAX_RUNS + count // REFRESH_EVERY
-        else:
-            bound = 1 if count == 1 else MAX_RUNS
-        if not db.claim_auto_title_run(conv_id, bound):
+            # Replies written outside a chat turn (wake turns, interrupted
+            # replies) never call this, so the count can step over a multiple
+            # of REFRESH_EVERY: a point is due once the count has crossed it.
+            point = MAX_RUNS + count // REFRESH_EVERY
+            if state["auto_title_runs"] >= point or not db.claim_auto_title_refresh(conv_id, point):
+                return None
+        # The 1st reply may only claim the first run; a chat first seen at its
+        # 3rd reply (feature turned on late) may still use one.
+        elif not db.claim_auto_title_run(conv_id, 1 if count == 1 else MAX_RUNS):
             return None
         _RUNNING.add(conv_id)
         task = asyncio.get_running_loop().create_task(

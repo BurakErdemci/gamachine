@@ -732,6 +732,20 @@ class DatabaseManager:
             conn.commit()
             return cur.rowcount == 1
 
+    def claim_auto_title_refresh(self, conv_id: int, point: int) -> bool:
+        """Spend refresh `point`: set the run counter to it if it is lower; True if claimed.
+
+        Setting (not adding) makes each point cost one generation whatever
+        ran before, and a point already spent is never claimed again.
+        """
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            cur = conn.execute(
+                "UPDATE conversations SET auto_title_runs = ? "
+                "WHERE id = ? AND title_source = 'auto' AND side_of IS NULL "
+                "AND auto_title_runs < ?", (point, conv_id, point))
+            conn.commit()
+            return cur.rowcount == 1
+
     def delete_conversation(self, conv_id: int) -> None:
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute('PRAGMA foreign_keys = ON')
