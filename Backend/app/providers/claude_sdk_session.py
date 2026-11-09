@@ -1909,11 +1909,25 @@ class ClaudeSDKSession:
                 except Exception:
                     logger.exception("[ClaudeSDKSession] otonom yanıt DB kaydı başarısız")
         self._end_agent_tap("error" if error else "done")
+        if q is None:
+            self._end_unprompted_computer_presence()
         # Tasks finished while this turn ran: the model saw the notification
         # in-session; give the CLI the same grace before waking, once.
         if self._drain_state == "after_turn" and not self._active_tasks:
             self._drain_state = "grace"
             self._schedule_grace(_TASKS_DONE_GRACE_S)
+
+    def _end_unprompted_computer_presence(self):
+        """An unprompted turn is not in ambient_turn, so nothing else ends its computer presence."""
+        cid = self.conversation_id
+        if type(cid) is not int or cid <= 0:
+            return
+        try:
+            from agentic.approval_policy import _end_computer_activity, conversation_turn_in_flight
+            if not conversation_turn_in_flight(cid):
+                _end_computer_activity(cid)
+        except Exception:
+            logger.exception("[ClaudeSDKSession:%s] could not end computer presence", cid)
 
     # ── Wake-once timer for finished background tasks ───────────────────
     def _cancel_grace(self):
