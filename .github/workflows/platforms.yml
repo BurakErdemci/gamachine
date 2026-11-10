@@ -23,7 +23,9 @@ jobs:
     name: Backend (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     # Windows spends 38 minutes in pytest and more in its temp cleanup (measured 5 Nov 2026).
-    timeout-minutes: 60
+    # By 10 Nov a green Windows run took 43 minutes and a slow one reached 56 before the
+    # runner dropped, so 60 left too little room for normal growth.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
