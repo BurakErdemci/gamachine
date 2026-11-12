@@ -16,6 +16,21 @@ def valid_bundle_id(value) -> bool:
     return platform.current().valid_app_id(value)
 
 
+def _bad_bundle_id_reason(value) -> str:
+    current = platform.current()
+    reason = ("bundle_id must be " + current.launch_format
+              + ". Call computer_list_apps to get the id of a running app.")
+    finder = getattr(current, "installed_app_ids", None)
+    if finder is not None and isinstance(value, str):
+        try:
+            ids = finder(value)
+        except Exception:
+            ids = []
+        if ids:
+            reason += " Did you mean: " + ", ".join(ids)
+    return reason
+
+
 def is_hard_denied(bundle_id) -> bool:
     return platform.current().is_hard_denied(bundle_id, None)
 
@@ -314,7 +329,7 @@ def validate_call(tool, args) -> Validated | Refusal:
         return refusal
     if tool == "computer_launch_app":
         if not valid_bundle_id(args["bundle_id"]):
-            return Refusal("bundle_id must be a valid application identifier")
+            return Refusal(_bad_bundle_id_reason(args["bundle_id"]))
         if args["bundle_id"].casefold() == CLIPBOARD_BUNDLE_ID.casefold():
             return Refusal("bundle_id is reserved for the clipboard tool")
         if platform.current().launch_target(args["bundle_id"]) is None:

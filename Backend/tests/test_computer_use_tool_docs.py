@@ -70,7 +70,7 @@ def test_run_steps_description_has_valid_example_and_policy_names():
             assert (hint in description) == (tool.name == name)
         if tool.name != "computer_run_steps":
             expected_hint = element_hint if "element_token" in spec.allowed else hints.get(tool.name, "")
-            assert description == prefix + expected_hint
+            assert description == prefix + expected_hint + server._tool_guidance(tool.name)
             continue
         assert 'Each step is {"tool": NAME, "args": {...}}' in description
         assert 'shorthand {NAME: {...}}' in description

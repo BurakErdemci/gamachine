@@ -451,6 +451,7 @@ class MacPlatform:
     driver_basename = "cua-driver"
     unsupported_tools = frozenset()
     default_drag_delivery = None
+    launch_format = "a bundle identifier such as com.apple.TextEdit"
 
     def valid_app_id(self, value) -> bool:
         return valid_bundle_id(value)

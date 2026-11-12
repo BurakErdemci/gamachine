@@ -9,6 +9,7 @@ class Platform(Protocol):
     driver_basename: str
     unsupported_tools: frozenset[str]
     default_drag_delivery: str | None
+    launch_format: str
 
     def valid_app_id(self, value) -> bool: ...
     def valid_socket(self, path: str) -> bool: ...

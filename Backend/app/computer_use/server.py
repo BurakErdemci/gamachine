@@ -56,6 +56,63 @@ _ELEMENT_TOKEN_HINT = (
 )
 
 
+def _tool_guidance(name):
+    """Per-platform essentials for models that see only the tool descriptions, not the server instructions."""
+    spec = policy.TOOLS[name]
+    current = platform.current()
+    text = ""
+    if name == "computer_launch_app":
+        text += (" Launches an installed app. bundle_id must be " + current.launch_format
+                 + ", taken from computer_list_apps (running apps show it).")
+        if hasattr(current, "installed_app_ids"):
+            text += " A plain name like Blender is refused with a did-you-mean id; pass that id."
+    if spec.allowed & {"x", "from_x", "x1"}:
+        text += " x,y are pixels in the latest computer_window_state screenshot of that window"
+        text += " (coordinates read from a computer_zoom image need from_zoom)." if "from_zoom" in spec.allowed else "."
+    if "element_token" in spec.allowed:
+        text += " Prefer element_token when the window exposes elements."
+    return text
+
+
+async def _add_launch_ids(result):
+    """Show each running app's launchable id next to its row where the platform derives one from the pid."""
+    app_id_for = getattr(platform.current(), "app_id_for", None)
+    if app_id_for is None or result.is_error:
+        return result
+    try:
+        def tag_payload(payload):
+            rows = []
+            for row in payload["apps"]:
+                pid = row.get("pid") if isinstance(row, dict) else None
+                app_id = app_id_for(pid) if type(pid) is int and pid > 0 else None
+                rows.append({**row, "launch_id": app_id} if app_id else row)
+            return {**payload, "apps": rows}
+
+        def tag_line(match):
+            app_id = app_id_for(int(match.group(2)))
+            return match.group(0) + (" id=" + app_id if app_id else "")
+
+        structured = result.structured_content
+        if isinstance(structured, dict) and isinstance(structured.get("apps"), list):
+            structured = tag_payload(structured)
+        content = []
+        for block in result.content:
+            if isinstance(block, TextContent):
+                try:
+                    payload = json.loads(block.text)
+                except (ValueError, TypeError):
+                    payload = None
+                if isinstance(payload, dict) and isinstance(payload.get("apps"), list):
+                    block = block.model_copy(update={"text": json.dumps(tag_payload(payload))})
+                elif payload is None:
+                    block = block.model_copy(update={"text": re.sub(
+                        r"^(.*\S) \((\d+)\)[ \t]*$", tag_line, block.text, flags=re.M)})
+            content.append(block)
+        return result.model_copy(update={"content": content, "structured_content": structured})
+    except Exception:
+        return result
+
+
 def _text(value, error=False):
     return CallToolResult(content=[TextContent(type="text", text=value)], is_error=error)
 
@@ -641,7 +698,7 @@ class ComputerServer:
                 result = _strip_snapshot_result(result, args)
             if tool == "computer_list_windows":
                 return await _merge_panel_windows(result, pid)
-            return await _merge_running_apps(result) if tool == "computer_list_apps" else result
+            return await _add_launch_ids(await _merge_running_apps(result)) if tool == "computer_list_apps" else result
         except DriverUnavailable:
             return _text("Bilgisayar kullanımı sürücüsü kullanılamıyor.", True)
         except DriverError:
@@ -807,6 +864,7 @@ def create_server(driver=None, *, approvals=None, runtime=None, name="gamachineC
         description += _TOOL_HINTS.get(name, "")
         if "element_token" in spec.allowed:
             description += _ELEMENT_TOKEN_HINT
+        description += _tool_guidance(name)
         if name == "computer_run_steps":
             description += (
                 '\n\nEach step is {"tool": NAME, "args": {...}} or the shorthand {NAME: {...}}, '

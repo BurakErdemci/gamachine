@@ -104,6 +104,8 @@ class WindowsPlatform:
     # Measured: background drags draw nothing on Windows canvases while reporting success.
     default_drag_delivery = "foreground"
     instructions = WINDOWS_INSTRUCTIONS
+    launch_format = ("'aumid:<package family>!<app>' (Store apps) or 'win:<lowercase full .exe path>' "
+                     "(desktop apps)")
 
     def __init__(self, win32=None):
         if win32 is None:
@@ -129,6 +131,71 @@ class WindowsPlatform:
         path = self.win32.image_path(pid)
         app_id = "win:" + path.casefold() if isinstance(path, str) else None
         return app_id if self.valid_app_id(app_id) else None
+
+    def installed_app_ids(self, name, winreg=None) -> list[str]:
+        """`win:` ids of installed desktop apps matching a name, read from the registry; at most 5."""
+        if winreg is None:
+            import winreg
+        stem = name.strip().casefold() if isinstance(name, str) else ""
+        stem = stem[:-4] if stem.endswith(".exe") else stem
+        if not stem or len(stem) > 100:
+            return []
+        paths = []
+
+        def read(key, value_name):
+            try:
+                value = winreg.QueryValueEx(key, value_name)[0]
+            except OSError:
+                return None
+            return value.strip().strip('"') if isinstance(value, str) else None
+
+        roots = (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER)
+        base = "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\"
+        for root in roots:
+            try:
+                with winreg.OpenKey(root, base + "App Paths\\" + stem + ".exe") as key:
+                    paths.append(read(key, ""))
+            except OSError:
+                pass
+        for root in roots:
+            for uninstall in (base + "Uninstall", base.replace("SOFTWARE\\", "SOFTWARE\\WOW6432Node\\") + "Uninstall"):
+                names = []
+                try:
+                    with winreg.OpenKey(root, uninstall) as parent:
+                        while len(names) < 4096:
+                            try:
+                                names.append(winreg.EnumKey(parent, len(names)))
+                            except OSError:
+                                break
+                except OSError:
+                    continue
+                for sub in names:
+                    try:
+                        with winreg.OpenKey(root, uninstall + "\\" + sub) as key:
+                            display = read(key, "DisplayName")
+                            if not display or stem not in display.casefold():
+                                continue
+                            icon = (read(key, "DisplayIcon") or "").rsplit(",", 1)[0].strip('"')
+                            if icon.casefold().endswith(".exe") and os.path.isfile(icon):
+                                paths.append(icon)
+                                continue
+                            location = read(key, "InstallLocation")
+                            if location and os.path.isdir(location):
+                                exes = [f for f in os.listdir(location)
+                                        if f.casefold().endswith(".exe") and stem in f.casefold()]
+                                exes = [f for f in exes if f.casefold() == stem + ".exe"] or exes
+                                if len(exes) == 1:
+                                    paths.append(os.path.join(location, exes[0]))
+                    except OSError:
+                        continue
+        found = []
+        for path in paths:
+            if not path or not os.path.isfile(path):
+                continue
+            app_id = "win:" + os.path.normpath(path).casefold()
+            if self.valid_app_id(app_id) and not self.is_hard_denied(app_id, None) and app_id not in found:
+                found.append(app_id)
+        return found[:5]
 
     def is_hard_denied(self, app_id: str, pid: int | None) -> bool:
         if isinstance(app_id, str) and app_id.startswith("aumid:"):
