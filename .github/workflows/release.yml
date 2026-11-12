@@ -83,16 +83,19 @@ jobs:
         continue-on-error: true
         run: bash Backend/vendor/fetch_video_bins.sh
 
-      # Dictation engine: whisper.cpp built from source at the pinned commit with
-      # Vulkan, plus the pinned model; electron-builder ships it via extraResources.
-      # NOT best-effort: the installer must carry everything a feature needs
-      # (docs/architecture.md), so a failure here fails the build. The Vulkan SDK
-      # is build-time only (shader compiler) and pinned in scripts/pinned_assets.json.
-      # macOS: the Metal build is not implemented (docs/building.md); the dmg ships
-      # without dictation and the prebuild hook says so in the log.
+      # Dictation engine: whisper.cpp built from source at the pinned commit (Vulkan
+      # on Windows, Metal on macOS), plus the pinned model; electron-builder ships
+      # it via extraResources. NOT best-effort on either OS: the installer must
+      # carry everything a feature needs (docs/architecture.md), so a failure here
+      # fails the build. The Vulkan SDK is build-time only (shader compiler) and
+      # pinned in scripts/pinned_assets.json.
       - name: Dikte motoru — whisper.cpp + model (Windows)
         if: runner.os == 'Windows'
         run: pwsh -File Backend/vendor/build_whisper.ps1 -InstallVulkanSdk
+
+      - name: Dikte motoru (macOS)
+        if: runner.os == 'macOS'
+        run: bash Backend/vendor/build_whisper.sh
 
       - name: Backend'i dondur (PyInstaller → Backend/dist/backend)
         working-directory: Backend
