@@ -45,9 +45,9 @@ what it built, and several chats work on the same project side by side.
 | **macOS** (Apple Silicon) | `Gamachine-<version>-arm64.dmg` |
 
 <sub>**Windows:** the installer is not code-signed, so SmartScreen warns on first run:
-*More info* → *Run anyway*. No Intel Macs, no Linux.
+*More info* → *Run anyway*. **macOS:** signed with a Developer ID and notarized by Apple,
+so it opens without a warning. No Intel Macs, no Linux.
 Building from source? See [Installation](#installation).</sub>
-<!-- MAC-SIGNING-TBD: add one line here once the macOS signing state of the release is settled (signed and notarized, or right-click → Open). -->
 
 </div>
 
@@ -167,7 +167,7 @@ an English or Turkish interface, a Guide screen and a six-step starter tour.
 </tr>
 <tr>
 <td width="50%" valign="top"><img src="docs/media/readme/i-scene.svg" width="44" align="left" alt=""/><b>Scene editor</b><br/>An optional Hierarchy and Inspector for the open scene, for you rather than the agent. No 3D view.</td>
-<td width="50%" valign="top"><img src="docs/media/readme/i-mic.svg" width="44" align="left" alt=""/><b>Dictation</b><br/>Whisper runs on your computer; nothing is sent until you press Enter, and no audio leaves the machine. The Windows installer is about 1.3 GB because the model ships inside it. <!-- MAC-DICTATION-TBD: state macOS availability here once settled. --></td>
+<td width="50%" valign="top"><img src="docs/media/readme/i-mic.svg" width="44" align="left" alt=""/><b>Dictation</b><br/>Whisper runs on your computer; nothing is sent until you press Enter, and no audio leaves the machine. The Windows installer is about 1.3 GB because the model ships inside it. On the Mac it needs macOS 13.3 or newer.</td>
 </tr>
 <tr>
 <td width="50%" valign="top"><img src="docs/media/readme/i-models.svg" width="44" align="left" alt=""/><b>Models</b><br/>Claude Fable 5.2, Opus 5.5, Sonnet 5.5, Haiku 5.5; GPT-6 Luna and Sol, GPT-6.1 Sol and gpt-6.1-terra for Codex; Gemini 4 Argon through agy 1.4.0.</td>

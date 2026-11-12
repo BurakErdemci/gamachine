@@ -82,6 +82,12 @@ license text is copied next to them as `LICENSE-whisper.cpp.txt`; ggml is part o
 the same tree and the same copyright line. It runs as a separate process on a
 loopback port; no audio leaves the machine.
 
+On macOS the same commit is built, unmodified, by `Backend/vendor/build_whisper.sh`
+(Metal backend with its shader library embedded, static libraries, arm64). What ships
+in `Resources/whisper/bin/`: one self-contained `whisper-server`, which links only
+system libraries and frameworks (Metal, MetalKit, Accelerate, Foundation,
+CoreFoundation, libc++, libobjc, libSystem), and the same `LICENSE-whisper.cpp.txt`.
+
 ### Whisper large-v3-turbo model (ggml q8_0) — **[bundled] [fetched]**
 Copyright (c) 2022 OpenAI — **MIT License** — https://github.com/openai/whisper
 

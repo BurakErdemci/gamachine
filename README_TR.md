@@ -45,9 +45,9 @@ yaptığına bakıyor, birkaç sohbet de aynı projede yan yana çalışıyor.
 | **macOS** (Apple Silicon) | `Gamachine-<sürüm>-arm64.dmg` |
 
 <sub>**Windows:** kurulum dosyası imzalı değil, ilk açılışta SmartScreen uyarır:
-*Daha fazla bilgi* → *Yine de çalıştır*. Intel Mac ve Linux yok.
+*Daha fazla bilgi* → *Yine de çalıştır*. **macOS:** Developer ID ile imzalı ve Apple onaylı,
+uyarısız açılır. Intel Mac ve Linux yok.
 Kaynaktan derlemek için: [Kurulum](#kurulum).</sub>
-<!-- MAC-SIGNING-TBD: sürümün macOS imza durumu netleşince buraya tek satır eklenecek (imzalı ve notarize, ya da sağ tık → Aç). -->
 
 </div>
 
@@ -168,7 +168,7 @@ Türkçe ya da İngilizce arayüz, bir Rehber ekranı ve altı adımlık başlan
 </tr>
 <tr>
 <td width="50%" valign="top"><img src="docs/media/readme/i-scene.svg" width="44" align="left" alt=""/><b>Sahne editörü</b><br/>Açık sahne için isteğe bağlı Hiyerarşi ve Inspector; ajan için değil, senin için. 3D görünüm yok.</td>
-<td width="50%" valign="top"><img src="docs/media/readme/i-mic.svg" width="44" align="left" alt=""/><b>Dikte</b><br/>Whisper bilgisayarında çalışır; Enter'a basana kadar hiçbir şey gönderilmez, ses makineden çıkmaz. Model içinde geldiği için Windows kurulumu yaklaşık 1,3 GB. <!-- MAC-DICTATION-TBD: macOS durumu netleşince buraya yazılacak. --></td>
+<td width="50%" valign="top"><img src="docs/media/readme/i-mic.svg" width="44" align="left" alt=""/><b>Dikte</b><br/>Whisper bilgisayarında çalışır; Enter'a basana kadar hiçbir şey gönderilmez, ses makineden çıkmaz. Model içinde geldiği için Windows kurulumu yaklaşık 1,3 GB. Mac'te macOS 13.3 ve üstü gerekir.</td>
 </tr>
 <tr>
 <td width="50%" valign="top"><img src="docs/media/readme/i-models.svg" width="44" align="left" alt=""/><b>Modeller</b><br/>Claude Fable 5.2, Opus 5.5, Sonnet 5.5, Haiku 5.5; Codex için GPT-6 Luna ve Sol, GPT-6.1 Sol ve gpt-6.1-terra; agy 1.4.0 üzerinden Gemini 4 Argon.</td>
