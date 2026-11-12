@@ -7,37 +7,69 @@ Bu dosya kullanıcıya görünen değişiklikleri taşır. Tam geçmiş için `g
 > kullanıcının indirme anında gördüğü sayfa. Eski girdiler olduğu gibi bırakıldı —
 > geçmişi yarım çevirmek, tek dilde bırakmaktan da iki dilde bırakmaktan da kötü.
 
-## Unreleased
+## v4.0.0 — DATE-TBD
 
-### Claude Fable 5.2
-Claude Fable 5.2 (`claude-fable-5-2`), released 9 Nov 2026, is on the Claude Code
-list next to Fable 5.1 and Fable 5. With an Anthropic API key it is sent as itself
-and its cost is shown at its own lower price ($8 / $40 per million tokens); before
-this the API path sent it as Fable 5.
+Gamachine 4 changes what the app is for. In v3 an agent wrote code and touched the
+Unity Editor while you watched and checked the result yourself. In v4 the agent can
+play the game in the real Editor and look at what it built, several chats work on
+the same project side by side, and agents can also use a built-in browser, your
+desktop apps and Blender. The interface was rebuilt around all of this.
 
-### Dictation understands you much better
-The microphone now uses Whisper (large-v3-turbo, running on your computer through
-whisper.cpp) instead of the small Vosk models. On the owner's own recordings it made
-about half as many mistakes as the best alternative tested, and it gets words like
-"commit" and "GameManager" right far more often. Click the microphone to start and
-click it again to stop; the text goes into the box and is never sent for you.
+### A new interface
 
-- **With a graphics card:** the words appear while you speak (from 1.5 seconds on),
-  the language is detected by itself, and the final text is ready about a second
-  after you stop.
-- **Without one:** the text appears when you stop, after a short "turning speech into
-  text" wait (about 6 seconds for a short sentence). The app's language is used; the
-  new Settings switch "Detect language automatically" detects it instead, at about
-  twice the wait.
-- The installer is larger (about 1.3 GB) because the recogniser ships inside it, so
-  nothing is downloaded when you first use it.
+The whole app was redrawn: sidebar, top bar, chat thread, message box, approval
+cards, settings and dialogs. Five themes ship with it: **Arena** (dark, the
+default), **Plain** (dark), **Blueprint** (light), **Workshop** (light) and
+**Custom**, where you pick colours and fonts from three starting presets and can
+export or import the result as a short text code. Reading font, code font and text
+size are separate settings. A short opening animation plays in each theme's colours;
+it can be switched off under Settings > Appearance.
 
-### Dictation on Mac
-The Mac app now has dictation too, using the same recogniser on the Mac's graphics
-chip (Apple silicon, macOS 13.3 or newer). The words appear while you speak and the
-final text is ready a second or two after you stop. The very first dictation after
-installing or updating waits about 20 seconds while macOS prepares the graphics
-code once; after that it starts in under a second.
+The app now starts in English, and Turkish can be picked on the first-run name step
+or in Settings; those are the two interface languages. Main-process dialogs and
+backend errors follow the chosen language. The app icon is now the Gamachine mascot's
+head.
+
+New in the same pass:
+- **Guide and starter tour.** A Guide screen explains what the app can do, and a
+  six-step tour opens on first launch (Esc leaves it).
+- **Projects screen as a small Unity Hub.** Recent projects, a Launch Unity button on
+  each card, a folder drop target, a new-project form that creates the project with
+  the editor you pick (templates are whatever that editor ships), and a 4-step
+  "install a version" flow (version, extra modules, licences, install) that runs the
+  Unity CLI. It needs Unity Hub 3.21 or newer and does not replace it: Gamachine never
+  logs in to Unity for you. A project whose Unity version is missing offers the
+  install from its card menu.
+- **Maker profile** with local statistics and achievements; reset it under
+  Settings > Account.
+- Narrow windows work: below 1100 px the sidebar and the workspace panel take turns
+  beside the chat, menus stay inside the window and the chat keeps at least 420 px.
+- Ctrl+N opens a new chat (shortcut labels show Cmd on macOS); selected text is copied on release with a small
+  "copied" note; attached images open in a lightbox; code blocks without a language
+  get a copy button.
+
+### The agent plays and tests your game
+
+Six new Unity tools let an agent run the game in the real Unity Editor's Play Mode,
+not in a separate build:
+
+- `play_session` loads a scene, enters Play Mode with a fixed time step and seed, and
+  waits paused on frame 0.
+- `play_step` advances an exact number of frames while pressing keys, buttons or
+  axes on virtual input devices, then returns the game's state, any errors and the
+  last frame as an image. Unity does not need to be the focused window.
+- `play_capture` renders the game camera at the paused frame.
+- `play_run` plays in the background for up to 30 game-minutes per run, across up
+  to 50 seeds (one game-hour in total), and returns timelines, errors and a contact
+  sheet.
+- `game_hooks` reads and calls hooks the game itself declares with
+  `[GameHook("name")]`; a hook named `autopilot` lets a bot play.
+- `run_playtest` runs `*.playtest.json` scenarios and reports pass or fail.
+
+The agent checks the compile verdict before it plays (see below). If a Unity dialog
+blocks the Editor, the agent is told, and `unity_dialog` can read and answer it.
+`unity_window_capture` takes a picture of the whole Editor window, dialogs included
+(Windows only).
 
 ### "Compiled clean" now means it compiled
 
@@ -53,24 +85,6 @@ are stale or their status cannot be read, and a test job that passed while the
 scripts stopped compiling is reported as failed, not green. `clear_stuck` now
 releases only a job that is actually stuck.
 
-### Agents can no longer break asset GUIDs
-
-Inside a Unity project, writing, deleting or moving a `.meta` file, and writing a
-scene, prefab, material or other Unity YAML asset as raw text, is now refused on
-every path and in both step and auto mode. It is a fixed rule rather than an
-approval card: the agent is told to use the Unity MCP tools, which make Unity
-write the file and keep its `.meta` with it. Shell commands are checked by a
-heuristic, and `execute_code` / `execute_menu_item` cannot be checked; see
-docs/security.md.
-
-### Unity stops retrying a lost connection after 5 minutes
-
-When the Unity MCP server cannot be reached, the Unity Editor used to retry every
-30 s forever. It now stops after 5 minutes and says so in the Unity console;
-turning Unity MCP off and on in Gamachine reconnects it once Unity is in focus.
-5 minutes is about twice the slowest server start measured (a first start after
-the server's code changed).
-
 ### One agent action, one undo step
 
 Every mutating Unity MCP call is now a single named Unity undo step
@@ -79,9 +93,260 @@ Responses say which step it was and whether Undo can fully revert it. The new
 `manage_editor action=undo_action` reverts exactly one agent action, and refuses
 unless that action is still the latest step, so edits you made afterwards are
 never lost. GameObject deletes are undoable too (upstream #1135); file
-operations are reported as not fully undoable. Every action is logged to `Library/GamachineActions/actions.jsonl` in
-the project, and edits that break or restructure a prefab link come back with a
-`prefab_link` warning.
+operations are reported as not fully undoable. Every action is logged to
+`Library/GamachineActions/actions.jsonl` in the project, and edits that break or
+restructure a prefab link come back with a `prefab_link` warning.
+
+### Agents can no longer break asset GUIDs
+
+Inside a Unity project, writing, deleting or moving a `.meta` file, and writing a
+scene, prefab, material or other Unity YAML asset as raw text, is now refused on
+every path and in every work mode. It is a fixed rule rather than an approval
+card: the agent is told to use the Unity MCP tools, which make Unity write the file
+and keep its `.meta` with it. Shell commands are checked by a heuristic, and
+`execute_code` / `execute_menu_item` cannot be checked; see docs/security.md.
+
+### Several chats at once
+
+Chats now run in parallel, each with its own stream, Stop button, approval cards and
+message queue. Writes to one Unity Editor are taken in turn, so two chats never edit
+the open scene at the same moment.
+
+- **Branches.** Branch a chat into a tab above the chat column; rename, close or
+  delete it from the tab's menu.
+- **Side chat.** Ask a quick read-only question in a side panel while the main chat
+  keeps working.
+- **Chat-to-chat notes.** An agent can leave a note in another chat, which wakes that
+  chat up. Notes are capped at 4,000 characters, two hops deep, and five per pair of
+  chats every ten minutes, so two chats cannot keep each other busy.
+- **@ mentions.** Typing `@` lists your other chats; the agent gets the chat's id and
+  title (not its content) and can leave it a note.
+- Messages typed while a turn runs are queued. Chats name themselves from their
+  content, and a long chat's title refreshes from recent messages. Each answer is
+  labelled with the agent and model that wrote it, and each chat keeps its own model.
+- A chat that is waiting for you shows a dot and a badge in the sidebar, and a
+  desktop notification arrives when a background chat needs an approval or finishes.
+
+### Work modes: Auto, Step by Step and Safe Auto
+
+The approval setting is now one global work mode, chosen from the message box or
+Settings > Work mode. **Safe Auto** is new and is the default on a fresh install: it
+lets routine work through and opens a card only for actions its classifier marks as
+critical, which in practice means irreversible work. **Step by Step** asks for every write and command; **Auto** asks for
+nothing. Agents' writes outside the project go through the same policy, and secret
+files such as `.env` are refused on every write path. As before, file writes from
+the cloud API and Ollama paths are not carded; see docs/security.md.
+
+Approval cards were redrawn as one shared card with a risk line, and a card for a
+batch of actions lists every risk in it. The browser and computer use have their own
+switch to turn their cards off.
+
+### The agent can use your computer
+
+Computer use lets an agent work in desktop apps: it takes screenshots, clicks and
+types. It is off by default (Settings > Computer). Each app needs your permission
+first, and critical steps (buttons named send, delete, buy and the like) still open
+a card. While it runs, a Computer tab shows a live view, a small indicator window
+says that Gamachine is using the computer, and Ctrl+Alt+Esc (Cmd+Shift+Esc on
+macOS) or the indicator's Stop button halts it. The agent is told that text on the
+screen is data, not instructions. It works on Windows and macOS and with every
+provider except Ollama. Gamachine itself and terminals cannot be controlled.
+
+### A browser the agent can use
+
+A built-in browser panel the agent can drive: open pages, search, read the page,
+scroll, click, fill forms, take screenshots and manage its tabs. It is off by
+default (Settings > Browser). Each chat gets its own tab on one persistent browser
+session, so a site you log in to stays logged in. When you click inside the page the
+agent sees that you have taken over, and your next message hands it back.
+
+- Submitting forms, typing passwords and purchases need an approval card tied to
+  that exact page and element.
+- Annotate mode (Ctrl+Shift+E, Cmd+Shift+E on macOS): click an element or an area,
+  add a comment, and send numbered notes with the page data and a screenshot to the
+  agent.
+- Downloads go to your Downloads folder; `browser_download_to_project` copies a
+  finished file into the project's `Assets/` (executables are refused).
+- The browser can open local servers and project files, but not Gamachine's own
+  ports.
+- Settings > Browser lists the sites you are logged in to and the history, and lets
+  you remove them.
+
+### Blender, through Connectors
+
+A new Settings > Connectors page installs add-ons on demand, from pinned and
+hash-checked downloads. The first one is Blender (4.2 or newer): one click downloads
+mcp-for-blender 2.2.6 and installs its Blender add-on. The agent can then open
+Blender, read the scene, run Python in it and look at the result. Blender tools
+follow the global work mode. The agent can run any Python inside Blender; this is
+not a sandbox.
+
+### Control from your phone or another browser
+
+Optional and off by default. Pair a phone by scanning a QR code, checking that both
+screens show the same 4-digit code and approving it on the PC. From the phone you can
+watch chats, approve or reject cards (risky ones need a press-and-hold), answer the
+agent's questions, stop a turn, send messages and change the work mode, model and
+effort. Traffic goes through a relay and is end-to-end encrypted; the relay cannot
+read it. A browser version of the same remote lives under `/app` on the relay, and it
+can also switch computer use and the browser and see their live frames. Paired
+devices that stay unused for 90 days are forgotten. The PC must stay on.
+
+### Terminal agents can talk to Gamachine
+
+A CLI agent in your terminal (Claude Code, Codex, agy, Copilot, OpenCode) can
+register Gamachine as a stdio MCP server, then list your chats and models, open a
+chat, send a message and read the reply; those messages show with a ⌨️ mark. It is
+off by default. With a Claude model selected you can also import a terminal Claude
+Code conversation into a Gamachine chat and copy its resume command.
+
+### Scene editor
+
+An optional Hierarchy and Inspector for the open scene, for you only: the agent
+never sees it. Rename, create, duplicate and delete objects, edit fields and add
+components; selecting in Gamachine selects in Unity. Turn it on in Settings > Unity.
+There is no 3D view.
+
+### Dictation understands you much better
+
+The microphone now uses Whisper (large-v3-turbo, running on your computer through
+whisper.cpp) instead of the small Vosk models. On the owner's own recordings it made
+about half as many mistakes as the best alternative tested, and it gets words like
+"commit" and "GameManager" right far more often. Click the microphone to start and
+click it again to stop; recording runs until you stop it. The text goes into the box
+and is never sent for you, and no audio leaves your computer.
+
+- **With a graphics card:** the words appear while you speak (from 1.5 seconds on),
+  the language is detected by itself, and the final text is ready about a second
+  after you stop.
+- **Without one:** the text appears when you stop, after a short "turning speech into
+  text" wait (about 6 seconds for a short sentence). With a Turkish interface Turkish
+  is used, otherwise the language is detected; the Settings switch "Detect language
+  automatically" always detects it, at about twice the wait.
+- The Windows installer is larger (about 1.3 GB) because the recogniser ships inside
+  it, so nothing is downloaded when you first use it.
+
+- **On a Mac** (Apple Silicon, macOS 13.3 or newer) the same recogniser runs on the
+  graphics chip: the words appear while you speak and the final text is ready a
+  second or two after you stop. The first use asks for microphone permission, and the
+  very first dictation after installing or updating waits about 20 seconds while
+  macOS prepares the graphics code once.
+
+### Models
+
+- **Claude Fable 5.2** (`claude-fable-5-2`), released 9 Nov 2026, is on the Claude
+  Code list next to Fable 5.1 and Fable 5. With an Anthropic API key it is sent as
+  itself and its cost is shown at its own lower price ($8 / $40 per million tokens);
+  before this the API path sent it as Fable 5.
+- Claude Opus 5.5, Sonnet 5.5 and Haiku 5.5 (with effort levels in Claude Code
+  chats).
+- GPT-6 Luna and Sol, GPT-6.1 Sol and gpt-6.1-terra for Codex.
+- The Antigravity list follows agy 1.4.0, which adds Gemini 4 Argon, with an effort
+  picker.
+- Context and plan-usage readings: the context gauge shows real readings for Claude
+  Code, Codex and OpenCode and refreshes after every `/compact`; subscription usage
+  limits and reset times appear in Settings and the model menu.
+
+### What agents can do now
+
+- `show_image` lets an agent show an image file in the chat, kept with the chat.
+- The cloud API agent gains `web_fetch`, a to-do list and background shell jobs, runs
+  on the full streamed history with automatic compaction, and answers in the language
+  you write in.
+- Codex chats can be steered mid-turn, compact in place and take per-turn settings.
+- A turn now ends when the agent answers, even if background tasks are still running;
+  when they finish the chat wakes once and reports.
+- An Agent settings page holds your own addendum to the agent guide, sent to every
+  agent.
+
+### Updates
+
+From 4.0.0 on, updates download inside the app and install with one click ("Restart
+now" or "Later"). An update is fetched only after its release manifest checks out
+against our own Ed25519 signature, and the downloaded file is hashed again before
+the install is offered; anything that does not match is deleted and you are pointed
+to the release page instead (docs/releasing.md). v3.2.0 only tells you a new version
+exists and opens the release page, so the move to 4.0.0 is a manual download.
+
+### Fixes
+
+- Unity stops retrying a lost connection after 5 minutes. When the Unity MCP server
+  could not be reached, the Editor used to retry every 30 s forever; it now stops
+  after 5 minutes and says so in the Unity console. Turning Unity MCP off and on in
+  Gamachine reconnects it once Unity is in focus. 5 minutes is about twice the slowest
+  server start measured.
+- Switching projects moves Unity MCP to the new project, and Gamachine refuses to
+  automate a Unity Editor that has a different project open.
+- A Unity MCP server that died is restarted automatically; a busy one gets 90 seconds
+  first. A second editor is never started for a project that is already open.
+- Timeouts, cancels and killed CLI agents now end the whole process tree, so no
+  background processes are left behind.
+- Gamachine's Unity package and settings are kept out of the project's git, and
+  `.mcp.json` is merged instead of overwritten.
+- Opening a file or switching projects asks before throwing away unsaved edits.
+- The Antigravity updater no longer flashes a terminal window on Windows, and
+  OmniSharp starts when an older .NET is installed.
+- Unity 6.6 support for the changed object id (`entityId`).
+- Windows: the Unity Hub installed from the Microsoft Store (MSIX) is found.
+- A Unity MCP server that keeps getting killed is restarted less and less often (up
+  to every 10 minutes) instead of every minute, the Unity panel says when the next try
+  is, and a stopped server is labelled "Stopped" in the interface language. Five
+  healthy minutes reset the wait.
+- Launching a project whose Unity version is not installed shows one notice with an
+  "Install Unity X" button (it asks before throwing away unsaved edits), and the
+  install wizard lists the versions your projects need. While Unity is still opening
+  a project, the app says so instead of reporting a project mismatch.
+- Chat titles are written in the language you wrote in, defaulting to the interface
+  language; short Turkish without accents is recognised.
+- The chat stays at the bottom while an answer streams in, and a half-written link
+  is held back until it is complete.
+- Antigravity: a turn that hits its time limit or the model's quota now says so and
+  lists the files it changed, and a quota message from an earlier turn is no longer
+  repeated as part of the next answer.
+- Computer use: every tool now carries its own instructions and running apps carry a
+  launch id, so agents that never see the server's general instructions (Antigravity,
+  API-key models) can still find and open apps. Agents are told to check the app
+  rather than reason about it from files.
+- Copilot counts as signed in when `gh` or a `GH_TOKEN` / `GITHUB_TOKEN` provides the
+  login. Models marked recommended or free carry a tag instead of a Turkish suffix,
+  long model names are cut with an ellipsis, and plan names are capitalised.
+- The project "Create" button stays disabled until a folder is chosen.
+- macOS: Antigravity no longer opens Google sign-in tabs in the background, and
+  computer use explains when Screen Recording permission is missing.
+
+### Under the hood
+
+- The Unity MCP server moved to fastmcp 4.0.9 and MCP SDK 2.2, and Gamachine keeps
+  one long-lived session to it. It now has 55 tools; agents get a focused set of 37
+  by default (`/mcp/gamachine`) and every tool on `/mcp/full`.
+- macOS: the build is Apple Silicon only and uses LaunchServices to start Unity.
+- Every local HTTP route except `/health` needs the app's token; provider keys are
+  masked in logs.
+- CI runs the backend and frontend tests on Windows and macOS.
+
+- The macOS app is signed with a Developer ID and notarized by Apple, so it opens without a warning.
+
+### Known limits
+
+- **Windows:** the installer is not code-signed, so SmartScreen warns on first run.
+  Click **More info**, then **Run anyway**. Updates are still verified against our
+  own signed manifest (see Updates).
+- **macOS:** Apple Silicon only; no Intel Macs and no Linux.
+- **Playtesting** needs Unity's Input System package; input read through the old
+  `Input.GetKey` is not seen, so drive such games through hooks. Hooks have to exist
+  in the game's code; nothing is hooked automatically. A bot playing shows the game
+  runs, not that it is fun. All playtest measurements so far are on Windows.
+- **Computer use** was tested most with Claude Code and Codex; other providers are
+  wired up but less tested. On Windows, dragging into a background app may not work.
+- **Agent browser** does not log in for you and asks before submitting, entering a
+  password or buying.
+- **Blender** was tested on Windows; on macOS it is in place but untested.
+- **Installing a Unity version** from Gamachine is new and has had little real use;
+  Unity Hub 3.21+ is required, and "Open Unity Hub" is the fallback.
+- **Phone remote:** a web page, not a native app; the PC has to stay on. The new
+  narrow-screen layout of the browser remote has not been tried on a real phone yet.
+- **Kimi Code** is in the list but has not been exercised end to end, and **Ollama**
+  has only partial Unity control and no computer use.
 
 ## v3.2.0 — 6 September 2026
 
