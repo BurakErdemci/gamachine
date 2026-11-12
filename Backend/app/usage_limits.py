@@ -314,6 +314,8 @@ async def _kill_probe(proc):
     if proc.returncode is None:
         if os.name == "nt":
             # One bounded cleanup helper per owned probe; never match by name.
+            from process_tree import note_kill
+            note_kill("usage_limits._kill_probe", [proc.pid])
             try:
                 await asyncio.to_thread(subprocess.run,
                     ["taskkill", "/PID", str(proc.pid), "/T", "/F"],

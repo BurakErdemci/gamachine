@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
 from connectors import catalog, detect
+from process_tree import note_kill
 from spawn_env import build_spawn_env
 
 logger = logging.getLogger(__name__)
@@ -83,6 +84,7 @@ def kill_tree(proc: subprocess.Popen) -> None:
         # An exited process's id may already belong to another program.
         if proc.poll() is not None:
             return
+        note_kill("installer.kill_tree", [proc.pid])
         try:
             subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL, env=build_spawn_env(),

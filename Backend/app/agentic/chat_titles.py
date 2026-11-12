@@ -455,6 +455,8 @@ async def _kill_tree(proc) -> None:
 
     pid = getattr(proc, "pid", None)
     if pid:
+        from process_tree import note_kill
+        note_kill("chat_titles._kill_tree", [pid])
         if sys.platform == "win32":
             try:
                 killer = await asyncio.create_subprocess_exec(

@@ -7,11 +7,14 @@ is dead `taskkill /T` finds no tree, so the descendants are collected while the
 parent still lives and killed afterwards.
 """
 import asyncio
+import collections
 import logging
 import os
+import re
 import signal
 import subprocess
 import sys
+import time
 from typing import List, Optional
 
 logger = logging.getLogger(__name__)
@@ -20,9 +23,9 @@ KILL_WAIT_S = 5.0
 _CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
-def _parent_map_windows() -> dict:
+def _parent_map_windows(names: Optional[dict] = None) -> dict:
     """pid -> parent pid for every process, from a Toolhelp32 snapshot (no
-    PowerShell or wmic window)."""
+    PowerShell or wmic window). When `names` is given it is filled with pid -> image name."""
     import ctypes
     from ctypes import wintypes
 
@@ -51,6 +54,8 @@ def _parent_map_windows() -> dict:
         ok = kernel32.Process32FirstW(snap, ctypes.byref(entry))
         while ok:
             parents[entry.th32ProcessID] = entry.th32ParentProcessID
+            if names is not None:
+                names[entry.th32ProcessID] = entry.szExeFile
             ok = kernel32.Process32NextW(snap, ctypes.byref(entry))
     finally:
         kernel32.CloseHandle(snap)
@@ -72,6 +77,147 @@ def _parent_map_posix() -> dict:
 
 def process_table() -> dict:
     return _parent_map_windows() if sys.platform == "win32" else _parent_map_posix()
+
+
+# --- Kill accounting -------------------------------------------------------
+# Measured 12 Nov 2026: the Unity MCP server died with exit code 1 (what `taskkill /F` gives) and
+# nothing in the logs named a killer. Every kill site writes one line here BEFORE it kills, so a
+# silent death can be matched to the site that ended that pid or one of its ancestors.
+
+_CMD_MAX = 200
+_NOTE_MAX_PIDS = 8
+_RECENT_KILLS = collections.deque(maxlen=50)  # (time.monotonic(), record)
+_SECRET_ARG = re.compile(
+    r"(?i)((?:access[_-]?token|token|api[_-]?key|secret|password|authorization|bearer)[\"']?\s*[=:]?\s*[\"']?)[^\s\"']+")
+
+
+def _redact_cmd(text: str) -> str:
+    """Secrets out first, then the cut: a cut can split a secret the patterns would have matched."""
+    text = _SECRET_ARG.sub(r"\1<REDACTED>", text or "")
+    try:
+        from secret_redaction import redact_secrets
+        text = redact_secrets(text)
+    except Exception:
+        pass
+    return text[:_CMD_MAX]
+
+
+def _cmdline_windows(pid: int) -> Optional[str]:
+    """Command line from the target's PEB (64-bit python reading a 64-bit process); None when unreadable."""
+    import ctypes
+    from ctypes import wintypes
+
+    if sys.maxsize <= 2 ** 32:
+        return None
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    ntdll = ctypes.WinDLL("ntdll")
+    k32.OpenProcess.restype = wintypes.HANDLE
+    k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    k32.ReadProcessMemory.argtypes = [wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t,
+                                      ctypes.POINTER(ctypes.c_size_t)]
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = k32.OpenProcess(0x0410, False, pid)  # QUERY_INFORMATION | VM_READ
+    if not handle:
+        return None
+    try:
+        def read(address, size):
+            buffer = ctypes.create_string_buffer(size)
+            got = ctypes.c_size_t()
+            if not k32.ReadProcessMemory(handle, ctypes.c_void_p(address), buffer, size, ctypes.byref(got)):
+                raise OSError("ReadProcessMemory failed")
+            return buffer.raw[:got.value]
+
+        info = (ctypes.c_size_t * 6)()
+        ntdll.NtQueryInformationProcess.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p,
+                                                    wintypes.ULONG, ctypes.c_void_p]
+        if ntdll.NtQueryInformationProcess(handle, 0, ctypes.byref(info), ctypes.sizeof(info), None) != 0:
+            return None
+        params = int.from_bytes(read(info[1] + 0x20, 8), "little")  # PEB.ProcessParameters
+        header = read(params + 0x70, 16)  # RTL_USER_PROCESS_PARAMETERS.CommandLine (UNICODE_STRING)
+        length = int.from_bytes(header[:2], "little")
+        buffer = int.from_bytes(header[8:16], "little")
+        if not length or not buffer:
+            return None
+        return read(buffer, min(length, _CMD_MAX * 4)).decode("utf-16-le", "replace")
+    except Exception:
+        return None
+    finally:
+        k32.CloseHandle(handle)
+
+
+def _describe_pid(pid: int, names: dict) -> dict:
+    image = names.get(pid)
+    command = None
+    try:
+        if sys.platform == "win32":
+            command = _cmdline_windows(pid)
+        else:
+            from spawn_env import build_spawn_env
+
+            out = subprocess.run(["ps", "-o", "comm=,args=", "-p", str(pid)], capture_output=True, text=True,
+                                 timeout=KILL_WAIT_S, env=build_spawn_env()).stdout.strip()
+            if out:
+                head, _, rest = out.partition(" ")
+                image = image or os.path.basename(head)
+                command = rest.strip()
+    except Exception:
+        pass
+    return {"pid": pid, "image": image, "cmd": _redact_cmd(command) if command else None}
+
+
+def _closure(parents: dict, roots) -> set:
+    """`roots` plus every descendant of them in the process table."""
+    found = set(roots)
+    frontier = list(found)
+    while frontier:
+        parent = frontier.pop()
+        for child, ppid in parents.items():
+            if ppid == parent and child not in found:
+                found.add(child)
+                frontier.append(child)
+    return found
+
+
+def note_kill(site: str, pids) -> None:
+    """Writes one kill_accounting diag line (and keeps it in memory for the exit context) BEFORE the
+    caller kills `pids`: site, each pid's image and command line, and whether the Unity MCP server
+    process (the uvx child we started, or anything under it) is among the targets or their
+    descendants. Never raises."""
+    try:
+        pids = [p for p in pids if isinstance(p, int)]
+        if not pids:
+            return
+        names: dict = {}
+        try:
+            parents = _parent_map_windows(names) if sys.platform == "win32" else _parent_map_posix()
+        except Exception:
+            parents = {}
+        mcp_pid = None
+        try:
+            from unity_ai_mcp import unity_mcp_manager as manager_module
+
+            mcp_pid = _pid_of(manager_module.unity_mcp_manager.process)
+        except Exception:
+            pass
+        mcp_tree = _closure(parents, [mcp_pid]) if mcp_pid else set()
+        hit = sorted(_closure(parents, pids) & mcp_tree) if mcp_tree else []
+        record = {"site": site, "targets": [_describe_pid(p, names) for p in pids[:_NOTE_MAX_PIDS]],
+                  "target_count": len(pids), "mcp_pid": mcp_pid, "mcp_in_targets": bool(hit),
+                  "mcp_hit_pids": hit[:_NOTE_MAX_PIDS]}
+        _RECENT_KILLS.append((time.monotonic(), record))
+        from unity_ai_mcp.unity_mcp_manager import unity_diag
+
+        unity_diag("kill_accounting", **record)
+    except Exception as exc:
+        logger.debug("[process-tree] kill accounting for %s failed: %s", site, exc)
+
+
+def recent_kills(within_s: float = 120.0, limit: int = 5) -> list:
+    """The last `limit` kill_accounting records from the last `within_s` seconds, oldest first,
+    each with `age_s`."""
+    now = time.monotonic()
+    fresh = [(now - at, record) for at, record in list(_RECENT_KILLS) if now - at <= within_s]
+    return [{**record, "age_s": round(age, 1)} for age, record in fresh[-limit:]]
 
 
 def collect_descendants(pid: Optional[int]) -> List[int]:
@@ -99,6 +245,7 @@ async def kill_pids(pids: List[int]) -> None:
     """End these processes (and anything they started since). Never raises."""
     if not pids:
         return
+    note_kill("process_tree.kill_pids", pids)
     if sys.platform == "win32":
         from spawn_env import build_spawn_env
 
@@ -142,6 +289,7 @@ def _kill_pids_sync(pids: List[int]) -> None:
     KILL_WAIT_S would freeze the whole backend while the OS ends the tree."""
     if not pids:
         return
+    note_kill("process_tree._kill_pids_sync", pids)
     if sys.platform == "win32":
         from spawn_env import build_spawn_env
 
@@ -168,6 +316,7 @@ async def end_tree(proc) -> bool:
     parent is dead nothing links them to it (a Popen or an asyncio Process)."""
     descendants = _descendants_of(proc)
     killed = True
+    note_kill("process_tree.end_tree", [_pid_of(proc)])
     try:
         proc.kill()
     except Exception as exc:
@@ -182,6 +331,7 @@ def end_tree_sync(proc, *, strict: bool = False) -> bool:
     proc.kill() is re-raised after the descendants are killed, for callers that
     act on that error."""
     descendants = _descendants_of(proc)
+    note_kill("process_tree.end_tree_sync", [_pid_of(proc)])
     try:
         proc.kill()
     except Exception as exc:

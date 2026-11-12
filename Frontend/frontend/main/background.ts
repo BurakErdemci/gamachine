@@ -107,6 +107,12 @@ function fileLog(level: string, args: any[]) {
     fs.appendFileSync(logFilePath, line)
   } catch { /* log yazılamadı, sessizce geç */ }
 }
+// Kill accounting (best effort, kept small): a silent Unity MCP death (12 Nov 2026) matched no kill site, so
+// every taskkill/kill this file issues leaves one line first. The backend writes the full pid/command line
+// accounting for its own sites to unity_mcp_diag.log; here only the site and the pid are known.
+function noteKill(site: string, pid: number | undefined) {
+  fileLog('INFO', ['[kill-accounting]', site, JSON.stringify({ pid, isBackend: pid != null && pid === pyBackendProcess?.pid })])
+}
 {
   const origLog = console.log.bind(console)
   const origErr = console.error.bind(console)
@@ -446,6 +452,7 @@ const installDeps = (): InstallDeps => ({
   setInterval: (fn, ms) => setInterval(fn, ms),
   clearInterval: (handle) => clearInterval(handle),
   killTree: (pid) => {
+    noteKill('hub-install-cancel', pid)
     try {
       if (process.platform === 'win32') execFile('taskkill', ['/PID', String(pid), '/T', '/F'], () => {})
       else process.kill(-pid, 'SIGTERM')
@@ -1363,6 +1370,7 @@ const killBackend = (): Promise<void> => {
     const waits: Promise<void>[] = [gone(proc) || typeof proc.once !== 'function' ? Promise.resolve() : onceEvent(proc, 'exit')]
     const pid = proc.pid
     if (!gone(proc)) {
+      noteKill('stop-backend', pid)
       const fallbackKill = (signal?: NodeJS.Signals) => {
         try { proc.kill(signal) } catch (e) {
           console.error('[backend] kill failed:', (e as any)?.message || e)

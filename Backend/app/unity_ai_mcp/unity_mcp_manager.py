@@ -509,8 +509,15 @@ class UnityMCPManager:
             return
         self._diag_exit_logged = process
         uptime = time.monotonic() - self._started_at
+        try:
+            from process_tree import recent_kills
+            kills = recent_kills(120, 5)
+        except Exception:
+            kills = []
+        # The server's parent is this backend (we Popen it); the kill lines show whether Gamachine ended it.
         unity_diag("server_exit", returncode=returncode, pid=getattr(process, "pid", None), source=source,
-                   uptime_s=round(uptime, 1) if uptime != float("inf") else None)
+                   uptime_s=round(uptime, 1) if uptime != float("inf") else None,
+                   parent_pid=os.getpid(), recent_kills=kills)
 
     def _reason(self, reason: str) -> str:
         return self._diag_reason if reason == "unknown" and self._diag_reason else reason
