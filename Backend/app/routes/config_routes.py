@@ -780,6 +780,9 @@ def create_config_router(db):
                 with open(p, "r", encoding="utf-8") as f:
                     txt = "\n".join(l for l in f.read().splitlines() if not l.strip().startswith("//"))
                 return bool((_json.loads(txt) or {}).get("lastLoggedInUser"))
+            except FileNotFoundError:
+                # Copilot has not written its config yet: nobody has signed in.
+                return False
             except Exception:
                 return None
 
