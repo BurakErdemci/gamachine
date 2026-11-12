@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 
 import { useLang, type TKey } from '../../../lib/i18n';
-import { stripBidi, shortModelId } from '../../../lib/modelText';
+import { stripBidi, shortModelId, modelLabel } from '../../../lib/modelText';
 import { GROUP_USAGE_FAMILY, familyFor, type UsageLimits } from '../../../lib/usageLimits';
 import { useCliDoctor } from '../../../hooks/home/useCliDoctor';
 import { useUsageLimits } from '../../../hooks/home/useUsageLimits';
@@ -91,13 +91,13 @@ export const ModelsPage = ({
     ...CLI_GROUPS.map(g => ({
       group: g.label,
       // The group label already names the CLI: "(CLI)" / "Codex (…)" would repeat it.
-      items: groupModels(g).filter(m => !m.disabled).map(m => ({ value: `subscription${SEP}${m.id}`, label: chipModelName(goster(m.name)) })),
+      items: groupModels(g).filter(m => !m.disabled).map(m => ({ value: `subscription${SEP}${m.id}`, label: chipModelName(goster(modelLabel(m, t))) })),
     })),
     ...cloudGroups.map(c => ({
       group: c.label,
-      items: c.models.map(m => ({ value: `${m.provider}${SEP}${m.id}`, label: goster(m.name) })),
+      items: c.models.map(m => ({ value: `${m.provider}${SEP}${m.id}`, label: goster(modelLabel(m, t)) })),
     })),
-    { group: 'Ollama', items: (models.local || []).map(m => ({ value: `ollama${SEP}${m.id}`, label: goster(m.name) })) },
+    { group: 'Ollama', items: (models.local || []).map(m => ({ value: `ollama${SEP}${m.id}`, label: goster(modelLabel(m, t)) })) },
   ].filter(o => o.items.length > 0);
   const known = options.some(o => o.items.some(i => i.value === defValue));
   const defGroup = CLI_GROUPS.find(g => def.provider_type === 'subscription' && g.matches(def.model_name || ''));

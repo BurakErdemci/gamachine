@@ -28,6 +28,13 @@
 export const stripBidi = (s: string): string =>
   s.replace(/[\u061C\u202A-\u202E\u2066-\u2069\u200B\u200E\u200F\u2060\uFEFF]/g, '');
 
+/** A badge the backend sends as data (`tag`); the words come from i18n, so each UI language reads its own. */
+export type ModelTag = 'recommended' | 'free';
+
+/** A catalogue row as the picker shows it: its name, then its tag in the UI language. */
+export const modelLabel = (m: { name?: string; tag?: string }, t: (key: any) => string): string =>
+  m.tag === 'recommended' || m.tag === 'free' ? `${m.name || ''} (${t(`models.tag.${m.tag}`)})` : (m.name || '');
+
 /**
  * A model id as the UI names it: the CLI routing prefix (`cursor-`,
  * `copilot-`, `opencode:`) and a vendor path segment are dropped, so

@@ -6,7 +6,7 @@ import { ModelLogo } from '../ui/ModelLogos';
 import { AIConfig, UserData } from './types';
 import { useLang } from '../../lib/i18n';
 import { apiHataMesaji } from '../../lib/apiError';
-import { stripBidi } from '../../lib/modelText';
+import { stripBidi, modelLabel } from '../../lib/modelText';
 import type { AvailableModelsState } from '../../hooks/home/useAIConfig';
 import { GROUP_USAGE_FAMILY, familyFor, minutesSince, type UsageLimits } from '../../lib/usageLimits';
 import { ChipUse, UseBlock, UsePair } from './UsageMeters';
@@ -114,6 +114,12 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isModelDropdownOpen, API]);
 
+  // The chip names a live-listed model, so its list is read once the model on screen is known (not only when the menu opens).
+  useEffect(() => {
+    if (API && activeGroup?.dynamic) fetchDynModels(activeGroup.dynamic);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [API, activeGroup?.dynamic]);
+
   // Esc closes the menu (the settings screen has its own Esc).
   useEffect(() => {
     if (!isModelDropdownOpen) return;
@@ -183,14 +189,14 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
 
   const selectCliModel = async (g: CliGroupDef, m: ModelItem) => {
     if (m.disabled) {
-      showToast(t('models.planLocked', { model: goster(m.name), cli: g.label }), 'warning');
+      showToast(t('models.planLocked', { model: goster(modelLabel(m, t)), cli: g.label }), 'warning');
       return;
     }
     const newCfg = { ...aiConfig, provider_type: 'subscription', model_name: m.id, api_key: 'CLI_SESSION' };
     setAiConfig(newCfg);
     setIsModelDropdownOpen(false);
     if (!(await savePick(newCfg))) return;
-    showToast(t('models.selected', { model: goster(m.name) }), 'info');
+    showToast(t('models.selected', { model: goster(modelLabel(m, t)) }), 'info');
     if (doctor && doctor[g.availKey]?.installed === false) {
       showToast(t('models.cliNotFound', { cli: g.cliLabel }), 'warning');
     }
@@ -280,7 +286,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
           className="model-opt is-locked"
         >
           <span className="model-opt-text">
-            <span className="model-opt-name" lang="en">{goster(m.name)}</span>
+            <span className="model-opt-name" lang="en">{goster(modelLabel(m, t))}</span>
             <span className="model-opt-sub">{t('models.notInPlan')}</span>
           </span>
         </button>
@@ -288,7 +294,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     }
     return (
       <button key={m.id} type="button" role="option" aria-selected={active} onClick={() => selectCliModel(g, m)} className="model-opt">
-        <span className="model-opt-text"><span className="model-opt-name" lang="en">{goster(m.name)}</span></span>
+        <span className="model-opt-text"><span className="model-opt-name" lang="en">{goster(modelLabel(m, t))}</span></span>
         {check}
       </button>
     );
@@ -312,7 +318,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         >
           {withMark && <ModelLogo provider={orToggle ? 'openrouter' : m.provider} size={16} className="plogo" />}
           <span className="model-opt-text">
-            <span className="model-opt-name" lang="en">{goster(m.name)}</span>
+            <span className="model-opt-name" lang="en">{goster(modelLabel(m, t))}</span>
             <span className="model-opt-sub">
               {orToggle ? 'via OpenRouter' : goster(m.provider)}
               {!hasKey && <span className="mm-tag">{t('models.noKey')}</span>}
@@ -349,7 +355,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
 
   const localModelRow = (m: ModelItem) => (
     <button key={m.id} type="button" role="option" aria-selected={isActive(m.id)} onClick={() => selectLocalModel(m)} className="model-opt">
-      <span className="model-opt-text"><span className="model-opt-name" lang="en">{goster(m.name)}</span></span>
+      <span className="model-opt-text"><span className="model-opt-name" lang="en">{goster(modelLabel(m, t))}</span></span>
       {check}
     </button>
   );
@@ -359,7 +365,9 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     : aiConfig.provider_type === 'ollama' ? 'ollama'
       : (aiConfig.provider_type || effectiveProvider || '');
   const markIsClaude = activeKey === 'claude' || activeKey === 'cloud:anthropic';
-  const chipName = chipModelName(goster(displayModelName), markIsClaude);
+  // A live-listed model (OpenCode, Cursor, ...) is named by the same rows the picker shows.
+  const liveRow = activeGroup?.dynamic ? dynModels[activeGroup.dynamic]?.find(m => m.id === aiConfig.model_name) : undefined;
+  const chipName = chipModelName(goster(liveRow?.name ?? displayModelName), markIsClaude);
   const activeFamily = activeGroup ? GROUP_USAGE_FAMILY[activeGroup.key] ?? null : null;
   const providerName = activeGroup ? activeGroup.label
     : aiConfig.provider_type === 'ollama' ? 'Ollama'

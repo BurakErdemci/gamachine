@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useLang, type TKey } from '../../lib/i18n';
 import { remoteSession } from '../../lib/remote/bootstrap';
+import { modelLabel } from '../../lib/modelText';
 import { RemoteError } from '../../lib/remote/transport';
 import type { AvailableModels, GenerationMode } from '../home/types';
 
@@ -23,13 +24,14 @@ type View = 'menu' | 'model' | 'effort' | 'mode' | 'confirm-auto';
 type ModelPick = { provider_type: string; model_name: string; label: string };
 
 /** The picker's three sources as the desktop picker saves them (ModelSelector): CLI, local, cloud. */
-export function modelPicks(models: AvailableModels): ModelPick[] {
+export function modelPicks(models: AvailableModels, t?: (key: any) => string): ModelPick[] {
+  const label = (m: { id: string; name: string; tag?: string }) => (t ? modelLabel(m, t) : m.name) || m.id;
   return [
-    ...(models.subscription ?? []).map(m => ({ provider_type: 'subscription', model_name: m.id, label: m.name || m.id })),
-    ...(models.local ?? []).map(m => ({ provider_type: 'ollama', model_name: m.id, label: m.name || m.id })),
+    ...(models.subscription ?? []).map(m => ({ provider_type: 'subscription', model_name: m.id, label: label(m) })),
+    ...(models.local ?? []).map(m => ({ provider_type: 'ollama', model_name: m.id, label: label(m) })),
     // A cloud row the account cannot reach, or one only from OpenRouter's open catalogue, is left out.
     ...(models.cloud ?? []).filter(m => m.available !== false && m.verified !== false)
-      .map(m => ({ provider_type: m.provider, model_name: m.id, label: m.name || m.id })),
+      .map(m => ({ provider_type: m.provider, model_name: m.id, label: label(m) })),
   ];
 }
 
@@ -114,7 +116,7 @@ export function PhoneMenuSheet(props: PhoneMenuSheetProps) {
   };
 
   const levels = (effortLevels ?? []).length > 1 ? effortLevels! : [];
-  const picks = modelPicks(models);
+  const picks = modelPicks(models, t);
   const currentPick = picks.find(p => p.provider_type === currentModel.provider_type && p.model_name === currentModel.model_name);
   const currentMode = MODES.find(m => m.id === mode) ?? MODES[2];
   const back = (

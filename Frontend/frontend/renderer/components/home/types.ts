@@ -1,6 +1,8 @@
 export interface ModelInfo {
   id: string;
   name: string;
+  /** A badge sent as data; the UI words it through i18n (`models.tag.*`). */
+  tag?: 'recommended' | 'free';
   provider: string;
   openrouter_id?: string;
   paid?: boolean;

@@ -1002,7 +1002,11 @@ class TestModelListParsers(unittest.TestCase):
 
         names = {m["id"]: m["name"] for m in _parse_opencode_models(
             "opencode/space-bunny-free\nopencode-go/space-bunny-free\nopencode-go/kimi-k3\n")}
-        self.assertEqual(names["opencode:opencode/space-bunny-free"], "Space Bunny (Ücretsiz)")
+        self.assertEqual(names["opencode:opencode/space-bunny-free"], "Space Bunny")
+        tags = {m["id"]: m.get("tag") for m in _parse_opencode_models(
+            "opencode/space-bunny-free\nopencode-go/space-bunny-free\n")}
+        self.assertEqual(tags["opencode:opencode/space-bunny-free"], "free")
+        self.assertIsNone(tags["opencode:opencode-go/space-bunny-free"])
         self.assertEqual(names["opencode:opencode-go/space-bunny-free"], "Space Bunny (Go)")
         self.assertEqual(names["opencode:opencode-go/kimi-k3"], "Kimi K3 (Go)")
 

@@ -391,7 +391,7 @@ def opencode_access_message(msg: str) -> Optional[str]:
         return ("🔒 Bu model OpenCode Go aboneliği gerektiriyor ve OpenCode hesabında "
                 "etkin bir Go aboneliği görünmüyor. Bu geçici bir yoğunluk değil; tekrar "
                 "denemek işe yaramaz. Go aboneliğini etkinleştir ya da model seçiciden "
-                "\"(Ücretsiz)\" etiketli bir OpenCode modeli veya başka bir sağlayıcı seç. "
+                "ücretsiz etiketli bir OpenCode modeli veya başka bir sağlayıcı seç. "
                 "Oturum bağlamı korundu.")
     if OPENCODE_FREE_TIER_RE.search(msg or ""):
         return ("🔒 OpenCode bu ücretsiz modeli yalnız kendi uygulaması içinden "

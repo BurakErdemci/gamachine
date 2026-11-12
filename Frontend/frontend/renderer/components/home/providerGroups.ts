@@ -58,7 +58,7 @@ export const CLI_GROUPS: CliGroupDef[] = [
   },
 ];
 
-export type ModelItem = { id: string; name: string; provider?: string; openrouter_id?: string; disabled?: boolean; disabled_reason?: string; available?: boolean; verified?: boolean; source?: 'live' | 'openrouter'; context_length?: number };
+export type ModelItem = { id: string; name: string; tag?: 'recommended' | 'free'; provider?: string; openrouter_id?: string; disabled?: boolean; disabled_reason?: string; available?: boolean; verified?: boolean; source?: 'live' | 'openrouter'; context_length?: number };
 export type CliDoctor = Record<string, { installed: boolean; loggedIn: boolean | null }>;
 
 // Bulut API sağlayıcı grupları (abonelik CLI grupları gibi kategorize görünüm)

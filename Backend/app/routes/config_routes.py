@@ -155,9 +155,10 @@ def _parse_opencode_models(raw: str) -> list:
         # still answer 403 "Go subscription is required" (measured 26 Sep 2026).
         if provider == "opencode-go":
             pretty += " (Go)"
-        elif short.endswith("-free"):
-            pretty += " (Ücretsiz)"
         models.append({"id": f"opencode:{line}", "name": pretty, "provider": "subscription"})
+        if provider != "opencode-go" and short.endswith("-free"):
+            # The badge is data; the frontend words it in the UI language.
+            models[-1]["tag"] = "free"
     return models
 
 
@@ -477,7 +478,7 @@ def create_config_router(db):
     # Also feeds /available-models: the same ids used to be typed out in both
     # endpoints, and two hand-kept copies drift (hygiene audit, 5 Sep 2026).
     _COPILOT_MODELS = [
-        {"id": "copilot-auto",                   "name": "Copilot Auto (Önerilen)", "provider": "subscription"},
+        {"id": "copilot-auto",                   "name": "Copilot Auto", "provider": "subscription", "tag": "recommended"},
         {"id": "copilot-claude-sonnet-5",        "name": "Claude Sonnet 5",         "provider": "subscription"},
         {"id": "copilot-claude-fable-5",         "name": "Claude Fable 5",          "provider": "subscription"},
         {"id": "copilot-claude-opus-4.8",        "name": "Claude Opus 4.8",         "provider": "subscription"},
@@ -541,7 +542,7 @@ def create_config_router(db):
                 {"id": "gemini-4-argon",               "name": "Gemini 4 Argon (High)",       "provider": "subscription"},
                 {"id": "gemini-4-argon-medium",        "name": "Gemini 4 Argon (Medium)",     "provider": "subscription"},
                 {"id": "gemini-4-argon-low",           "name": "Gemini 4 Argon (Low)",        "provider": "subscription"},
-                {"id": "gemini-3.8-flash",             "name": "Gemini 3.8 Flash (Önerilen)", "provider": "subscription"},
+                {"id": "gemini-3.8-flash",             "name": "Gemini 3.8 Flash", "provider": "subscription", "tag": "recommended"},
                 {"id": "gemini-3.8-flash-medium",      "name": "Gemini 3.8 Flash (Medium)",   "provider": "subscription"},
                 # Claude effort is selected separately; Gemini keeps tiered IDs.
                 {"id": "agy-claude-opus-5-5",          "name": "Claude Opus 5.5",            "provider": "subscription"},
