@@ -773,6 +773,20 @@ def create_config_router(db):
                 return True
             return False if out.strip() else None
 
+        def copilot_other_auth() -> bool:
+            # Copilot CLI also authenticates with a token env var or a gh login and then
+            # may write a config without lastLoggedInUser; only existence is checked.
+            if any(os.environ.get(k) for k in ("GH_TOKEN", "GITHUB_TOKEN", "COPILOT_GITHUB_TOKEN")):
+                return True
+            if os.environ.get("GH_CONFIG_DIR"):
+                gh_dir = os.environ["GH_CONFIG_DIR"]
+            elif os.name == "nt":
+                gh_dir = os.path.join(os.environ.get("APPDATA") or "", "GitHub CLI")
+            else:
+                gh_dir = os.path.join(os.environ.get("XDG_CONFIG_HOME")
+                                      or os.path.expanduser(os.path.join("~", ".config")), "gh")
+            return os.path.isfile(os.path.join(gh_dir, "hosts.yml"))
+
         def copilot_login() -> bool | None:
             # Login durumu config dosyasında — spawn'sız, anlık.
             import json as _json
@@ -780,18 +794,14 @@ def create_config_router(db):
                 p = os.path.expanduser(os.path.join("~", ".copilot", "config.json"))
                 with open(p, "r", encoding="utf-8") as f:
                     txt = "\n".join(l for l in f.read().splitlines() if not l.strip().startswith("//"))
-                return bool((_json.loads(txt) or {}).get("lastLoggedInUser"))
+                if (_json.loads(txt) or {}).get("lastLoggedInUser"):
+                    return True
             except FileNotFoundError:
-                # No config yet: signed out, unless a token env var or a gh login
-                # (which Copilot CLI also accepts) may be authenticating it.
-                if any(os.environ.get(k) for k in ("GH_TOKEN", "GITHUB_TOKEN", "COPILOT_GITHUB_TOKEN")):
-                    return None
-                gh_dir = os.environ.get("GH_CONFIG_DIR") or (
-                    os.path.join(os.environ.get("APPDATA") or "", "GitHub CLI") if os.name == "nt"
-                    else os.path.expanduser(os.path.join("~", ".config", "gh")))
-                return None if os.path.isfile(os.path.join(gh_dir, "hosts.yml")) else False
+                pass
             except Exception:
                 return None
+            # No recorded login: signed out only when no other sign-in route exists.
+            return None if copilot_other_auth() else False
 
         data = {cli: {"installed": installed, "loggedIn": None}
                 for cli, installed in installed_clis(_resolve_general_cli).items()}
