@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
-from mcp.types import CallToolResult, TextContent
+from mcp.types import CallToolResult, ImageContent, TextContent
 
 from computer_use.driver_client import DriverClient, DriverError, DriverUnavailable
 from computer_use.server import ComputerServer, create_server
@@ -1316,10 +1316,12 @@ MISSING_PERMISSION_TEXT = (
     "Screen & System Audio Recording, then restart Gamachine.")
 
 
-def _capture_failure_result(fake, monkeypatch, preflight, tool="computer_window_state"):
+def _capture_failure_result(fake, monkeypatch, preflight, tool="computer_window_state", driver_result=None,
+                            extra_args=None):
     driver, _, _ = fake
     real_call = driver.call
-    failure = CallToolResult(content=[TextContent(type="text", text="capture already in flight")], is_error=True)
+    failure = driver_result or CallToolResult(
+        content=[TextContent(type="text", text="capture already in flight")], is_error=True)
 
     async def call(driver_tool, args):
         return failure if driver_tool in {"get_window_state", "zoom"} else await real_call(driver_tool, args)
@@ -1327,7 +1329,7 @@ def _capture_failure_result(fake, monkeypatch, preflight, tool="computer_window_
     monkeypatch.setattr(driver, "call", call)
     monkeypatch.setattr(sys, "platform", "darwin")
     monkeypatch.setattr(macos, "_cg_preflight_screen_capture", preflight)
-    args = {"pid": 4242, "window_id": 7}
+    args = {"pid": 4242, "window_id": 7, **(extra_args or {})}
     if tool == "computer_zoom":
         args.update(x1=0, y1=0, x2=10, y2=10)
 
@@ -1356,6 +1358,36 @@ def test_capture_failure_keeps_driver_error_when_preflight_raises(fake, monkeypa
         raise OSError("no CoreGraphics")
     result = _capture_failure_result(fake, monkeypatch, broken)
     assert result.is_error is True and result.content[0].text == "capture already in flight"
+
+
+TREE_ONLY = CallToolResult(content=[TextContent(type="text", text="tree: 0 elements; capture failed")])
+
+
+def test_imageless_result_without_grant_keeps_tree_and_appends_permission_text(fake, monkeypatch):
+    result = _capture_failure_result(fake, monkeypatch, lambda: False, driver_result=TREE_ONLY)
+    assert not result.is_error
+    assert [block.text for block in result.content] == ["tree: 0 elements; capture failed", MISSING_PERMISSION_TEXT]
+
+
+def test_imageless_result_with_grant_is_unchanged(fake, monkeypatch):
+    result = _capture_failure_result(fake, monkeypatch, lambda: True, driver_result=TREE_ONLY)
+    assert not result.is_error and [block.text for block in result.content] == ["tree: 0 elements; capture failed"]
+
+
+def test_result_with_image_never_asks_the_preflight(fake, monkeypatch):
+    asked = []
+    imaged = CallToolResult(content=[TextContent(type="text", text="snapshot"),
+                                     ImageContent(type="image", mime_type="image/png", data="aGVsbG8=")])
+    result = _capture_failure_result(fake, monkeypatch, lambda: asked.append(1) or False, driver_result=imaged)
+    assert not result.is_error and len(result.content) == 2 and asked == []
+
+
+def test_screenshot_not_requested_never_asks_the_preflight(fake, monkeypatch):
+    asked = []
+    result = _capture_failure_result(fake, monkeypatch, lambda: asked.append(1) or False, driver_result=TREE_ONLY,
+                                     extra_args={"include_screenshot": False})
+    assert not result.is_error and [block.text for block in result.content] == ["tree: 0 elements; capture failed"]
+    assert asked == []
 
 
 def test_screen_recording_check_is_never_asked_off_macos(monkeypatch):

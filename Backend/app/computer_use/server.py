@@ -11,7 +11,7 @@ import re
 
 import httpx
 from mcp.server.mcpserver import MCPServer
-from mcp.types import CallToolResult, TextContent
+from mcp.types import CallToolResult, ImageContent, TextContent
 
 from spawn_env import read_only_refusal
 from unity_ai_mcp import approval_bridge
@@ -26,6 +26,14 @@ SCREEN_RECORDING_MISSING = (
     "Screen Recording permission is missing for Gamachine. Grant it in System Settings > Privacy & Security > "
     "Screen & System Audio Recording, then restart Gamachine.")
 _CAPTURE_TOOLS = frozenset({"computer_window_state", "computer_zoom"})
+
+def _capture_failed(tool, args, result) -> bool:
+    if result.is_error is True:
+        return True
+    if tool == "computer_window_state" and args.get("include_screenshot") is False:
+        return False
+    return not any(isinstance(block, ImageContent) for block in result.content)
+
 
 UNVERIFIED_REASON = "Durdurma durumu doğrulanamadı; işlem çalıştırılmadı."
 
@@ -698,8 +706,12 @@ class ComputerServer:
                 if refusal is not None:
                     return _text(refusal, True)
                 result = await driver.call(validated.driver_tool, forward_args)
-            if tool in _CAPTURE_TOOLS and result.is_error is True and macos.screen_recording_missing():
-                return _text(SCREEN_RECORDING_MISSING, True)
+            if tool in _CAPTURE_TOOLS and _capture_failed(tool, args, result) and macos.screen_recording_missing():
+                if result.is_error is True:
+                    return _text(SCREEN_RECORDING_MISSING, True)
+                # The driver may report a failed capture as a normal result; keep the tree it did return.
+                result = result.model_copy(update={
+                    "content": [*result.content, TextContent(type="text", text=SCREEN_RECORDING_MISSING)]})
             if tool in {"computer_window_state", "computer_run_steps"}:
                 self._cache_snapshot(result, args)
             if tool == "computer_window_state":
