@@ -880,10 +880,13 @@ class UnityMCPManager:
         stopped_pid = self.process.pid if self.process else None
         killed_pids: list = []
         if self.process:
+            from process_tree import note_kill
+            note_kill("unity_mcp_manager.stop_server.terminate", [stopped_pid])
             self.process.terminate()
             try:
                 self.process.wait(timeout=5)
             except subprocess.TimeoutExpired:
+                note_kill("unity_mcp_manager.stop_server.kill", [stopped_pid])
                 self.process.kill()
             self.process = None
 

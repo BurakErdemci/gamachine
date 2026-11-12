@@ -252,6 +252,8 @@ def collect_owned_listeners(
 
 def _terminate(pid: int) -> bool:
     """Tek bir PID'i durdurur. Süreç çoktan gitmişse de True (hedefe ulaşıldı)."""
+    from process_tree import note_kill
+    note_kill("mcp_port_guard._terminate", [pid])
     if sys.platform == "win32":
         # /T: uvx ara süreci ile asıl dinleyici ayrı PID'ler; ağacı birlikte kapat.
         return _run(["taskkill", "/PID", str(pid), "/T", "/F"]) is not None
