@@ -4,6 +4,7 @@ Owner's measurement, 12 Nov 2026: nine idle agy chats kept 155 descendant
 processes (~3 GB) alive for hours. The fake child below stands in for agy.
 """
 import asyncio
+import inspect
 import time
 from unittest.mock import patch
 
@@ -124,6 +125,98 @@ class TestIdleStop(_Harness):
         self.assertFalse(BaseCLIProvider._AGY_LOCK.locked())
 
 
+class _Clock:
+    """Stands in for agy_session's `time` module with a settable monotonic()."""
+
+    def __init__(self, value):
+        self.value = value
+
+    def monotonic(self):
+        return self.value
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+
+class TestIdleStopRaces(_Harness):
+    async def wait_until(self, predicate):
+        for _ in range(500):
+            if predicate():
+                return
+            await asyncio.sleep(0.01)
+        self.fail("condition never became true")
+
+    async def test_a_long_turn_that_just_ended_counts_as_recent_use(self):
+        session = await self.live_session()
+        clock = _Clock(1000.0)
+        release = asyncio.Event()
+        with patch.object(agy_session, "time", clock):
+            session._last_used = clock.value
+            # The live child's next drain blocks until released.
+            self.processes[0].release = release
+            task = asyncio.create_task(self.collect(session, "long turn"))
+            await self.wait_until(lambda: self.processes[0].stdin.drains == 2)
+            clock.value += 2000  # the turn runs far longer than the idle limit
+            release.set()
+            await task
+            stopped = await agy_session.stop_idle_children(now=clock.value + 1)
+        self.assertEqual(stopped, [])
+        self.assertTrue(session.is_live)
+
+    async def test_a_turn_waiting_for_the_lock_counts_as_recent_use(self):
+        session = await self.live_session()
+        clock = _Clock(1000.0)
+        await BaseCLIProvider._AGY_LOCK.acquire()
+        with patch.object(agy_session, "time", clock):
+            session._last_used = 0
+            task = asyncio.create_task(self.collect(session, "queued"))
+            await self.wait_until(lambda: session._last_used == clock.value)
+        BaseCLIProvider._AGY_LOCK.release()
+        await task
+
+    async def test_a_turn_arriving_during_a_sweep_waits_then_respawns_its_child(self):
+        session = await self.live_session()
+        in_stop = asyncio.Event()
+        gate = asyncio.Event()
+        original = agy_session.AgyStreamSession._stop_process
+
+        async def slow_stop(this, *, force=False):
+            in_stop.set()
+            await gate.wait()
+            await original(this, force=force)
+
+        with patch.object(agy_session.AgyStreamSession, "_stop_process", slow_stop):
+            sweep = asyncio.create_task(
+                agy_session.stop_idle_children(now=session._last_used + 901))
+            await in_stop.wait()
+            turn = asyncio.create_task(self.collect(session, "arrives mid-sweep"))
+            for _ in range(20):
+                await asyncio.sleep(0.01)
+            self.assertFalse(turn.done())
+            self.assertEqual(len(self.processes), 1)
+            gate.set()
+            self.assertEqual(await sweep, [11])
+            events = await turn
+        self.assertEqual(events[-1]["type"], "done")
+        self.assertEqual(len(self.processes), 2)
+        self.assertTrue(session.is_live)
+
+    async def test_a_child_that_survives_the_kill_is_not_reported_stopped(self):
+        session = await self.live_session()
+
+        async def failed_kill(process, *args, **kwargs):
+            return False
+
+        with patch.object(agy_session.process_tree, "end_tree", side_effect=failed_kill):
+            with self.assertLogs(agy_session.logger, level="WARNING") as logs:
+                stopped = await agy_session.stop_idle_children(now=session._last_used + 901)
+        self.assertEqual(stopped, [])
+        self.assertIsNone(self.processes[0].returncode)
+        self.assertTrue(any("idle stop could not end the child conv=11" in line
+                            for line in logs.output))
+        self.assertFalse(BaseCLIProvider._AGY_LOCK.locked())
+
+
 class TestIdleStopLoop(_Harness):
     async def test_the_loop_sweeps_each_interval_and_survives_a_failure(self):
         calls = []
@@ -154,3 +247,25 @@ class TestIdleStopLoop(_Harness):
         self.assertLess(start, lifespan.index("    yield\n"))
         cancel = lifespan.index("agy_idle_stopper.cancel()")
         self.assertLess(cancel, lifespan.index("_close_agy_all()"))
+
+    def test_the_loop_sweeps_every_60_seconds_by_default(self):
+        default = inspect.signature(agy_session.idle_stop_loop).parameters["interval"].default
+        self.assertEqual(default, 60)
+
+    async def test_cancelling_the_loop_mid_stop_releases_the_turn_lock(self):
+        session = await self.live_session()
+        session._last_used = -10_000
+        in_stop = asyncio.Event()
+
+        async def hanging_stop(this, *, force=False):
+            in_stop.set()
+            await asyncio.Event().wait()
+
+        with patch.object(agy_session.AgyStreamSession, "_stop_process", hanging_stop):
+            task = asyncio.create_task(agy_session.idle_stop_loop(interval=0.01))
+            await asyncio.wait_for(in_stop.wait(), timeout=5)
+            self.assertTrue(BaseCLIProvider._AGY_LOCK.locked())
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+        self.assertFalse(BaseCLIProvider._AGY_LOCK.locked())

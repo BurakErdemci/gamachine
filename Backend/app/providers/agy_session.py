@@ -1247,7 +1247,6 @@ class AgyStreamSession(SaglayiciSahipligi):
                     yield _redact_event(_STARTED_EVENT)
                 started = loop.time()
                 turn_started = True
-                self._last_used = time.monotonic()
                 workspace = os.path.abspath(cwd or self.cwd)
                 if not side and self.conversation_id >= 0:
                     replay_record = take_quota_replay(replay_key)
@@ -1549,11 +1548,18 @@ async def stop_idle_children(now: Optional[float] = None) -> list:
             if (conversation_id < 0 or session._kapandi or not session.is_live
                     or idle < _AGY_IDLE_STOP_S):
                 continue
-            pid = getattr(session._active_process, "pid", None)
+            process = session._active_process
+            pid = getattr(process, "pid", None)
             try:
                 await session._stop_process(force=True)
             except Exception:
                 logger.exception("[agy] idle stop failed conv=%s pid=%s", conversation_id, pid)
+                continue
+            if process is not None and process.returncode is None:
+                # _reap_process has already dropped the reference, so the next
+                # turn would spawn a second child next to this live one.
+                logger.warning("[agy] idle stop could not end the child conv=%s pid=%s",
+                               conversation_id, pid)
                 continue
             stopped.append(conversation_id)
             logger.info("[agy] idle child stopped conv=%s pid=%s idle=%.0f min",
