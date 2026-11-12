@@ -107,6 +107,10 @@ def title_model_for(provider_type: str, model_name: str) -> TitleModel:
         luna = CODEX_TITLE_MODEL_GPT6 if low.startswith("gpt-6") else CODEX_TITLE_MODEL
         return TitleModel("codex", luna, "low", "Codex: Luna tier, low effort")
     if low.startswith(("gemini", "agy-")):
+        if sys.platform != "win32":
+            return TitleModel("", AGY_TITLE_MODEL, "low",
+                              "agy: not run off Windows (an empty home signs agy out; the real "
+                              "home loads the user's MCP servers and hooks; measured 12 Nov 2026)")
         return TitleModel("agy", AGY_TITLE_MODEL, "low",
                           "agy: Gemini 3.8 Flash Low, tool-less agent, empty home")
     if low.startswith("opencode:"):
@@ -513,7 +517,8 @@ def _refuse_shell(spawn: List[str], cli: str) -> List[str]:
 # file under the real ~/.gemini changed, and the login still worked (measured
 # on Windows). On macOS/Linux agy keeps its login under $HOME/.gemini, so an
 # empty home signs it out and opens a browser sign-in (measured 12 Nov 2026 on
-# macOS); there the real home is kept and the global MCP servers may start.
+# macOS), so agy runs titles on Windows only and the empty home below is
+# always used. Off Windows no agy title is run (see title_model_for).
 # The user's always-proceed setting, rules and skills are not loaded that way
 # either. --model/--effort gave the right title 2/2 with --agent and
 # --disable-slash-commands (the 24 Jul "--model derails agy" note in
@@ -580,20 +585,15 @@ async def _run_agy(choice: TitleModel, prompt: str, ctx: RunContext) -> str:
     proc = None
     try:
         work = tempfile.mkdtemp(prefix=SCRATCH_PREFIX)
-        # Windows only, see the note above: elsewhere an empty home logs agy out.
-        if sys.platform == "win32":
-            home = tempfile.mkdtemp(prefix=SCRATCH_PREFIX + "home-")
+        home = tempfile.mkdtemp(prefix=SCRATCH_PREFIX + "home-")
         agent_dir = os.path.join(work, ".agents", "agents", AGY_AGENT_NAME)
         os.makedirs(agent_dir)
         with open(os.path.join(agent_dir, "agent.md"), "w", encoding="utf-8", newline="\n") as f:
             f.write(AGY_AGENT_FILE)
-        overrides = {"NO_COLOR": "1", **_updater_env()}
-        if home:
-            overrides.update(HOME=home, USERPROFILE=home)
-        env = build_spawn_env(family="agy", overrides=overrides)
-        if home:
-            # Would point agy back at the real config and undo the empty home.
-            env.pop("GEMINI_CONFIG_DIR", None)
+        env = build_spawn_env(family="agy", overrides={
+            "NO_COLOR": "1", **_updater_env(), "HOME": home, "USERPROFILE": home})
+        # Would point agy back at the real config and undo the empty home.
+        env.pop("GEMINI_CONFIG_DIR", None)
         proc = await asyncio.create_subprocess_exec(
             *spawn, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE, env=env, cwd=work,
