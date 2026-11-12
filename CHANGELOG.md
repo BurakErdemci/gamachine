@@ -30,7 +30,14 @@ click it again to stop; the text goes into the box and is never sent for you.
   new Settings switch "Detect language automatically" detects it instead, at about
   twice the wait.
 - The installer is larger (about 1.3 GB) because the recogniser ships inside it, so
-  nothing is downloaded when you first use it. macOS does not have dictation yet.
+  nothing is downloaded when you first use it.
+
+### Dictation on Mac
+The Mac app now has dictation too, using the same recogniser on the Mac's graphics
+chip (Apple silicon, macOS 13.3 or newer). The words appear while you speak and the
+final text is ready a second or two after you stop. The very first dictation after
+installing or updating waits about 20 seconds while macOS prepares the graphics
+code once; after that it starts in under a second.
 
 ### "Compiled clean" now means it compiled
 
