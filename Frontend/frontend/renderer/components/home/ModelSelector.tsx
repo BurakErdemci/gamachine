@@ -521,6 +521,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         aria-haspopup="dialog"
         aria-expanded={isModelDropdownOpen}
         data-testid="model-pick"
+        title={chipName}
         onClick={() => {
           const opening = !isModelDropdownOpen;
           setIsModelDropdownOpen(opening);

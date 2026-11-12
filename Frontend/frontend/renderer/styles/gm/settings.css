@@ -87,6 +87,10 @@
 .model-pick .model-text { min-width: 0; }
 /* the name is never case-transformed and never truncated (owner, 2 Oct) */
 .model-pick .model-name { text-transform: none; letter-spacing: .01em; font-size: 14px; white-space: nowrap; overflow: visible; text-overflow: clip; }
+/* In the top bar the name is its own shrinkable box: a long name ends in an ellipsis before the
+   meters (`.chip-use`, a flex sibling that never shrinks) instead of running underneath them (owner, 12 Nov). */
+.topbar .model-pick .model-text { flex: 0 1 auto; min-width: 0; }
+.topbar .model-pick .model-name { overflow: hidden; text-overflow: ellipsis; }
 .chip-use { display: grid; gap: 3px; width: 20px; margin-left: 2px; }
 .chip-use i { position: relative; display: block; height: 2px; background: var(--use-off); }
 .chip-use i::before { content: ""; position: absolute; inset: 0 auto 0 0; width: var(--u); background: var(--use-on); }
