@@ -426,9 +426,21 @@ async def test_codex_protocol_and_cleanup(monkeypatch, mode):
     assert killed == [proc]
 
 
+@pytest.mark.parametrize("platform", ["win32", "darwin"])
 @pytest.mark.parametrize("mode", ["ok", "exit", "invalid_json", "timeout"])
-async def test_agy_command_env_and_cleanup(monkeypatch, mode):
-    from providers import cli_base
+async def test_agy_command_env_and_cleanup(monkeypatch, mode, platform):
+    from providers import agy_session, cli_base
+    monkeypatch.setattr(ul, "sys", SimpleNamespace(platform=platform))
+    monkeypatch.setattr(agy_session, "_updater_env", lambda: {"UPDATER_SENTINEL": "1"})
+    made = []
+    real_mkdtemp = ul.tempfile.mkdtemp
+
+    def mkdtemp(*a, **kw):
+        path = real_mkdtemp(*a, **kw)
+        made.append(path)
+        return path
+
+    monkeypatch.setattr(ul.tempfile, "mkdtemp", mkdtemp)
     monkeypatch.setattr(ul, "_agy_binary", lambda: "fake-agy")
     monkeypatch.setattr(cli_base.BaseCLIProvider, "_resolve_exec", lambda args: args)
     monkeypatch.setattr(cli_base, "build_spawn_env",
@@ -451,11 +463,15 @@ async def test_agy_command_env_and_cleanup(monkeypatch, mode):
     async def spawn(*args, **kwargs):
         assert args == ("fake-agy", "-p", "/usage", "--output-format", "json")
         env = kwargs["env"]
-        # agy runs on an empty home, so it starts none of the user's MCP servers.
-        assert env["HOME"] == env["USERPROFILE"] != "real" and os.path.isdir(env["HOME"])
-        assert not os.listdir(env["HOME"]) and "GEMINI_CONFIG_DIR" not in env
-        if sys.platform == "win32":  # agy's self-updater would flash a console
-            assert env["AGY_CLI_DISABLE_AUTO_UPDATE"] == "true"
+        assert env["UPDATER_SENTINEL"] == "1"  # applied on every platform
+        if platform == "win32":
+            # agy runs on an empty home, so it starts none of the user's MCP servers.
+            assert env["HOME"] == env["USERPROFILE"] != "real" and os.path.isdir(env["HOME"])
+            assert not os.listdir(env["HOME"]) and "GEMINI_CONFIG_DIR" not in env
+        else:
+            # Elsewhere agy keeps its login under $HOME/.gemini: the real home stays.
+            assert env["HOME"] == "real" and "USERPROFILE" not in env
+            assert env["GEMINI_CONFIG_DIR"] == "real"
         homes.append(env["HOME"])
         return proc
 
@@ -471,7 +487,11 @@ async def test_agy_command_env_and_cleanup(monkeypatch, mode):
         with pytest.raises(expected):
             await ul.fetch_agy_usage()
     assert killed == [proc]
-    assert len(homes) == 1 and not os.path.exists(homes[0])  # the empty home is removed
+    assert len(homes) == 1
+    if platform == "win32":
+        assert made == homes and not os.path.exists(homes[0])  # the empty home is removed
+    else:
+        assert made == []  # no temp home is created
 
 
 @pytest.fixture

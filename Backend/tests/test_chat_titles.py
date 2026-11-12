@@ -7,6 +7,7 @@ import sqlite3
 import sys
 import unicodedata
 from collections import defaultdict
+from types import SimpleNamespace
 
 import pytest
 from cryptography.fernet import Fernet
@@ -775,7 +776,12 @@ def _agy_answer(text="Zıplama Mekaniği Ayarı"):
 PROMPT = ct.build_title_prompt('User: "/help" && del *\nAssistant: tamam')
 
 
-def test_agy_runner_argv_env_agent_file_and_cleanup(fake_agy, monkeypatch):
+@pytest.mark.parametrize("platform", ["win32", "darwin"])
+def test_agy_runner_argv_env_agent_file_and_cleanup(fake_agy, monkeypatch, platform):
+    from providers import agy_session
+    monkeypatch.setattr(ct, "sys", SimpleNamespace(platform=platform))
+    monkeypatch.setattr(agy_session, "_updater_env", lambda: {"UPDATER_SENTINEL": "1"})
+    monkeypatch.setenv("HOME", "/real/home")
     seen = {}
 
     def on_spawn(argv, kw):
@@ -783,7 +789,7 @@ def test_agy_runner_argv_env_agent_file_and_cleanup(fake_agy, monkeypatch):
         seen["agent"] = open(os.path.join(cwd, ".agents", "agents", "titler", "agent.md"),
                              encoding="utf-8").read()
         seen["cwd_listing"] = sorted(os.listdir(cwd))
-        seen["home_listing"] = os.listdir(home)
+        seen["home_listing"] = os.listdir(home) if platform == "win32" else None
 
     spawner = _Spawner(_FakeProc(_agy_answer()), on_spawn=on_spawn)
     monkeypatch.setattr(asyncio, "create_subprocess_exec", spawner)
@@ -798,17 +804,22 @@ def test_agy_runner_argv_env_agent_file_and_cleanup(fake_agy, monkeypatch):
     # The whole prompt is one element; no shell sits in front of agy.
     assert sum(PROMPT in a for a in argv) == 1 and argv[0] != "cmd"
     env = kw["env"]
-    assert env["HOME"] == env["USERPROFILE"] == kw["env"]["HOME"]
-    assert env["HOME"] != kw["cwd"] and seen["home_listing"] == []
-    assert "GEMINI_CONFIG_DIR" not in env
+    assert env["UPDATER_SENTINEL"] == "1"  # applied on every platform
+    if platform == "win32":
+        assert env["HOME"] == env["USERPROFILE"] != "/real/home"
+        assert env["HOME"] != kw["cwd"] and seen["home_listing"] == []
+        assert "GEMINI_CONFIG_DIR" not in env
+    else:
+        # agy keeps its login under $HOME/.gemini, so the real home stays.
+        assert env["HOME"] == "/real/home" and "USERPROFILE" not in env
+        assert env["GEMINI_CONFIG_DIR"] == "C:/real/gemini"
     assert "LOCAL_APP_TOKEN" not in env and "API_KEY_ENCRYPTION_KEY" not in env
-    if sys.platform == "win32":
-        assert env["AGY_CLI_DISABLE_AUTO_UPDATE"] == "true"
     assert kw["stdin"] == asyncio.subprocess.DEVNULL
     assert seen["cwd_listing"] == [".agents"]
     assert seen["agent"] == ("---\nname: titler\ndescription: Writes a short chat title. Uses no tools.\n"
                              "tools: []\n---\nYou write short chat titles. Reply with the title only.\n")
-    assert len(fake_agy) == 2 and not any(os.path.exists(d) for d in fake_agy)
+    assert len(fake_agy) == (2 if platform == "win32" else 1)  # the empty home only on Windows
+    assert not any(os.path.exists(d) for d in fake_agy)
 
 
 def test_agy_chat_gets_its_title_after_the_first_reply(db, fake_agy, monkeypatch):
@@ -839,6 +850,7 @@ def test_agy_runner_does_not_wait_for_the_agy_turn_lock(fake_agy, monkeypatch):
 
 
 def test_agy_timeout_kills_the_tree_and_removes_both_dirs(fake_agy, monkeypatch):
+    monkeypatch.setattr(ct, "sys", SimpleNamespace(platform="win32"))  # the empty home exists on Windows only
     proc = _FakeProc(hang=True)
     killed = []
 
@@ -860,6 +872,7 @@ def test_agy_timeout_kills_the_tree_and_removes_both_dirs(fake_agy, monkeypatch)
 
 
 def test_agy_spawn_failure_still_removes_both_dirs(fake_agy, monkeypatch):
+    monkeypatch.setattr(ct, "sys", SimpleNamespace(platform="win32"))  # the empty home exists on Windows only
     monkeypatch.setattr(asyncio, "create_subprocess_exec", _Spawner(OSError("no agy")))
     choice = ct.title_model_for("subscription", "gemini-3.8-flash")
     with pytest.raises(OSError):

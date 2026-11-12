@@ -510,8 +510,11 @@ def _refuse_shell(spawn: List[str], cli: str) -> List[str]:
 # with the real home agy started the global MCP servers of
 # ~/.gemini/config/mcp_config.json although the agent declares `tools: []`;
 # with HOME and USERPROFILE on an empty folder no MCP process started, no
-# file under the real ~/.gemini changed, and the login still worked. The
-# user's always-proceed setting, rules and skills are not loaded that way
+# file under the real ~/.gemini changed, and the login still worked (measured
+# on Windows). On macOS/Linux agy keeps its login under $HOME/.gemini, so an
+# empty home signs it out and opens a browser sign-in (measured 12 Nov 2026 on
+# macOS); there the real home is kept and the global MCP servers may start.
+# The user's always-proceed setting, rules and skills are not loaded that way
 # either. --model/--effort gave the right title 2/2 with --agent and
 # --disable-slash-commands (the 24 Jul "--model derails agy" note in
 # cli_base predates 1.2.11).
@@ -577,15 +580,20 @@ async def _run_agy(choice: TitleModel, prompt: str, ctx: RunContext) -> str:
     proc = None
     try:
         work = tempfile.mkdtemp(prefix=SCRATCH_PREFIX)
-        home = tempfile.mkdtemp(prefix=SCRATCH_PREFIX + "home-")
+        # Windows only, see the note above: elsewhere an empty home logs agy out.
+        if sys.platform == "win32":
+            home = tempfile.mkdtemp(prefix=SCRATCH_PREFIX + "home-")
         agent_dir = os.path.join(work, ".agents", "agents", AGY_AGENT_NAME)
         os.makedirs(agent_dir)
         with open(os.path.join(agent_dir, "agent.md"), "w", encoding="utf-8", newline="\n") as f:
             f.write(AGY_AGENT_FILE)
-        env = build_spawn_env(family="agy", overrides={
-            "NO_COLOR": "1", **_updater_env(), "HOME": home, "USERPROFILE": home})
-        # Would point agy back at the real config and undo the empty home.
-        env.pop("GEMINI_CONFIG_DIR", None)
+        overrides = {"NO_COLOR": "1", **_updater_env()}
+        if home:
+            overrides.update(HOME=home, USERPROFILE=home)
+        env = build_spawn_env(family="agy", overrides=overrides)
+        if home:
+            # Would point agy back at the real config and undo the empty home.
+            env.pop("GEMINI_CONFIG_DIR", None)
         proc = await asyncio.create_subprocess_exec(
             *spawn, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE, env=env, cwd=work,

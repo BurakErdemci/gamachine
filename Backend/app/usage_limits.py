@@ -9,6 +9,7 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 from datetime import datetime, timedelta, timezone
@@ -389,19 +390,23 @@ async def fetch_agy_usage():
     from providers.cli_base import BaseCLIProvider, build_spawn_env
     binary = _agy_binary()
     proc = None
-    # An empty home: with the real one agy starts every MCP server of
-    # ~/.gemini/config/mcp_config.json through cmd.exe, and on Windows 11 one of
-    # those consoles now and then surfaced as a flashing terminal (measured
+    # Windows only: an empty home. With the real one agy starts every MCP server
+    # of ~/.gemini/config/mcp_config.json through cmd.exe, and on Windows 11 one
+    # of those consoles now and then surfaced as a flashing terminal (measured
     # 7 Nov 2026: the window 0.6 s after a usage run; with an empty home the
     # usage came back complete and no cmd.exe started). Same trick as titles.
-    home = tempfile.mkdtemp(prefix="gamachine-agy-usage-")
+    # On macOS/Linux agy keeps its login under $HOME/.gemini, so an empty home
+    # signs it out and opens a browser sign-in (measured 12 Nov 2026 on macOS).
+    home = tempfile.mkdtemp(prefix="gamachine-agy-usage-") if sys.platform == "win32" else None
     from providers.agy_session import _updater_env
 
     env = build_spawn_env(family="agy")
     # agy's self-updater spawns a visible `agy --version` console at most every
     # 15 min (measured again 7 Nov 2026: windows at 23:17:58 and 23:33:03).
-    env.update(HOME=home, USERPROFILE=home, **_updater_env())
-    env.pop("GEMINI_CONFIG_DIR", None)  # would point agy back at the real config
+    env.update(_updater_env())
+    if home:
+        env.update(HOME=home, USERPROFILE=home)
+        env.pop("GEMINI_CONFIG_DIR", None)  # would point agy back at the real config
     try:
         async with asyncio.timeout(FETCH_TIMEOUT_S):
             proc = await asyncio.create_subprocess_exec(
@@ -416,7 +421,8 @@ async def fetch_agy_usage():
             return parse_agy_usage(json.loads(stdout))
     finally:
         await _kill_probe(proc)
-        shutil.rmtree(home, ignore_errors=True)
+        if home:
+            shutil.rmtree(home, ignore_errors=True)
 
 
 class UsageService:
