@@ -8,12 +8,13 @@
  * nothing calls the script — `vendor/bin` once shipped empty for a month that
  * way. This hook is the caller.
  *
- * NOT BEST EFFORT on Windows: the product rule (docs/architecture.md) is that
- * the installer carries everything a feature needs, so an installer without
- * the engine is a broken build, not a degraded one. GAMACHINE_ALLOW_NO_DICTATION=1
- * is the explicit escape hatch for a local package without the toolchain.
- * macOS/Linux: the Metal/other builds are not implemented yet (docs/building.md);
- * those packages ship without dictation and the mic button says the files are missing.
+ * NOT BEST EFFORT on Windows or macOS: the product rule (docs/architecture.md)
+ * is that the installer carries everything a feature needs, so an installer
+ * without the engine is a broken build, not a degraded one.
+ * GAMACHINE_ALLOW_NO_DICTATION=1 is the explicit escape hatch for a local
+ * package without the toolchain. Windows builds with build_whisper.ps1 (Vulkan),
+ * macOS with build_whisper.sh (Metal). Linux has no engine build yet; that
+ * package ships without dictation and the mic button says the files are missing.
  *
  * ⚠️ `pwsh` IS NOT ASSUMED: PowerShell 7 is not installed on the owner's
  * machine (measured 30 Aug 2026), so Windows' own `powershell` is the fallback.
@@ -26,8 +27,8 @@ const crypto = require('node:crypto');
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
 const vendorDir = path.join(repoRoot, 'Backend', 'vendor');
 const OUT_DIR = path.join(vendorDir, 'whisper');
-const STAMP = path.join(OUT_DIR, '.built');
 const SCRIPT = path.join(vendorDir, 'build_whisper.ps1');
+const SH_SCRIPT = path.join(vendorDir, 'build_whisper.sh');
 const MODEL_KEY = 'whisper-model/large-v3-turbo-q8_0';
 
 // The commit lives in the build script only; reading it from there keeps one
@@ -64,17 +65,17 @@ function sha256(file) {
  * to a matching stamp and be skipped (the audit finding on fetch-video-bins.js,
  * 30 Aug 2026).
  */
-function alreadyCurrent(header) {
+function alreadyCurrent(header, outDir) {
   if (!header) return false;
   try {
-    const lines = fs.readFileSync(STAMP, 'utf8').trim().split(/\r?\n/);
+    const lines = fs.readFileSync(path.join(outDir, '.built'), 'utf8').trim().split(/\r?\n/);
     if (lines[0].trim() !== header) return false;
     const files = lines.slice(1).filter(Boolean);
     if (!files.some(l => l.startsWith('bin/whisper-server')) || !files.some(l => l.startsWith('models/'))) return false;
     return files.every(line => {
       const m = /^(\S+) sha256:([0-9a-f]{64})$/.exec(line.trim());
       if (!m) return false;
-      const file = path.join(OUT_DIR, ...m[1].split('/'));
+      const file = path.join(outDir, ...m[1].split('/'));
       return fs.existsSync(file) && sha256(file) === m[2];
     });
   } catch {
@@ -82,9 +83,13 @@ function alreadyCurrent(header) {
   }
 }
 
-function runBuild() {
+function runBuild(platform, spawn) {
+  if (platform === 'darwin') {
+    const r = spawn('bash', [SH_SCRIPT], { stdio: 'inherit', cwd: repoRoot });
+    return !r.error && r.status === 0;
+  }
   for (const shell of ['pwsh', 'powershell']) {
-    const r = spawnSync(shell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', SCRIPT],
+    const r = spawn(shell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', SCRIPT],
       { stdio: 'inherit', cwd: repoRoot });
     if (r.error) continue;               // shell absent → try the next one
     return r.status === 0;
@@ -93,24 +98,31 @@ function runBuild() {
   return false;
 }
 
-function main() {
-  if (process.platform !== 'win32') {
+/** Returns the exit code. Options exist for tests: the platform, the
+ * environment, the build launcher and the engine folder. */
+function fetchWhisper({
+  platform = process.platform,
+  env = process.env,
+  spawn = spawnSync,
+  outDir = OUT_DIR,
+} = {}) {
+  if (platform !== 'win32' && platform !== 'darwin') {
     console.warn(
-      '[fetch-whisper] WARNING: the dictation engine is only built for Windows so far\n' +
-      '  (the Metal build for macOS is described in docs/building.md, not implemented).\n' +
-      '  This package ships WITHOUT dictation; the mic button reports the files as missing.');
+      '[fetch-whisper] WARNING: no dictation engine build for this platform yet\n' +
+      '  (Windows and macOS only; docs/building.md). This package ships WITHOUT\n' +
+      '  dictation; the mic button reports the files as missing.');
     return 0;
   }
   const header = expectedHeader();
-  if (alreadyCurrent(header)) {
+  if (alreadyCurrent(header, outDir)) {
     console.log('[fetch-whisper] engine already built at the pinned commit and model — skipped.');
     return 0;
   }
-  if (runBuild() && alreadyCurrent(header)) return 0;
+  if (runBuild(platform, spawn) && alreadyCurrent(header, outDir)) return 0;
   const msg =
     '[fetch-whisper] the dictation engine could not be built or verified.\n' +
     '  See docs/building.md ("Dictation engine") for the toolchain it needs.';
-  if (process.env.GAMACHINE_ALLOW_NO_DICTATION === '1') {
+  if (env.GAMACHINE_ALLOW_NO_DICTATION === '1') {
     console.warn(`${msg}\n  GAMACHINE_ALLOW_NO_DICTATION=1 → packaging WITHOUT dictation.`);
     return 0;
   }
@@ -118,4 +130,5 @@ function main() {
   return 1;
 }
 
-process.exit(main());
+module.exports = { fetchWhisper };
+if (require.main === module) process.exit(fetchWhisper());

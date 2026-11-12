@@ -102,7 +102,8 @@ extraResources:
   # them under _internal/, but the frozen backend resolves `<exe dir>/../whisper` —
   # backend.exe lives in <app>/resources/Backend/, so that path is this target.
   # Git-ignored; the prebuild hook scripts/fetch-whisper.js builds and places them
-  # (Backend/vendor/build_whisper.ps1). On Windows a missing engine fails the build:
+  # (Backend/vendor/build_whisper.ps1 / build_whisper.sh). On Windows and macOS a
+  # missing engine fails the build:
   # the product rule is that the installer carries everything a feature needs.
   - from: ../../Backend/vendor/whisper
     to: whisper
