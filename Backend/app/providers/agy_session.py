@@ -3,9 +3,13 @@ import asyncio
 import json
 import logging
 import os
+import re
+import subprocess
 import sys
+import time
 import process_tree
 from collections.abc import Hashable, Mapping
+from datetime import datetime, timedelta
 from typing import AsyncGenerator, Dict, Optional
 
 from agy_step_gate import SIDE_MODE
@@ -50,6 +54,186 @@ _SIDE_STOP_MESSAGES = {
 def side_stop_message(code: str, language: str = "tr") -> str:
     texts = _SIDE_STOP_MESSAGES[code]
     return texts["en"] if language == "en" else texts["tr"]
+
+
+class _AgyIdleLimit(Exception):
+    """No child output for BaseCLIProvider._AGY_IDLE_LIMIT seconds."""
+
+
+# Quota exhaustion as agy reports it (owner, 12 Nov 2026): "Individual quota
+# reached ... AGY_ERROR: {"short_error":"RESOURCE_EXHAUSTED (code 429) ...}",
+# once in the result error and again in stderr, so the user saw it three times.
+_QUOTA_PATTERN = re.compile(
+    r"resource_exhausted|quota (?:reached|exceeded|exhausted)|\(code 429\)", re.IGNORECASE)
+_RESET_PATTERN = re.compile(r"resets?\s+in\s+((?:\d+\s*[dhms]\s*)+)", re.IGNORECASE)
+_RESET_UNITS = {"d": 86400, "h": 3600, "m": 60, "s": 1}
+_MONTHS_EN = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+              "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+_CHANGED_FILES_SHOWN = 15
+_GIT_TIMEOUT_S = 10
+
+
+def _say(language: str, tr: str, en: str) -> str:
+    return en if language == "en" else tr
+
+
+def _span(seconds: float, language: str) -> str:
+    """119h46m43s -> "119 sa 46 dk" / "119 h 46 min" (seconds dropped)."""
+    seconds = int(seconds)
+    days, rest = divmod(seconds, 86400)
+    hours, rest = divmod(rest, 3600)
+    minutes = rest // 60
+    units = (("gün", "d"), ("sa", "h"), ("dk", "min"))
+    parts = [f"{value} {_say(language, *unit)}"
+             for value, unit in zip((days, hours, minutes), units) if value]
+    if days:
+        parts = parts[:2]
+    return " ".join(parts) or _say(language, "1 dakikadan az", "under a minute")
+
+
+def quota_info(text: str) -> Optional[dict]:
+    """Parse an agy quota failure; None when the text is not one."""
+    if not text or not _QUOTA_PATTERN.search(text):
+        return None
+    info = {"individual": "individual quota" in text.lower(), "reset_seconds": None}
+    match = _RESET_PATTERN.search(text)
+    if match:
+        info["reset_seconds"] = sum(int(n) * _RESET_UNITS[u.lower()] for n, u in
+                                    re.findall(r"(\d+)\s*([dhmsDHMS])", match.group(1)))
+    return info
+
+
+def quota_message(info: dict, model: str, language: str, now: Optional[datetime] = None) -> str:
+    """One clean line: which quota, when it resets, and the way on."""
+    model = model or "agy"
+    quota = (_say(language, f"{model} için bireysel Antigravity kotası doldu.",
+                  f"Your individual Antigravity quota for {model} is used up.")
+             if info.get("individual") else
+             _say(language, f"{model} için Antigravity kotası doldu.",
+                  f"The Antigravity quota for {model} is used up."))
+    reset = ""
+    if info.get("reset_seconds"):
+        # The relative countdown goes stale on screen (owner saw a frozen
+        # "Resets in 119h46m43s"), so the clock time it points at goes with it.
+        at = (now or datetime.now()) + timedelta(seconds=info["reset_seconds"])
+        clock = (f"{_MONTHS_EN[at.month - 1]} {at.day}, {at:%H:%M}" if language == "en"
+                 else f"{at.day:02d}.{at.month:02d} {at:%H:%M}")
+        span = _span(info["reset_seconds"], language)
+        reset = " " + _say(language, f"{span} sonra sıfırlanıyor ({clock} civarı).",
+                           f"It resets in {span} (around {clock}).")
+    hint = _say(language,
+                "Model seçiciden başka bir model seçip aynı sohbete devam edebilirsin.",
+                "Pick another model in the model selector to continue this chat.")
+    return f"{quota}{reset} {hint}"
+
+
+def _git(cwd: str, *args: str) -> Optional[str]:
+    try:
+        done = subprocess.run(["git", "-C", cwd, *args], capture_output=True,
+                              timeout=_GIT_TIMEOUT_S, creationflags=_CREATE_NO_WINDOW,
+                              stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0:
+        return None
+    return done.stdout.decode("utf-8", errors="replace")
+
+
+def changed_files(cwd: str, since: float) -> Optional[list]:
+    """Uncommitted paths the turn touched: git status entries written since
+    `since` (wall clock), plus deletions. None when cwd is not a git work tree.
+    A file that was already dirty before the turn counts only if the turn
+    wrote it again (its mtime), so the list says what this turn left behind."""
+    root = _git(cwd, "rev-parse", "--show-toplevel")
+    status = _git(cwd, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+    if root is None or status is None:
+        return None
+    root = root.strip()
+    entries = status.split("\0")
+    paths = []
+    index = 0
+    while index < len(entries):
+        entry = entries[index]
+        index += 1
+        if len(entry) < 4:
+            continue
+        code, path = entry[:2], entry[3:]
+        if "R" in code or "C" in code:
+            index += 1  # -z puts the rename source in the next field
+        try:
+            # 2 s slack: FAT and some network shares store mtimes at 2 s steps.
+            touched = os.stat(os.path.join(root, path)).st_mtime >= since - 2
+        except OSError:
+            touched = "D" in code
+        if touched:
+            paths.append(path)
+    return paths
+
+
+def turn_summary(*, tools: dict, failed: int, files: Optional[list], language: str) -> str:
+    """What an unfinished turn had done: its steps and the files it left."""
+    lines = []
+    steps = sum(tools.values())
+    if steps:
+        top = sorted(tools.items(), key=lambda item: (-item[1], item[0]))
+        named = ", ".join(f"`{name}` ×{count}" for name, count in top[:6])
+        if len(top) > 6:
+            named += _say(language, f" ve {len(top) - 6} araç daha", f" and {len(top) - 6} more tools")
+        failed_text = (_say(language, f", {failed} tanesi hata verdi", f", {failed} failed")
+                       if failed else "")
+        lines.append(_say(language, f"Durmadan önce {steps} adım attı{failed_text}: {named}.",
+                          f"Before it stopped it ran {steps} steps{failed_text}: {named}."))
+    if files:
+        shown = "\n".join(f"- `{path}`" for path in files[:_CHANGED_FILES_SHOWN])
+        more = len(files) - _CHANGED_FILES_SHOWN
+        if more > 0:
+            shown += "\n" + _say(language, f"- … ve {more} dosya daha", f"- … and {more} more files")
+        lines.append(_say(language, "Bu turda değişen, commit edilmemiş dosyalar:",
+                          "Files this turn changed that are not committed:") + "\n" + shown)
+    elif files is not None and steps:
+        lines.append(_say(language, "Çalışma klasöründe commit edilmemiş yeni bir değişiklik yok.",
+                          "It left no new uncommitted changes in the workspace."))
+    return "\n\n".join(lines)
+
+
+def limit_message(kind: str, *, language: str, summary: str, started: bool) -> str:
+    """The localized text of a turn stopped by a time limit.
+
+    `kind` is "idle" (no output for _AGY_IDLE_LIMIT) or "total" (_AGY_MAX_TOTAL).
+    The last line keeps the technical "timed out" wording for logs and support."""
+    if kind == "idle":
+        span = _span(BaseCLIProvider._AGY_IDLE_LIMIT, language)
+        head = _say(language,
+                    f"Antigravity {span} boyunca hiçbir çıktı vermediği için tur durduruldu.",
+                    f"The Antigravity turn was stopped because it produced no output for {span}.")
+        tech = f"agy turn timed out: no output for {BaseCLIProvider._AGY_IDLE_LIMIT} seconds."
+    else:
+        span = _span(BaseCLIProvider._AGY_MAX_TOTAL, language)
+        head = (_say(language, f"Antigravity turu {span} süre sınırına ulaştı ve durduruldu.",
+                     f"The Antigravity turn reached its {span} time limit and was stopped.")
+                if started else
+                _say(language,
+                     f"Antigravity turu başlayamadı: başka bir agy sohbetinin turu {span} içinde bitmedi.",
+                     f"The Antigravity turn could not start: another agy chat's turn did not finish within {span}."))
+        tech = f"agy turn timed out after {BaseCLIProvider._AGY_MAX_TOTAL} seconds."
+    tail = (_say(language,
+                 "Sohbet korunuyor: \"devam et\" yazarsan Antigravity kaldığı yerden sürdürür.",
+                 "The conversation is kept: send \"continue\" and Antigravity picks up where it stopped.")
+            if started else
+            _say(language, "Mesajını yeniden gönderebilirsin.", "You can send your message again."))
+    parts = [head] + ([summary] if summary else []) + [tail, f"({tech})"]
+    return "\n\n".join(parts)
+
+
+def _dedupe_tail(message: str, tail: str) -> str:
+    """The stderr lines that do not just repeat the message."""
+    seen = {line.strip() for line in message.splitlines() if line.strip()}
+    kept = []
+    for line in tail.splitlines():
+        if line.strip() and line.strip() not in seen:
+            seen.add(line.strip())
+            kept.append(line)
+    return "\n".join(kept)
 
 
 def agy_turn_busy() -> bool:
@@ -859,6 +1043,12 @@ class AgyStreamSession(SaglayiciSahipligi):
         text_tail = ""
         tool_since_text = False
         streamed_text = []
+        # For the message of a turn that ends abnormally: what it had done.
+        tool_counts = {}
+        failed_tools = 0
+        wall_started = None
+        quota_text = ""
+        idle_limit = None if side else BaseCLIProvider._AGY_IDLE_LIMIT
         if not side:
             await _preempt_side_turn(self)
         try:
@@ -886,6 +1076,7 @@ class AgyStreamSession(SaglayiciSahipligi):
                 if queued:
                     yield _redact_event(_STARTED_EVENT)
                 started = loop.time()
+                wall_started = time.time()
                 previous_process = self._active_process
                 instructions = await self._start(model, os.path.abspath(cwd or self.cwd), thinking_level)
                 process = self._active_process
@@ -895,7 +1086,16 @@ class AgyStreamSession(SaglayiciSahipligi):
                 process.stdin.write((json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8"))
                 await process.stdin.drain()
                 while True:
-                    line = await process.stdout.readline()
+                    if idle_limit is None:
+                        line = await process.stdout.readline()
+                    else:
+                        # A turn is cut for silence, not for length: the two
+                        # measured 1800 s cuts were turns streaming steps the
+                        # whole time (see cli_base._AGY_IDLE_LIMIT).
+                        try:
+                            line = await asyncio.wait_for(process.stdout.readline(), idle_limit)
+                        except TimeoutError:
+                            raise _AgyIdleLimit() from None
                     if not line:
                         await self._stop_process(force=True)
                         raise RuntimeError(f"agy process exited before result (rc={process.returncode}).")
@@ -930,6 +1130,15 @@ class AgyStreamSession(SaglayiciSahipligi):
                                 logger.debug("[agy] ignored non-object child output conv=%s preview=%s",
                                              self.conversation_id, repr(event)[:160])
                                 continue
+                            if text_delta and quota_info(text_delta) and (
+                                    "AGY_ERROR" in text_delta or _RESET_PATTERN.search(text_delta)):
+                                # agy's own quota failure, not the model's
+                                # answer: kept for the error line, never
+                                # streamed or stored as text.
+                                logger.warning("[agy] quota text in the answer stream conv=%s: %s",
+                                               self.conversation_id, text_delta[:500])
+                                quota_text += text_delta
+                                continue
                             if text_delta:
                                 if tool_since_text:
                                     text_delta = block_break(text_tail) + text_delta
@@ -953,6 +1162,7 @@ class AgyStreamSession(SaglayiciSahipligi):
                             key = (step_index, tool_name)
                             if key not in tool_calls:
                                 tool_calls.add(key)
+                                tool_counts[tool_name] = tool_counts.get(tool_name, 0) + 1
                                 parameters = info.get("parameters") or {}
                                 if isinstance(parameters, str):
                                     try:
@@ -967,6 +1177,8 @@ class AgyStreamSession(SaglayiciSahipligi):
                                 or info.get("output") is not None or info.get("error")
                             ):
                                 tool_results.add(key)
+                                if info.get("error") or step.get("state") == "ERROR":
+                                    failed_tools += 1
                                 output = info.get("error") or info.get("output") or ""
                                 if not isinstance(output, str):
                                     output = json.dumps(output, ensure_ascii=False)
@@ -1036,9 +1248,44 @@ class AgyStreamSession(SaglayiciSahipligi):
                 yield _redact_event({"type": "error", "code": side_code,
                                      "message": side_stop_message(side_code, language)})
                 return
-            message = (f"agy turn timed out after {BaseCLIProvider._AGY_MAX_TOTAL} seconds."
-                       if isinstance(exc, asyncio.TimeoutError) else str(exc))
             tail = self._stderr_tail.decode("utf-8", errors="replace").strip()
+            limit = ("idle" if isinstance(exc, _AgyIdleLimit)
+                     else "total" if isinstance(exc, asyncio.TimeoutError) else None)
+            raw = "\n".join(part for part in (quota_text, str(exc), tail) if part)
+            # The failure itself must say quota: quota text dropped from the
+            # answer stream may be a replay of an earlier turn's failure.
+            quota = (None if limit or not quota_info(f"{exc}\n{tail}")
+                     else quota_info(raw))
+            if limit or quota:
+                started_turn = wall_started is not None
+                files = None
+                if started_turn and (limit or tool_counts):
+                    # After the close above, so agy no longer writes.
+                    files = await asyncio.to_thread(
+                        changed_files, os.path.abspath(cwd or self.cwd), wall_started)
+                summary = turn_summary(tools=tool_counts, failed=failed_tools,
+                                       files=files, language=language)
+                if limit:
+                    code = "agy_turn_limit"
+                    text = limit_message(limit, language=language, summary=summary,
+                                         started=started_turn)
+                else:
+                    # The raw text (repeated lines, AGY_ERROR JSON) is for the log.
+                    logger.warning("[agy] quota exhausted conv=%s model=%s raw=%s",
+                                   self.conversation_id, model, raw[:4000])
+                    code = "agy_quota"
+                    text = quota_message(quota, model, language)
+                    if summary:
+                        text += "\n\n" + summary
+                event = {"type": "error", "code": code, "message": text}
+                if limit:
+                    event["limit"] = limit
+                if files:
+                    event["changed_files"] = files
+                yield _redact_event(event)
+                return
+            message = str(exc)
+            tail = _dedupe_tail(message, tail)
             yield _redact_event({"type": "error",
                                  "message": message + (f"\n{tail}" if tail else "")})
         finally:

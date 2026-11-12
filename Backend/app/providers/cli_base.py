@@ -113,7 +113,17 @@ class BaseCLIProvider(AIProvider):
 
     # Serialize whole agy turns: live processes share the settings file.
     _AGY_LOCK = asyncio.Lock()
-    _AGY_MAX_TOTAL = 1800  # Preserve the existing 30-minute agy turn ceiling.
+    # An agy turn is cut when the child is silent for _AGY_IDLE_LIMIT, and in
+    # any case at _AGY_MAX_TOTAL. Measured 12 Nov 2026 (owner): both turns cut
+    # at the old flat 1800 s were streaming steps the whole time (33 steps in
+    # 32 min; 73 play steps of a finished job cut mid `git commit`), so a flat
+    # 30 minutes stopped legitimate Unity play-to-end work. Silence is what a
+    # hang looks like. The longest single silent tool wait the Unity MCP
+    # allows is manage_build's 1800 s clamp (manage_build.py _wait_for_build),
+    # so the idle limit is that plus 5 minutes for transport and the step
+    # after it. The total cap is a runaway guard at 4x the longest measured turn.
+    _AGY_IDLE_LIMIT = 2100
+    _AGY_MAX_TOTAL = 7200
 
     # K5(b) — prompt argv'de mi, stdin'de mi?
     #
