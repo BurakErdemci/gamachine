@@ -6,7 +6,6 @@ import os
 import re
 import subprocess
 import sys
-import time
 import process_tree
 from collections.abc import Hashable, Mapping
 from datetime import datetime, timedelta
@@ -60,6 +59,14 @@ class _AgyIdleLimit(Exception):
     """No child output for BaseCLIProvider._AGY_IDLE_LIMIT seconds."""
 
 
+async def _within_idle(awaitable, idle_limit: Optional[float]):
+    """Await a child pipe operation; _AgyIdleLimit after idle_limit seconds."""
+    try:
+        return await asyncio.wait_for(awaitable, idle_limit)
+    except TimeoutError:
+        raise _AgyIdleLimit() from None
+
+
 # Quota exhaustion as agy reports it (owner, 12 Nov 2026): "Individual quota
 # reached ... AGY_ERROR: {"short_error":"RESOURCE_EXHAUSTED (code 429) ...}",
 # once in the result error and again in stderr, so the user saw it three times.
@@ -71,6 +78,9 @@ _MONTHS_EN = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
               "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 _CHANGED_FILES_SHOWN = 15
 _GIT_TIMEOUT_S = 10
+# How long a turn waits for the workspace snapshot before its prompt; past
+# this the turn goes on and its end message omits the file list.
+_SNAPSHOT_WAIT_S = 3
 
 
 def _say(language: str, tr: str, en: str) -> str:
@@ -127,47 +137,144 @@ def quota_message(info: dict, model: str, language: str, now: Optional[datetime]
     return f"{quota}{reset} {hint}"
 
 
+# How agy's own quota failure text begins (see _QUOTA_PATTERN).
+_REPLAY_OPENERS = ("individual quota", "quota ", "resource_exhausted", "agy_error")
+
+
+def _quota_replay(text: str) -> bool:
+    """agy's quota failure, not the model's words about a quota: the quota
+    wording together with agy's markers (AGY_ERROR or a reset time)."""
+    return bool(quota_info(text)) and ("AGY_ERROR" in text or bool(_RESET_PATTERN.search(text)))
+
+
+def _may_open_replay(text: str) -> bool:
+    head = text.lstrip().lower()
+    return any(opener.startswith(head) or head.startswith(opener) for opener in _REPLAY_OPENERS)
+
+
+def strip_quota_replay(text: str) -> tuple:
+    """(kept, dropped) for a text that opens like agy's quota failure: the
+    failure up to its last quota line is dropped, what follows is kept."""
+    if not (_may_open_replay(text) and _quota_replay(text)):
+        return text, ""
+    lines = text.splitlines(keepends=True)
+    last = max((index for index, line in enumerate(lines)
+                if quota_info(line) or "AGY_ERROR" in line or _RESET_PATTERN.search(line)),
+               default=len(lines) - 1)
+    return "".join(lines[last + 1:]).lstrip("\r\n"), "".join(lines[:last + 1])
+
+
+class _ReplayFilter:
+    """Keeps agy's quota failure, replayed as answer text in a resumed chat
+    (owner, 12 Nov 2026: the old quota line came back under a later
+    successful answer), out of the streamed and the stored answer.
+
+    A step whose text opens like the failure is held back until the step
+    ends and judged as a whole, so a replay split across text deltas is
+    caught too; any other text streams at once."""
+
+    def __init__(self, enabled: bool):
+        self.enabled = enabled
+        self.step = None
+        self.held = None  # the step's text held back; None while it streams
+        self.dropped = []
+
+    def feed(self, step, delta: str) -> str:
+        """The text to stream now for a text delta of `step`."""
+        if not self.enabled:
+            return delta
+        out = ""
+        if step != self.step:
+            out = self.end()
+            self.step, self.held = step, ""
+        if self.held is not None:
+            self.held += delta
+            if _may_open_replay(self.held):
+                return out
+            delta, self.held = self.held, None
+        if _quota_replay(delta):
+            self._drop(delta)
+            self.held = ""  # the rest of the step is judged afresh
+            return out
+        return out + delta
+
+    def end(self) -> str:
+        """The step is over: the held text that may still stream."""
+        held, self.step, self.held = self.held or "", None, None
+        kept, dropped = strip_quota_replay(held)
+        if dropped:
+            self._drop(dropped)
+        return kept
+
+    def _drop(self, text: str) -> None:
+        # Never shown, kept for the error line's reset time and for the log.
+        logger.warning("[agy] quota text in the answer stream: %s", text[:500])
+        self.dropped.append(text)
+
+    def clean(self, response: str) -> str:
+        """result.response glues the turn's blocks: drop the same failure text."""
+        if not self.enabled:
+            return response
+        kept = response
+        for dropped in self.dropped:
+            kept = kept.replace(dropped, "")
+        kept = strip_quota_replay(kept)[0]
+        return kept.lstrip("\r\n") if kept != response else response
+
+
 def _git(cwd: str, *args: str) -> Optional[str]:
-    try:
-        done = subprocess.run(["git", "-C", cwd, *args], capture_output=True,
-                              timeout=_GIT_TIMEOUT_S, creationflags=_CREATE_NO_WINDOW,
-                              stdin=subprocess.DEVNULL)
-    except (OSError, subprocess.SubprocessError):
-        return None
+    """git's output, None when it fails; raises when git cannot run."""
+    done = subprocess.run(["git", "-C", cwd, *args], capture_output=True,
+                          timeout=_GIT_TIMEOUT_S, creationflags=_CREATE_NO_WINDOW,
+                          stdin=subprocess.DEVNULL, env=build_spawn_env())
     if done.returncode != 0:
         return None
     return done.stdout.decode("utf-8", errors="replace")
 
 
-def changed_files(cwd: str, since: float) -> Optional[list]:
-    """Uncommitted paths the turn touched: git status entries written since
-    `since` (wall clock), plus deletions. None when cwd is not a git work tree.
-    A file that was already dirty before the turn counts only if the turn
-    wrote it again (its mtime), so the list says what this turn left behind."""
-    root = _git(cwd, "rev-parse", "--show-toplevel")
-    status = _git(cwd, "status", "--porcelain=v1", "-z", "--untracked-files=all")
-    if root is None or status is None:
+def workspace_state(cwd: str) -> Optional[dict]:
+    """Every uncommitted path of cwd's git work tree -> (status, mtime, size);
+    None when cwd is not a work tree or git cannot say. Never raises: the
+    error path of a turn must not break on it."""
+    try:
+        root = _git(cwd, "rev-parse", "--show-toplevel")
+        status = _git(cwd, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+        if root is None or status is None:
+            return None
+        root = root.strip()
+        entries = status.split("\0")
+        state = {}
+        index = 0
+        while index < len(entries):
+            entry = entries[index]
+            index += 1
+            if len(entry) < 4:
+                continue
+            code, path = entry[:2], entry[3:]
+            if "R" in code or "C" in code:
+                index += 1  # -z puts the rename source in the next field
+            try:
+                stat = os.stat(os.path.join(root, path))
+                state[path] = (code, stat.st_mtime_ns, stat.st_size)
+            except OSError:
+                state[path] = (code, None, None)
+        return state
+    except Exception:
+        logger.debug("[agy] workspace git status failed cwd=%s", cwd, exc_info=True)
         return None
-    root = root.strip()
-    entries = status.split("\0")
-    paths = []
-    index = 0
-    while index < len(entries):
-        entry = entries[index]
-        index += 1
-        if len(entry) < 4:
-            continue
-        code, path = entry[:2], entry[3:]
-        if "R" in code or "C" in code:
-            index += 1  # -z puts the rename source in the next field
-        try:
-            # 2 s slack: FAT and some network shares store mtimes at 2 s steps.
-            touched = os.stat(os.path.join(root, path)).st_mtime >= since - 2
-        except OSError:
-            touched = "D" in code
-        if touched:
-            paths.append(path)
-    return paths
+
+
+def changed_files(cwd: str, before: Optional[dict]) -> Optional[list]:
+    """Uncommitted paths the turn changed: those whose git status, mtime or
+    size differ from `before` (workspace_state at turn start). Edits and
+    deletions that predate the turn are not listed. None when either state
+    is unknown: no list beats a guessed one."""
+    if before is None:
+        return None
+    after = workspace_state(cwd)
+    if after is None:
+        return None
+    return [path for path, entry in after.items() if before.get(path) != entry]
 
 
 def turn_summary(*, tools: dict, failed: int, files: Optional[list], language: str) -> str:
@@ -1046,9 +1153,21 @@ class AgyStreamSession(SaglayiciSahipligi):
         # For the message of a turn that ends abnormally: what it had done.
         tool_counts = {}
         failed_tools = 0
-        wall_started = None
-        quota_text = ""
+        turn_started = False
+        workspace_before = None
+        # Side turns keep their 83a7c6b6 behaviour: no filter, no summary.
+        replay = _ReplayFilter(enabled=not side)
         idle_limit = None if side else BaseCLIProvider._AGY_IDLE_LIMIT
+
+        def text_event(text):
+            nonlocal text_tail, tool_since_text
+            if tool_since_text:
+                text = block_break(text_tail) + text
+                tool_since_text = False
+            text_tail = (text_tail + text)[-2:]
+            streamed_text.append(text)
+            return _redact_event({"type": "text", "content": text})
+
         if not side:
             await _preempt_side_turn(self)
         try:
@@ -1076,26 +1195,37 @@ class AgyStreamSession(SaglayiciSahipligi):
                 if queued:
                     yield _redact_event(_STARTED_EVENT)
                 started = loop.time()
-                wall_started = time.time()
+                turn_started = True
+                workspace = os.path.abspath(cwd or self.cwd)
+                snapshot = None
+                if not side:
+                    # A kept child's stderr may still hold an earlier turn's
+                    # lines (a 429 retry warning): they must not decide how
+                    # this turn's failure reads.
+                    self._stderr_tail = b""
+                    # What the workspace held before this turn, for the files
+                    # an unfinished turn reports; runs while the child starts.
+                    snapshot = asyncio.ensure_future(asyncio.to_thread(workspace_state, workspace))
                 previous_process = self._active_process
-                instructions = await self._start(model, os.path.abspath(cwd or self.cwd), thinking_level)
+                instructions = await self._start(model, workspace, thinking_level)
                 process = self._active_process
+                if snapshot is not None:
+                    # Taken before the prompt, so nothing in it is this turn's.
+                    # A slow git only costs the file list, never the turn.
+                    done, _ = await asyncio.wait({snapshot}, timeout=_SNAPSHOT_WAIT_S)
+                    workspace_before = snapshot.result() if done else None
                 # A kept process already holds the guide and the hint from its first turn.
                 guide_prefix = agent_guide + "\n\n" if agent_guide and process is not previous_process else ""
                 payload = {"event": "user", "message": {"content": guide_prefix + instructions + message}}
                 process.stdin.write((json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8"))
-                await process.stdin.drain()
+                # A child that stops reading its stdin is as silent as one
+                # that stops writing: the same idle limit covers both.
+                await _within_idle(process.stdin.drain(), idle_limit)
                 while True:
-                    if idle_limit is None:
-                        line = await process.stdout.readline()
-                    else:
-                        # A turn is cut for silence, not for length: the two
-                        # measured 1800 s cuts were turns streaming steps the
-                        # whole time (see cli_base._AGY_IDLE_LIMIT).
-                        try:
-                            line = await asyncio.wait_for(process.stdout.readline(), idle_limit)
-                        except TimeoutError:
-                            raise _AgyIdleLimit() from None
+                    # A turn is cut for silence, not for length: the two
+                    # measured 1800 s cuts were turns streaming steps the
+                    # whole time (see cli_base._AGY_IDLE_LIMIT).
+                    line = await _within_idle(process.stdout.readline(), idle_limit)
                     if not line:
                         await self._stop_process(force=True)
                         raise RuntimeError(f"agy process exited before result (rc={process.returncode}).")
@@ -1124,28 +1254,17 @@ class AgyStreamSession(SaglayiciSahipligi):
                                 and step["conversation_id"] != self.session_id):
                             continue
                         self._remember_id(step.get("conversation_id"))
+                        if step.get("step_type") != "agent_response" and (held := replay.end()):
+                            yield text_event(held)
                         if step.get("step_type") == "agent_response":
                             text_delta = step.get("text_delta")
                             if not isinstance(text_delta, str):
                                 logger.debug("[agy] ignored non-object child output conv=%s preview=%s",
                                              self.conversation_id, repr(event)[:160])
                                 continue
-                            if text_delta and quota_info(text_delta) and (
-                                    "AGY_ERROR" in text_delta or _RESET_PATTERN.search(text_delta)):
-                                # agy's own quota failure, not the model's
-                                # answer: kept for the error line, never
-                                # streamed or stored as text.
-                                logger.warning("[agy] quota text in the answer stream conv=%s: %s",
-                                               self.conversation_id, text_delta[:500])
-                                quota_text += text_delta
-                                continue
+                            text_delta = replay.feed(step.get("step_index"), text_delta) if text_delta else ""
                             if text_delta:
-                                if tool_since_text:
-                                    text_delta = block_break(text_tail) + text_delta
-                                    tool_since_text = False
-                                text_tail = (text_tail + text_delta)[-2:]
-                                streamed_text.append(text_delta)
-                                yield _redact_event({"type": "text", "content": text_delta})
+                                yield text_event(text_delta)
                         elif step.get("step_type") == "tool":
                             info = step.get("tool_info") or {}
                             if not self._child_field_ok("tool_info", info, Mapping):
@@ -1187,6 +1306,8 @@ class AgyStreamSession(SaglayiciSahipligi):
                                     "success": not bool(info.get("error")) and step.get("state") != "ERROR",
                                     "summary": output})
                     elif event_type == "result":
+                        if held := replay.end():
+                            yield text_event(held)
                         result = event.get("result")
                         if (not isinstance(result, Mapping)
                                 or not isinstance(result.get("status"), str)):
@@ -1217,6 +1338,8 @@ class AgyStreamSession(SaglayiciSahipligi):
                         await self._discard_buffered_output(process)
                         break
                     elif event_type == "error":
+                        if held := replay.end():
+                            yield text_event(held)
                         raise RuntimeError(str(event.get("error") or event.get("message")
                                                or "agy reported an error."))
                 # The turn timer ends at result, before delivering terminal events.
@@ -1225,7 +1348,8 @@ class AgyStreamSession(SaglayiciSahipligi):
             # own result glues the blocks together.
             stored_answer = "".join(streamed_text)
             if not stored_answer.strip():
-                stored_answer = result.get("response") or ""
+                # The failure text the stream held back stays out of here too.
+                stored_answer = replay.clean(result.get("response") or "")
             yield _redact_event({"type": "response", "content": stored_answer})
             yield _redact_event({"type": "done", "iterations": 1,
                                  "session_id": self.session_id})
@@ -1249,26 +1373,32 @@ class AgyStreamSession(SaglayiciSahipligi):
                                      "message": side_stop_message(side_code, language)})
                 return
             tail = self._stderr_tail.decode("utf-8", errors="replace").strip()
+            if side:
+                yield _redact_event({"type": "error",
+                                     "message": str(exc) + (f"\n{tail}" if tail else "")})
+                return
+            if held := replay.end():
+                yield text_event(held)
             limit = ("idle" if isinstance(exc, _AgyIdleLimit)
                      else "total" if isinstance(exc, asyncio.TimeoutError) else None)
-            raw = "\n".join(part for part in (quota_text, str(exc), tail) if part)
             # The failure itself must say quota: quota text dropped from the
-            # answer stream may be a replay of an earlier turn's failure.
+            # answer stream may be a replay of an earlier turn's failure, so
+            # it comes last and only lends a reset time the failure lacks.
+            raw = "\n".join(part for part in (str(exc), tail, *replay.dropped) if part)
             quota = (None if limit or not quota_info(f"{exc}\n{tail}")
                      else quota_info(raw))
             if limit or quota:
-                started_turn = wall_started is not None
                 files = None
-                if started_turn and (limit or tool_counts):
+                if turn_started and (limit or tool_counts):
                     # After the close above, so agy no longer writes.
                     files = await asyncio.to_thread(
-                        changed_files, os.path.abspath(cwd or self.cwd), wall_started)
+                        changed_files, os.path.abspath(cwd or self.cwd), workspace_before)
                 summary = turn_summary(tools=tool_counts, failed=failed_tools,
                                        files=files, language=language)
                 if limit:
                     code = "agy_turn_limit"
                     text = limit_message(limit, language=language, summary=summary,
-                                         started=started_turn)
+                                         started=turn_started)
                 else:
                     # The raw text (repeated lines, AGY_ERROR JSON) is for the log.
                     logger.warning("[agy] quota exhausted conv=%s model=%s raw=%s",
