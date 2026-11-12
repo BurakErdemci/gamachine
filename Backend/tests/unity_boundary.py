@@ -202,6 +202,9 @@ class UnityBoundary:
                         else "INFO: No tasks are running which match the specified criteria.\n")
         if name == "pgrep" and any("Unity.app" in part for part in argv):
             return done(0, "31337\n") if self.unity_editor_open else done(1)
+        # The editor-loading scan (routes.mcp_routes) reads the process table: no editor is opening a project here.
+        if (name == "powershell" and any("Win32_Process" in part for part in argv)) or (name == "ps" and "-axo" in argv):
+            return done(0)
         if name == "uv" and "export" in argv and "--output-file" in argv:
             out = argv[argv.index("--output-file") + 1]
             if not self._inside_home(out):

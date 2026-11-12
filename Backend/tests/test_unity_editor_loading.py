@@ -28,6 +28,8 @@ def table(monkeypatch):
     rows = []
     calls = []
     monkeypatch.setattr(mr, "_process_table", None)
+    # The app scans in a background thread; these tests read the result at once.
+    monkeypatch.setattr(mr, "_start_scan", mr.refresh_process_table)
 
     def run(args, **kwargs):
         calls.append(args)
@@ -36,10 +38,8 @@ def table(monkeypatch):
             out = "".join(f'"Unity.exe","{pid}","Console","1","512,000 K"\n' for pid, _, _ in rows)
         elif args[0] == "powershell":
             out = "".join(f"{seconds}\t{command}\n" for _, seconds, command in rows)
-        elif args == ["ps", "-axo", "pid=,etime=,comm="]:
-            out = "".join(f"{pid} {seconds // 60:02d}:{seconds % 60:02d} {MAC_UNITY}\n" for pid, seconds, _ in rows)
-        elif args[:4] == ["ps", "-o", "command=", "-p"]:
-            out = next((command for pid, _, command in rows if pid == int(args[4])), "")
+        elif args == ["ps", "-axo", "pid=,etime=,command="]:
+            out = "".join(f"{pid} {seconds // 60:02d}:{seconds % 60:02d} {command}\n" for pid, seconds, command in rows)
         else:
             raise AssertionError(f"unexpected process query {args}")
         return subprocess.CompletedProcess(args, 0, out, "")

@@ -15,6 +15,7 @@ from pydantic import BaseModel, StrictBool, StrictFloat, StrictInt, StrictStr, f
 
 from auth_utils import _check_token, get_current_user
 from omnisharp.omnisharp_manager import _unwrap_unity_result
+from routes.mcp_routes import project_mismatch_detail
 from unity_ai_mcp import unity_project_presence
 from unity_ai_mcp.unity_mcp_manager import unity_mcp_disabled, unity_mcp_manager
 
@@ -172,7 +173,7 @@ def _project_refusal(workspace: str) -> str | None:
     checked = _presence_cache.get(workspace)
     if checked is not None and now - checked < _PRESENCE_TTL:
         return None
-    refusal = unity_project_presence.mcp_mismatch_detail(workspace)
+    refusal = project_mismatch_detail(workspace)
     if refusal is None:
         _presence_cache[workspace] = now
     return refusal
