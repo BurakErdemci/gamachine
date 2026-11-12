@@ -2644,7 +2644,8 @@ Max 300 kelime. Türkçe yaz.
                                 auto_title += "..."
                             db.set_auto_title(request.conversation_id, auto_title)
                         chat_titles.after_reply(db, request.conversation_id,
-                                                provider_type, model_name, api_key)
+                                                provider_type, model_name, api_key,
+                                                language=_stream_language(request, x_ui_lang))
                     except Exception:
                         logger.exception("Asistan turu DB'ye yazılamadı")
                         _w = {"type": "warning", "code": "turn_not_saved",
