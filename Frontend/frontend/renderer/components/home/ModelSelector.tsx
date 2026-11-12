@@ -6,7 +6,7 @@ import { ModelLogo } from '../ui/ModelLogos';
 import { AIConfig, UserData } from './types';
 import { useLang } from '../../lib/i18n';
 import { apiHataMesaji } from '../../lib/apiError';
-import { stripBidi, modelLabel } from '../../lib/modelText';
+import { stripBidi, planName, modelLabel } from '../../lib/modelText';
 import type { AvailableModelsState } from '../../hooks/home/useAIConfig';
 import { GROUP_USAGE_FAMILY, familyFor, minutesSince, type UsageLimits } from '../../lib/usageLimits';
 import { ChipUse, UseBlock, UsePair } from './UsageMeters';
@@ -382,7 +382,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       const needsLogin = groupNeedsLogin(g);
       const sub = !installed ? t('mm.sub.notInstalled')
         : needsLogin ? t('mm.sub.needsLogin')
-          : fam?.plan ? t('mm.sub.subscriptionPlan', { plan: goster(fam.plan) }) : t('mm.sub.subscription');
+          : fam?.plan ? t('mm.sub.subscriptionPlan', { plan: planName(fam.plan) }) : t('mm.sub.subscription');
       const right = installed && !needsLogin
         ? <UsePair fam={fam} modelId={g.key === activeKey ? aiConfig.model_name : null} />
         : null;

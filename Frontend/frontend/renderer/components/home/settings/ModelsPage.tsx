@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 
 import { useLang, type TKey } from '../../../lib/i18n';
-import { stripBidi, shortModelId, modelLabel } from '../../../lib/modelText';
+import { stripBidi, planName, shortModelId, modelLabel } from '../../../lib/modelText';
 import { GROUP_USAGE_FAMILY, familyFor, type UsageLimits } from '../../../lib/usageLimits';
 import { useCliDoctor } from '../../../hooks/home/useCliDoctor';
 import { useUsageLimits } from '../../../hooks/home/useUsageLimits';
@@ -132,7 +132,7 @@ export const ModelsPage = ({
     else if (loggedIn) {
       tone = 'ok';
       parts.push(t('set.cli.loggedIn'));
-      if (fam?.plan) parts.push(t('set.cli.plan', { plan: goster(fam.plan) }));
+      if (fam?.plan) parts.push(t('set.cli.plan', { plan: planName(fam.plan) }));
       if (count > 0) parts.push(t('set.cli.models', { sayi: count }));
     }
     const control = !cli.doctor ? null

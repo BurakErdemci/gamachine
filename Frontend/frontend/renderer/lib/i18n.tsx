@@ -484,7 +484,7 @@ export const tr = {
   'settings.apiKey': 'API Key',
   'settings.savedKey': '✓ Kayıtlı key mevcut',
   'settings.savedKeyPlaceholder': 'Kayıtlı key kullanılacak (değiştirmek için yeni key girin)',
-  'settings.apiKeyPlaceholder': 'API key girin...',
+  'settings.apiKeyPlaceholder': 'API anahtarını gir…',
   'settings.deleteKey': 'API Key Sil',
   'settings.subscriptionActive': 'Abonelik Modu Aktif',
   'settings.subscriptionDesc': 'Bu modda API key gerekmez; terminalde (claude/codex) açık olan oturumunuz kullanılır.',

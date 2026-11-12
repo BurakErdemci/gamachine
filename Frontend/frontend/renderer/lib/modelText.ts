@@ -28,6 +28,12 @@
 export const stripBidi = (s: string): string =>
   s.replace(/[\u061C\u202A-\u202E\u2066-\u2069\u200B\u200E\u200F\u2060\uFEFF]/g, '');
 
+/** A subscription plan as the CLI reports it ("plus", "max"), shown as a name: "Plus planı", "Plus plan". */
+export const planName = (s?: string): string => {
+  const name = stripBidi(s || '');
+  return name.charAt(0).toUpperCase() + name.slice(1);
+};
+
 /** A badge the backend sends as data (`tag`); the words come from i18n, so each UI language reads its own. */
 export type ModelTag = 'recommended' | 'free';
 
