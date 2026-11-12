@@ -171,44 +171,76 @@ def build_title_input(messages: List[Dict[str, Any]], cap: int = INPUT_CAP,
     return "\n".join(lines)
 
 
-# Letters only Turkish has of the two languages; ç, ö and ü also turn up in
-# names and loanwords, so they count only through the word lists.
-_TURKISH_LETTERS = frozenset("ğışĞİŞ")
+# The UI language is the default; the chat only overrides it when the user's own
+# words are clearly the other language (a short Turkish request such as
+# "Player'a ziplama ekle" carries no Turkish letter, and a pasted English error
+# says nothing about the person writing).
+# ğ, ı, ş are Turkish-only; ç, ö, ü also turn up in names and loanwords.
+_TURKISH_ONLY_LETTERS = frozenset("ğışĞİŞ")
+_TURKISH_SOFT_LETTERS = frozenset("çöüÇÖÜ")
 _TURKISH_WORDS = frozenset(
-    "bir ve bu şu için ile ne mi mı mu mü nasıl neden niye ama veya gibi daha çok "
-    "var yok değil olan olsun ekle yap yaz sil aç kapat düzelt bak lütfen merhaba "
-    "selam evet hayır tamam teşekkürler sahne oyun kod dosya proje sorun hata "
-    "şimdi sonra önce üstüne altına içine".split())
+    "bir ve bu şu için icin ile ne mi mı mu mü nasıl nasil neden niye ama veya gibi daha çok cok "
+    "var yok değil degil olan olsun ekle yap yaz sil aç kapat düzelt duzelt düzenle duzenle bak "
+    "lütfen lutfen merhaba selam evet hayır hayir tamam teşekkürler tesekkurler sahne oyun oyuncu "
+    "kod dosya proje sorun hata şimdi simdi sonra önce once üstüne ustune altına altina içine icine "
+    "kamera hareket zıpla zipla ziplama koy ver kaldır kaldir değiştir degistir göster goster "
+    "oluştur olustur yükle yukle çalıştır calistir arkasına arkasina yapay zeka zekası düşman "
+    "dusman kadar şey sey burada orada bunu şunu bana benim senin ben sen".split())
+_TURKISH_SUFFIXES = ("iyor", "ıyor", "uyor", "üyor")
 _ENGLISH_WORDS = frozenset(
-    "the a an and or to of in on at for with from by is are was be it this that "
-    "these those you your my we i can could would should please how what why when "
+    "the an and or to of in on at for with from by is are was be it this that "
+    "these those you your my we can could would should please how what why when "
     "where which make add create fix remove delete change write open close show "
     "use help need want into onto top bottom scene game player script file".split())
 _WORD_RE = re.compile(r"[^\W\d_]+")
+# Case suffixes after an apostrophe: Player'a, script'i, Blender'da.
+_TURKISH_APOSTROPHE = re.compile(
+    r"\w['’](?:a|e|i|ı|u|ü|da|de|ta|te|dan|den|tan|ten|ya|ye|yi|yı|yu|yü|nin|nın|nun|nün"
+    r"|lar|ler|ları|leri|la|le|yla|yle)(?!\w)", re.IGNORECASE)
+_CODE_BLOCK_RE = re.compile(r"```.*?(?:```|\Z)|`[^`\n]*`|https?://\S+", re.DOTALL)
+_LOG_LINE_RE = re.compile(
+    r"^\s*at\s|\b[A-Z]{1,4}\d{3,5}\b|\.cs\(?\d|^\s*(?:error|warning|traceback)\b|\w+Exception\b",
+    re.IGNORECASE | re.MULTILINE)
+_CODE_TOKEN_RE = re.compile(r"\S*(?:[/\_]|\d|[a-z][A-Z]|\w\.\w)\S*")
+
+
+def _prose(text: str) -> str:
+    """The user's own words: no code, URLs, paths, identifiers or log lines."""
+    text = _CODE_BLOCK_RE.sub(" ", text)
+    text = "\n".join(line for line in text.splitlines() if not _LOG_LINE_RE.search(line))
+    return _CODE_TOKEN_RE.sub(" ", text)
 
 
 def title_language(messages: List[Dict[str, Any]], ui_language: Optional[str] = None) -> Optional[str]:
-    """'en' or 'tr': the language of the user's own messages, or `ui_language`
-    when they do not tell (a bare "ok", a pasted error, a name).
+    """'en' or 'tr': `ui_language` unless the user's own messages are clearly
+    the other language; without a valid UI language, the clearer of the two.
 
     Only user rows count: a reply may follow the UI language or a guide text
     rather than the person writing.
     """
-    tr = en = 0
+    score = {"tr": 0, "en": 0}
     for m in messages or []:
         if not isinstance(m, dict) or m.get("role") != "user":
             continue
-        text = str(m.get("content") or "")
-        if any(ch in _TURKISH_LETTERS for ch in text):
-            tr += 2
+        text = _prose(str(m.get("content") or ""))
+        if any(ch in _TURKISH_ONLY_LETTERS for ch in text):
+            score["tr"] += 2
+        elif any(ch in _TURKISH_SOFT_LETTERS for ch in text):
+            score["tr"] += 1
+        score["tr"] += 2 * len(_TURKISH_APOSTROPHE.findall(text))
         for word in _WORD_RE.findall(text.casefold()):
-            if word in _TURKISH_WORDS:
-                tr += 1
+            if len(word) < 2:
+                continue
+            if word in _TURKISH_WORDS or word.endswith(_TURKISH_SUFFIXES):
+                score["tr"] += 1
             elif word in _ENGLISH_WORDS:
-                en += 1
-    if tr != en:
-        return "tr" if tr > en else "en"
-    return ui_language if ui_language in LANGUAGE_NAMES else None
+                score["en"] += 1
+    if ui_language in LANGUAGE_NAMES:
+        other = "en" if ui_language == "tr" else "tr"
+        return other if score[other] >= 2 and score[other] > 2 * score[ui_language] else ui_language
+    if score["tr"] != score["en"]:
+        return "tr" if score["tr"] > score["en"] else "en"
+    return None
 
 
 def _prompt_title(title: str) -> str:
