@@ -185,7 +185,11 @@ class _ReplayFilter:
 
     def end(self) -> str:
         """The step is over: what it held back did not become a replay."""
-        held, self.held, self.step, self.skip_space = self.held, "", None, False
+        held, self.held, self.step = self.held, "", None
+        # A completed shorter text may have been held for a longer one that
+        # never came: it is a replay after all.
+        held = self._split(held, final=True)[0] if held and self.texts else held
+        self.skip_space = False
         return held
 
     def clean(self, response: str) -> str:
@@ -208,6 +212,12 @@ class _ReplayFilter:
             hits = [(flat.find(needle), -len(needle)) for needle in self.texts if needle in flat]
             if hits:
                 at, minus_length = min(hits)
+                tail = flat[at:]
+                if not final and any(len(needle) > len(tail) and needle.startswith(tail)
+                                     for needle in self.texts):
+                    # Still the start of a longer recorded text: the longest wins.
+                    shown.append(text[:origin[at]])
+                    return "".join(shown), text[origin[at]:]
                 start, stop = origin[at], origin[at - minus_length - 1] + 1
                 shown.append(text[:start])
                 logger.warning("[agy] replayed quota text removed from the answer: %s",
@@ -1344,8 +1354,6 @@ class AgyStreamSession(SaglayiciSahipligi):
                                     "success": not bool(info.get("error")) and step.get("state") != "ERROR",
                                     "summary": output})
                     elif event_type == "result":
-                        if held := replay.end():
-                            yield text_event(held)
                         result = event.get("result")
                         if (not isinstance(result, Mapping)
                                 or not isinstance(result.get("status"), str)):
@@ -1372,12 +1380,13 @@ class AgyStreamSession(SaglayiciSahipligi):
                         if result.get("status") != "SUCCESS":
                             raise RuntimeError(str(result.get("error") or result.get("response")
                                                    or f"agy result status: {result.get('status')}"))
+                        # A failing result leaves held text to the except path.
+                        if held := replay.end():
+                            yield text_event(held)
                         completed = True
                         await self._discard_buffered_output(process)
                         break
                     elif event_type == "error":
-                        if held := replay.end():
-                            yield text_event(held)
                         raise RuntimeError(str(event.get("error") or event.get("message")
                                                or "agy reported an error."))
                 # The turn timer ends at result, before delivering terminal events.

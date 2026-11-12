@@ -503,6 +503,109 @@ class TestReplayOfRecordedFailure(_Harness):
         self.assertEqual(self.text_of(third), (QUOTA_TEXT + "Next.",) * 2)
 
 
+class TestLongestReplayAndRecords(_Harness):
+    """Blind audit 1a139d3d: nested recorded texts, a held prefix at a quota
+    end, and the record's key, scope and lifetime."""
+
+    text_of = TestReplayOfRecordedFailure.text_of
+    turn = TestReplayOfRecordedFailure.turn
+    fail_with_quota = TestReplayOfRecordedFailure.fail_with_quota
+    SHORT = "Individual quota reached for Claude Sonnet 5.5. Resets in 119h46m43s."
+
+    def streamed(self, events):
+        return "".join(e["content"] for e in events if e["type"] == "text")
+
+    def feed_all(self, texts, deltas):
+        replay = agy_session._ReplayFilter(texts)
+        out = [replay.feed(1, delta) for delta in deltas]
+        return "".join(out) + replay.end()
+
+    async def failing_turn(self, *events):
+        self.plans.append({"turns": [[TURNS[0][0], *events]]})
+        done = await asyncio.wait_for(
+            self.collect(agy_session.get_session(11), language="en"), 5)
+        await agy_session.get_session(11).close(preserve_resume=True)
+        return done
+
+    def test_nested_recorded_texts_are_removed_whole_at_every_split(self):
+        # Fuzz C1: the shorter text was removed as soon as it completed and
+        # the rest of the longer one (the AGY_ERROR json) streamed.
+        longer = QUOTA_TEXT
+        for texts in ([self.SHORT, longer], [longer, self.SHORT]):
+            for cut in range(1, len(longer)):
+                self.assertEqual(self.feed_all(texts, [longer[:cut], longer[cut:]]), "", cut)
+            for first in range(1, len(longer) - 1, 7):
+                for second in range(first + 1, len(longer), 11):
+                    deltas = [longer[:first], longer[first:second], longer[second:]]
+                    self.assertEqual(self.feed_all(texts, deltas), "", (first, second))
+            # The shorter text alone, then a diverging continuation, falls back.
+            self.assertEqual(self.feed_all(texts, [self.SHORT, " Next."]), "Next.")
+            self.assertEqual(self.feed_all(texts, [self.SHORT]), "")
+            self.assertEqual(self.feed_all(texts, [self.SHORT + "\nSo it goes."]), "So it goes.")
+
+    async def test_nested_step_text_longer_than_the_error_text(self):
+        await self.failing_turn(answer(1, QUOTA_TEXT), failed_result(self.SHORT))
+        events = await self.turn(answer(1, self.SHORT), answer(1, QUOTA_TEXT[len(self.SHORT):]))
+        self.assertEqual(self.text_of(events)[0], "")
+
+    async def test_held_prefix_is_dropped_when_the_turn_ends_in_a_quota_result(self):
+        await self.fail_with_quota()
+        events = await self.failing_turn(answer(1, QUOTA_TEXT[:25]), failed_result(QUOTA_TEXT))
+        self.assertEqual(self.streamed(events), "")
+        self.assertEqual(events[-1].get("code"), "agy_quota", events)
+
+    async def test_held_prefix_is_dropped_when_the_turn_ends_in_a_quota_error_event(self):
+        await self.fail_with_quota()
+        events = await self.failing_turn(answer(1, QUOTA_TEXT[:25]),
+                                         {"event": "error", "error": QUOTA_TEXT})
+        self.assertEqual(self.streamed(events), "")
+        self.assertEqual(events[-1].get("code"), "agy_quota", events)
+
+    async def test_held_prefix_streams_when_the_turn_fails_otherwise(self):
+        await self.fail_with_quota()
+        events = await self.failing_turn(answer(1, QUOTA_TEXT[:25]), failed_result("ENOSPC full"))
+        self.assertEqual(self.streamed(events), QUOTA_TEXT[:25])
+
+    async def test_record_is_keyed_by_conversation_and_cwd(self):
+        await self.fail_with_quota()
+        key = (11, os.path.abspath(agy_session.get_session(11).cwd))
+        self.assertEqual(list(agy_session._QUOTA_FAILURES), [key])
+        other = make_repo(self)
+        self.plans.append({"turns": [[TURNS[0][0], answer(1, QUOTA_TEXT), success(QUOTA_TEXT)]]})
+        events = await asyncio.wait_for(self.collect(
+            agy_session.get_session(11), cwd=other, language="en"), 5)
+        self.assertEqual(self.streamed(events), QUOTA_TEXT)
+        self.assertEqual(list(agy_session._QUOTA_FAILURES), [key])
+
+    async def test_a_side_turn_is_never_filtered(self):
+        await self.fail_with_quota()
+        self.plans.append({"turns": [[TURNS[0][0], answer(1, QUOTA_TEXT), success(QUOTA_TEXT)]]})
+        events = await asyncio.wait_for(self.collect(
+            agy_session.get_session(11), side=True, language="en"), 5)
+        self.assertEqual(self.streamed(events), QUOTA_TEXT)
+
+    async def test_a_one_shot_session_never_records(self):
+        self.plans.append({"turns": [[TURNS[0][0], failed_result(QUOTA_TEXT)]]})
+        events = await asyncio.wait_for(self.collect(
+            agy_session.get_session(-7), language="en"), 5)
+        self.assertEqual(events[-1].get("code"), "agy_quota", events)
+        self.assertEqual(agy_session._QUOTA_FAILURES, {})
+
+    async def test_close_session_clears_the_record(self):
+        await self.fail_with_quota()
+        self.assertTrue(agy_session._QUOTA_FAILURES)
+        await agy_session.close_session(11)
+        self.assertEqual(agy_session._QUOTA_FAILURES, {})
+
+    async def test_a_failure_text_under_the_minimum_is_not_recorded(self):
+        short = "quota reached"
+        self.assertLess(len(short), agy_session._REPLAY_MIN_CHARS)
+        await self.fail_with_quota(short)
+        self.assertEqual(agy_session._QUOTA_FAILURES, {})
+        events = await self.turn(answer(1, "The " + short + " page."))
+        self.assertEqual(self.text_of(events), ("The " + short + " page.",) * 2)
+
+
 class TestSnapshotAndFiles(_Harness):
     async def test_prompt_waits_for_a_slow_snapshot_only_up_to_the_bound(self):
         # Blind audit T1: with no bound a slow `git status` held the prompt.
