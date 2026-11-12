@@ -50,7 +50,7 @@ import { useUsageLimits } from '../hooks/home/useUsageLimits';
 import { GROUP_USAGE_FAMILY } from '../lib/usageLimits';
 import { CLI_GROUPS, activeProviderKey } from '../components/home/providerGroups';
 import { useSideChat, sideQuote } from '../hooks/home/useSideChat';
-import { useAIConfig } from '../hooks/home/useAIConfig';
+import { useAIConfig, unityConnectable } from '../hooks/home/useAIConfig';
 import { useMCPApproval } from '../hooks/home/useMCPApproval';
 import { useChatNotifications } from '../hooks/home/useChatNotifications';
 import { useAutoScroll } from '../hooks/home/useAutoScroll';
@@ -1284,7 +1284,7 @@ export default function Home() {
         onHierarchyVisible={setHierarchyVisible}
         hierarchy={<HierarchyPanel unityStatus={ai.unityMcpStatus} tree={sceneEditor.tree} loading={sceneEditor.loading}
           error={sceneEditor.error} stale={sceneEditor.stale} selectedId={sceneEditor.selectedId}
-          onSelect={selectSceneObject} onConnect={() => { void ai.toggleUnityMcp(); }} actions={sceneEditor} />}
+          onSelect={selectSceneObject} onConnect={() => { if (unityConnectable(ai.unityMcpStatus)) void ai.toggleUnityMcp(); }} actions={sceneEditor} />}
         profileLevel={profileStats.latest ? {
           level: profileStats.latest.level, xp: profileStats.latest.xp,
           levelXp: profileStats.latest.level_xp, levelNeed: profileStats.latest.level_need,
