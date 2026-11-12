@@ -1,282 +1,278 @@
+<a id="top"></a>
 <div align="center">
 
-# Gamachine
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/media/readme/banner-tr-light.svg"/>
+  <img src="docs/media/readme/banner-tr.svg" alt="Gamachine v4: yapay zekâ ajanları Unity oyununu yazar, sonra oynayıp kontrol eder." width="100%"/>
+</picture>
 
-**Tüm kodlama ajanlarını ve canlı Unity kontrolünü tek bir masaüstü uygulamasında birleştiren agentic geliştirme stüdyosu**
+[![Python](https://img.shields.io/badge/Python-3.13-2C344B?style=for-the-badge&logo=python&logoColor=white&labelColor=141826)](https://python.org)
+[![FastAPI](https://img.shields.io/badge/FastAPI-2C344B?style=for-the-badge&logo=fastapi&logoColor=white&labelColor=141826)](https://fastapi.tiangolo.com)
+[![Electron](https://img.shields.io/badge/Electron-34-2C344B?style=for-the-badge&logo=electron&logoColor=white&labelColor=141826)](https://electronjs.org)
+[![React](https://img.shields.io/badge/React-18-2C344B?style=for-the-badge&logo=react&logoColor=white&labelColor=141826)](https://react.dev)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.7-2C344B?style=for-the-badge&logo=typescript&logoColor=white&labelColor=141826)](https://typescriptlang.org)
+[![Unity MCP](https://img.shields.io/badge/Unity_MCP-Gömülü-FF6B3D?style=for-the-badge&logo=unity&logoColor=white&labelColor=141826)](./unity-mcp)
+[![License](https://img.shields.io/badge/Lisans-MIT-2CC5B4?style=for-the-badge&labelColor=141826)](LICENSE)
 
-[![Python](https://img.shields.io/badge/Python-3.13-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
-[![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
-[![Electron](https://img.shields.io/badge/Electron-34-47848F?style=for-the-badge&logo=electron&logoColor=white)](https://electronjs.org)
-[![React](https://img.shields.io/badge/React-18-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://react.dev)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://typescriptlang.org)
-[![Unity MCP](https://img.shields.io/badge/Unity_MCP-Gömülü-7B2FBE?style=for-the-badge&logo=unity&logoColor=white)](./unity-mcp)
-[![License](https://img.shields.io/badge/Lisans-MIT-green?style=for-the-badge)](LICENSE)
+[English](./README.md) · **Türkçe**
 
-*Claude Code, Codex, Antigravity (agy), bulut API'leri ve canlı Unity Editor kontrolü — hepsi aynı sohbet penceresinde, aynı onay sisteminin arkasında, aynı projeyi tanıyarak çalışır.*
-
-[English README](./README.md)
-
-<br/>
-
-![Gamachine Demo](docs/media/demo.gif)
-
-*Kod editöründe doğal dille geliştir, ardından Unity Editor'ü canlı olarak kontrol et — tek pencereden.*
-
-<sub>Neden böyle kurulduğunu merak ediyorsan: mimari kararları, yanlış çıkanları ve
-bedellerini bir günlükte tuttum →
-**[Engineering notes](docs/engineering-notes.md)** (İngilizce)</sub>
+</div>
 
 <br/>
 
-### İndir
+<img src="docs/media/readme/stats-tr.svg" alt="55 Unity Editor aracı · 6 oyun test aracı · 7 abonelik CLI'ı ve 9 API sağlayıcısı · 5 tema" width="100%"/>
 
-**[⬇ En son sürümü indir](https://github.com/BurakErdemci/gamachine/releases/latest)**
+<br/>
+
+<img src="docs/media/readme/hero-playtest.webp" alt="Unity bağlı Gamachine: sohbetin ortasında, ajanın Unity Editor'de oynadığı oyundan kendi aldığı kare" width="100%"/>
+
+<p align="center"><sub>Gerçek bir oturum: ajan Unity Editor'de oyunu başlattı ve dövüşün ortasında oyun kamerasının gördüğünü sohbete koydu.</sub></p>
+
+Gamachine, Windows ve macOS için bir masaüstü uygulaması: Claude Code, Codex, Antigravity,
+Copilot gibi kodlama ajanlarını ya da kendi API anahtarlarını tek sohbette toplar ve açık
+Unity Editor'üne bağlar. v4'te ajan kod yazmakla kalmıyor; **oyunu gerçek Editor'de oynuyor**,
+yaptığına bakıyor, birkaç sohbet de aynı projede yan yana çalışıyor.
+
+<div align="center">
+
+<br/>
+
+<a href="https://github.com/BurakErdemci/gamachine/releases/latest"><img src="docs/media/readme/download-tr.svg" alt="En son sürümü indir" height="76"/></a>
 
 | Platform | Dosya |
 |---|---|
 | **Windows 10/11** (x64) | `Gamachine-Setup-<sürüm>.exe` |
 | **macOS** (Apple Silicon) | `Gamachine-<sürüm>-arm64.dmg` |
 
-Sonrası sana ait: bir API anahtarı gir ya da zaten kullandığın bir CLI ajanını
-göster. Bir sağlayıcı bağlanana kadar sohbet kilitli kalıyor — **sana habersiz
-üçüncü taraf bir AI aracı kurmuyoruz.**
-
-<sub>Derlemeler henüz imzalı değil, o yüzden ilk açılışta işletim sistemi uyarı
-veriyor: Windows SmartScreen → *Daha fazla bilgi* → *Yine de çalıştır*;
-macOS → sağ tık → *Aç*, ya da
-`xattr -cr "/Applications/Gamachine.app"`. Intel Mac desteklenmiyor.
-Kaynaktan derlemeyi tercih ediyorsan: [Kurulum](#-kurulum).</sub>
+<sub>**Windows:** kurulum dosyası imzalı değil, ilk açılışta SmartScreen uyarır:
+*Daha fazla bilgi* → *Yine de çalıştır*. Intel Mac ve Linux yok.
+Kaynaktan derlemek için: [Kurulum](#kurulum).</sub>
+<!-- MAC-SIGNING-TBD: sürümün macOS imza durumu netleşince buraya tek satır eklenecek (imzalı ve notarize, ya da sağ tık → Aç). -->
 
 </div>
 
----
+<br/>
 
-## 🎯 Tek Çatı Altında: Bu Proje Neyi Birleştiriyor?
+<a id="oyun-testi"></a>
+<img src="docs/media/readme/h-plays-tr.svg" alt="01 · Oyun testi: ajan oyununu oynuyor" width="100%"/>
 
-Bugün bir Unity geliştiricisi farklı işler için farklı pencereler açmak zorunda: kod üretmek için bir CLI, Editor'ü kontrol etmek için ayrı bir eklenti, sohbet için bir başka uygulama. Her birinin kendi onay mantığı, kendi konfigürasyonu, projeden kendi kopuk görüşü var.
+<img src="docs/media/readme/playtest-fix.webp" alt="Ajan bildirilen bir hata üzerinde çalışırken sohbette çalışan oyundan bir kare; ardından raporu: iki satırlık düzeltme, temiz derleme, aynı dizi Unity'de yeniden oynandı, düzeltme commit'lendi" width="100%"/>
 
-**Gamachine bunların hepsini tek bir uygulamada toplar** — ve hepsini *tek bir onay kapısının* arkasına alır. Bir modeli açılır menüden seçersin; ister Claude Code CLI olsun, ister Codex, ister Antigravity (agy), ister GitHub Copilot CLI, ister doğrudan bulut API'si — hepsi:
+Altı test aracıyla ajan **gerçek Unity Editor'de** Play Mode'a giriyor, tuş ve düğmelere
+basarak oyunu kare kare ilerletiyor, kareyi görüntü olarak geri alıyor. Burada geliştirilen
+bir oyundaki test oyuncusu bildirimini alıyor: iki satırı değiştiriyor, derlemenin temiz
+olduğunu görüyor, aynı diziyi yeniden oynuyor ve commit'liyor.
 
-- **aynı sohbet penceresinde** çalışır,
-- **aynı projeyi** workspace olarak görür,
-- **aynı dosya/terminal onay kartlarını** gösterir (kapsamı aşağıda: silme ve tehlikeli komutlar her yolda onaylı; kod yazma CLI yolunda onaylı, bulut API yolunda bilinçli olarak onaysız),
-- ve istenirse **aynı canlı Unity Editor'e** MCP üzerinden komut verir.
+<sub>Ayrıca: 50 tohuma kadar, her biri 30 oyun dakikasına varan arka plan koşuları; oyunun
+`[GameHook]` ile açtığı kancalar; geçti/kaldı veren `*.playtest.json` senaryoları.
+Unity'nin Input System paketi gerekir. Bir botun oynaması oyunun çalıştığını gösterir,
+eğlenceli olduğunu değil.</sub>
 
-### Ajan × Yetenek Matrisi
+<br/>
 
-| | Sohbet & Analiz | Dosya yaz/düzenle | Terminal (onaylı) | Canlı Unity Editor kontrolü (onaylı) | Auth kaynağı |
-|---|:---:|:---:|:---:|:---:|---|
-| **Claude Code** (CLI) | ✅ | ✅ MCP — onaylı | ✅ MCP | ✅ unityMCP | Anthropic aboneliğin |
-| **Codex** (CLI) | ✅ | ✅ MCP — onaylı | ✅ MCP | ✅ unityMCP | OpenAI aboneliğin |
-| **Antigravity / agy** (CLI) | ✅ | ✅ `unityai` köprüsü — onaylı | ✅ köprü | ✅ unityMCP (HTTP) | Google aboneliğin |
-| **GitHub Copilot** (CLI) | ✅ | ✅ MCP — onaylı | ✅ MCP | ✅ unityMCP | Copilot aboneliğin |
-| **Cursor** (CLI) | ✅ | ✅ MCP — onaylı | ✅ MCP | ✅ unityMCP | Cursor aboneliğin |
-| **OpenCode** (CLI) | ✅ | ✅ MCP — onaylı | ✅ MCP | ✅ unityMCP | Ücretsiz / kendi anahtarın |
-| **Kimi Code** (CLI) | ✅ | ✅ MCP — onaylı | ✅ MCP | ✅ unityMCP | Moonshot aboneliğin |
-| **Bulut API** (Claude/GPT/Gemini/…) | ✅ | ✅ function calling — **onaysız** | ✅ function calling | ✅ function calling | Kendi API anahtarın |
-| **Ollama** (yerel) | ✅ | ✅ (uyumlu modeller) — **onaysız** | ✅ | ⚠️ kısmi | Maliyet yok, offline |
+<a id="canli-unity"></a>
+<img src="docs/media/readme/h-editor-tr.svg" alt="02 · Canlı Unity: açık Editor'ün içinde çalışıyor" width="100%"/>
 
-Bu matrisin sağladığı şey basit ama nadir: **kaynak ne olursa olsun deneyim aynı.** Codex'ten Claude Code'a geçmek bir açılır menü; alıştığın diff ekranı, terminal onayı ve Unity entegrasyonu olduğu gibi kalır.
+<img src="docs/media/readme/unity-language-switch.webp" alt="İstek, bitiş kartının dil seçimine uymasını ve iki dilde gösterilmesini istiyor; altında çalışan oyundan alınmış kart, İngilizce ve Türkçe" width="100%"/>
 
-> **Önemli ayrım:** Onay kartları **dosya silme ve tehlikeli terminal komutları** için her yolda çıkar; **dosya yazma** için CLI ajanlarında çıkar, **bulut API / Ollama function-calling yolunda çıkmaz**. **Canlı Unity sahne işlemlerinde** sahneyi *değiştiren* çağrılar her sağlayıcıda onay kartı açar, çünkü soruyu Unity MCP sunucusunun kendisi soruyor. Bunların hepsi adım modu için geçerli; otomatik modda hiç kart çıkmaz. Tam tablo ve gerekçeler: [Onay kapsamı](docs/security.md#️-approval-scope-what-is-and-isnt-confirmed-an-honesty-note).
+MCP üzerinden **55 Unity Editor aracı**: sahneler, GameObject'ler, prefab'lar, materyaller,
+script'ler, konsol. Bitiş kartını dil seçimine bağlaması istenen ajan derleme sonucunu
+kontrol etti ve kartı çalışan oyundan iki dilde gösterdi.
 
----
+<sub>"Temiz derlendi" artık gerçekten derlendi demek: boş konsol değil, `compile_status`
+kararı. Ajanın her işlemi tek, adlı bir Undo adımı; ham `.meta` ya da sahne YAML'ı yazmak
+her modda reddediliyor, asset GUID'leri bozulmuyor.</sub>
 
-## 🚀 Neden Gamachine?
+<br/>
 
-Unity ekosistemindeki AI araçları genelde iki uçtan birine düşer: ya sadece kod yazar, ya da sadece sohbet eder. Gerçek bir geliştirme ortağının yaptığını — projeyi anlamak, hatayı bulmak, düzeltmek, terminalde test etmek ve Unity Editor'de görmek — tek başına yapamaz.
+<a id="paralel-sohbetler"></a>
+<img src="docs/media/readme/h-chats-tr.svg" alt="03 · Paralel: birkaç sohbet, tek proje" width="100%"/>
 
-| Geleneksel AI Asistanlar | Gamachine |
-|---|---|
-| Tek sağlayıcıya kilitli | 7 CLI ajanı (Claude Code, Codex, agy, Copilot, Cursor, OpenCode, Kimi Code), 8+ bulut API (NVIDIA NIM ücretsiz havuz dahil), Ollama — tek menüden |
-| Kod yazar, projeyi görmez | Projenin dosyalarını gerektiğinde okur, arar ve listeler; açık sahneyi ve Console'u Unity MCP üzerinden okur |
-| Dosya sistemine erişemez | Dosya oku/yaz/sil — hepsi workspace'e kilitli; silme ve tehlikeli komutlar onay kartıyla |
-| Unity Editor'den habersiz | MCP ile sahneye GameObject ekler, bileşen bağlar, konsolu okur |
-| Terminal çalıştıramaz | Güvenli terminal katmanı; tehlikeli komutlar onay ister |
-| Arka plan işi bitince ortada kalır | Sohbet kendi kendine uyanır, neyin bittiğini söyler |
-| Kurulum derdi | `uv`, OmniSharp + .NET SDK, ffmpeg/yt-dlp, çevrimdışı konuşma modelleri — hepsi **uygulamaya gömülü**, sıfır ek kurulum |
+<img src="docs/media/readme/parallel-chats.webp" alt="Kenar çubuğunda bir görev çalışıyor, üç sohbet bitmiş; çalışan sohbetin cevabı geliyor ve sohbet listesine geçiyor" width="100%"/>
 
----
+Sohbetler paralel çalışır; her birinin kendi akışı, Durdur düğmesi ve sırası var, aynı
+Editor'e yazmalar sırayla yapılır. Sohbeti sekmeye dallandır, salt okunur bir yan soru sor
+ya da bir sohbetin ötekine not bırakıp onu uyandırmasına izin ver:
 
-## ✨ Özellikler
+<p align="center"><img src="docs/media/readme/chat-note.webp" alt="Bir sohbette başka bir sohbetten gelen not ve ajanın ona cevabı" width="80%"/></p>
 
-**Çok ajan, tek deneyim** — 7 CLI ajanı, 8+ bulut API'si ve yerel Ollama; mesaj
-başına değiştirilebilir. Bir CLI seçildiğinde backend o aracın MCP yapılandırmasını
-çağrı anında yazıyor, elle kurulum gerekmiyor. Antigravity her turda yeni süreç
-açmak yerine sohbet başına tek bir uzun ömürlü oturumda çalışıyor.
+<br/>
 
-**Model listesi bizim değil, senin hesabının** — her bulut sağlayıcısına senin
-anahtarınla "bana hangi modelleri veriyorsun" diye soruluyor; adının yanındaki
-etiketi, bağlam boyutunu ve fiyatı da herkese açık bir katalog sağlıyor. Anahtarı
-olmayan sağlayıcı listeden kaybolmuyor, "doğrulanmadı" diye işaretleniyor — çünkü
-"bu model var" ile "senin hesabında var" iki ayrı iddia.
+<a id="blender"></a>
+<img src="docs/media/readme/h-blender-tr.svg" alt="04 · 3D işler: Blender da var" width="100%"/>
 
-**Otonom agentic döngü** — görev → düşün → araç çağır → değerlendir → tekrarla;
-ilerleme koruması durduruyor (aynı araç/argüman/sonuç beş kez tekrarlarsa), sert sigorta 300 adım. Her adım SSE ile canlı akıyor ve Dur düğmesi iki katmanda
-birden iptal ediyor: akışı kesiyor *ve* backend'de bekleyen onay kapılarını reddediyor.
+<table>
+<tr>
+<td width="58%"><img src="docs/media/readme/blender-trophy.webp" alt="Ajan Blender'da modellediği low-poly kupanın ara halini, bitmiş halini ve son 256×256 render'ını özetiyle birlikte sohbete koyuyor"/></td>
+<td width="42%"><img src="docs/media/readme/connectors.webp" alt="Ayarlar, Bağlayıcılar sayfası: Kur düğmeli Blender kartı ve Terminal ajanları anahtarı"/></td>
+</tr>
+<tr>
+<td>Ajanın Blender'da yaptığı iş: oyunun bitiş kartı için low-poly bir kupa, şekillendikçe sohbette gösterildi, sonra saydam PNG olarak render edildi.</td>
+<td><b>Ayarlar › Bağlayıcılar</b> Blender eklentisini kurar (Blender 4.2+); ajan sahneyi okur, içinde Python çalıştırır ve sonuca bakar.</td>
+</tr>
+</table>
 
-**Hepsi için tek onay kapısı** — dosya yazımında yan yana diff, silmede içerik
-önizlemesi, terminalde komutun kendisi. CLI ajanları ve bulut API'leri aynı arayüzden
-geçiyor. Neyin onaylandığı ve neyin **bilerek** onaylanmadığı yazılı:
-[Approval scope](docs/security.md#️-approval-scope-what-is-and-isnt-confirmed-an-honesty-note).
-Hiçbir modun kapatamadığı tek kural: bir Unity projesinin içinde ajan `.meta`
-dosyalarını yazamaz, silemez, taşıyamaz; sahne, prefab ve diğer Unity YAML
-varlıklarını ham metin olarak yazamaz. Varlık GUID'lerini koruyan Unity araçlarına
-yönlendirilir.
+<br/>
 
-**Canlı Unity Editor kontrolü, kurulum yok** — MCP üzerinden 52 Editor aracı: sahne,
-GameObject, prefab, materyal, fizik, build ayarları. Ayrıca
-[oyunu oynayabiliyor](docs/unity-mcp.md#-the-ai-can-now-play-the-game-manage_input):
-play moduna giriyor, girdi gönderiyor, ekran görüntüsü alıp yaptığı işi
-değerlendiriyor. Script yazımları Unity'nin derlemesini bekleyip bir sonuç döndürüyor;
-"clean" ancak kod derlendiğinde ve domain reload bittiğinde geliyor, çünkü boş konsol
-temiz derleme demek değil. Ajanın her eylemi Unity'de adı konmuş tek bir geri alma
-adımı; ajan yalnızca son eylemini, senin sonradan yaptığın düzenlemelere dokunmadan
-geri alabiliyor. `uv` araç zinciri uygulamanın içinde geliyor.
+<a id="projeler"></a>
+<img src="docs/media/readme/h-hub-tr.svg" alt="05 · Projeler: ilk ekranda küçük bir Unity Hub" width="100%"/>
 
-**Bağlam farkındalığı** — `/compact` uzun sohbetleri token sınırına çarpmadan özetliyor;
-kullanım/bağlam paneli nerede olduğunu gösteriyor — canlı sayıya ulaşılamıyorsa
-"bayat" ya da "tahmin" rozetiyle, dürüstçe.
+<p align="center"><img src="docs/media/readme/projects-new-game.webp" alt="Projeler ekranı: şablon kartları URP Blank ile 2D arasında değişiyor, proje adı kayıt yuvasına yazılıyor" width="86%"/></p>
 
-**Sohbet kendi kendine devam ediyor** — sen bakmayı bıraktıktan sonra biten bir
-alt ajan ya da arka plan komutu, sen bir şey yazana kadar sohbeti boşta bırakırdı.
-Artık sohbet uyanıyor, turu kaldığı yerden alıyor ve neyin bittiğini söylüyor. Ekranda
-bir onay kartı varken bekliyor; art arda üç uyanıştan sonra duruyor.
+Proje aç, Unity'yi başlat ya da seçtiğin editör ve şablonla yeni proje oluştur. Buradan
+Unity sürümü ve modülleri de kurulabilir; Unity Hub 3.21+ gerekir ve Gamachine Unity'ye
+asla senin yerine giriş yapmaz.
 
-**3D modeller ve görseller yerinde açılıyor** — dosya ağacında bir `.fbx`, `.glb`,
-`.gltf`, `.obj`, `.stl`, `.ply` ya da `.dae` dosyasına tıkla; metin editörü yerine
-önizlemede açılıyor: kamerayı çevir, zaman çizgisini kaydır, animasyonu 0.25x–2x
-hızda oynat. Yalnızca animasyon taşıyan bir dosyaya, kendi kemiklerinden bir manken
-kuruluyor ki izleyecek bir şey olsun. Doku ve sprite'lar aynı alanda açılıyor;
-gerçek boyut modu piksel sanatını bulanıklaştırmadan gösteriyor.
+<br/>
 
-**Makineden çıkmayan dikte** — sohbet kutusundaki mikrofon düğmesi, sen konuşurken
-söylediklerini kutuya yazıyor; okuyorsun, düzeltiyorsun, Enter'a basıyorsun. Türkçe
-ve İngilizce tanıma modelleri yükleyicinin içinde geliyor: çevrimdışı çalışıyor ve
-hiçbir ses kaydı hiçbir yere yüklenmiyor.
+<a id="saglayicilar"></a>
+<img src="docs/media/readme/h-ai-tr.svg" alt="06 · Sağlayıcılar: yapay zekân senin" width="100%"/>
 
-**C# zekası, kurulum yok** — OmniSharp LSP yan süreci Monaco editöründe gerçek
-Roslyn analizi veriyor; ihtiyaç duyduğu .NET SDK'sı üç platformda da gömülü.
-(Runtime değil SDK olması bir tercih değil, ölçülmüş bir zorunluluk —
-[Architecture](docs/architecture.md).)
+<table>
+<tr>
+<td width="50%"><img src="docs/media/readme/providers.webp" alt="Ayarlar, Modeller ve hesaplar: oturum durumuyla abonelik CLI'ları ve Anthropic, OpenAI, Google, DeepSeek, Kimi, GLM, NVIDIA, Groq, OpenRouter API sağlayıcıları"/></td>
+<td width="50%"><img src="docs/media/readme/mission-board.webp" alt="Yeni bir sohbet: maskot projenin açık olduğunu söylüyor, görev panosu dört başlangıç işi öneriyor, eğik çizgi menüsünde Compact ve Guide var"/></td>
+</tr>
+<tr>
+<td>Kendi oturumunla <b>7 abonelik CLI'ı</b> (Claude Code, Codex, Antigravity, Copilot, Cursor, OpenCode, Kimi Code), <b>9 API sağlayıcısı</b> ve yerel Ollama. Anahtarlar bilgisayarında kalır.</td>
+<td>Bütün ajanlar için tek çalışma modu: varsayılan <b>Güvenli Otomatik</b> rutin işi geçirir, kritik ve geri dönüşsüz işlemden önce sorar; iki yanında <b>Adım Adım</b> ve <b>Otomatik</b>.</td>
+</tr>
+</table>
 
-**Gerçek effort kontrolü** — effort seçimi her sağlayıcıda gerçekten etki ediyor;
-arayüz yalnızca o modelin desteklediği seviyeleri gösteriyor.
+<sub>En iyi Claude Code ile çalışır; Gamachine'i onunla geliştirip test ediyoruz. Kimi Code
+uçtan uca denenmedi, Ollama'nın Unity kontrolü kısmi.</sub>
 
-**Video → sohbet** — sohbete bir video bağlantısı (YouTube dahil) ya da dosyası
-bırak; gömülü ffmpeg + yt-dlp kareleri ve transkripti çıkarıp analiz hattına veriyor.
+<br/>
 
-**Etrafında gerçek bir IDE** — Monaco editörü, gerçek PTY üzerinde xterm.js
-terminali, diff görüntüleyici, canlı düşünme bloğu ve iki dilli TR/EN arayüz.
+<a id="gorunum"></a>
+<img src="docs/media/readme/h-themes-tr.svg" alt="07 · Görünüm: kendine göre ayarla" width="100%"/>
 
----
+<img src="docs/media/readme/themes.webp" alt="Ayarlar, Görünüm: tema kartlarına tıklamak bütün uygulamayı Arena, Blueprint, Workshop ve Plain arasında değiştiriyor" width="100%"/>
 
-## 📚 Dokümantasyon
+Beş tema (Arena, Plain, Blueprint, Workshop ve kendi renk ve yazı tiplerinle Custom),
+Türkçe ya da İngilizce arayüz, bir Rehber ekranı ve altı adımlık başlangıç turu.
 
-Ayrıntılı dokümanlar **İngilizce** tutuluyor: en çok değişen katman orası ve iki dilde
-sürdürmek, kodla arasındaki sürüklenmeyi büyütüyor. README iki dilli kalıyor.
+<br/>
 
-| | |
-|---|---|
-| [Engineering notes](docs/engineering-notes.md) | Kararlar, hatalar ve bedelleri |
-| [Architecture](docs/architecture.md) | Süreç yerleşimi, agentic döngü, araç katmanı, SSE |
-| [Approval & security](docs/security.md) | Neyin onaylandığı, neyin bilerek onaylanmadığı |
-| [Unity MCP integration](docs/unity-mcp.md) | 52 Editor aracı, URL'ye göre sabit araç listesi ve girdi sistemi |
-| [Supported providers](docs/providers.md) | Bütün CLI ajanları, bulut API'leri, yerel modeller |
-| [Building from source](docs/building.md) | Geliştirme kurulumu ve dmg / installer üretimi |
+<a id="v4te-ayrica"></a>
+<img src="docs/media/readme/h-also-tr.svg" alt="Daha fazlası: v4'te ayrıca" width="100%"/>
 
----
+<table>
+<tr>
+<td width="50%" valign="top"><img src="docs/media/readme/i-computer.svg" width="44" align="left" alt=""/><b>Bilgisayar kullanımı</b><br/>Varsayılan kapalı. Ajan, tek tek izin verdiğin masaüstü uygulamalarında ekran görüntüsü alır, tıklar, yazar; canlı görünümde izlersin, Ctrl+Alt+Esc (Cmd+Shift+Esc) durdurur. En çok Claude Code ve Codex ile denendi; Ollama ile çalışmaz.</td>
+<td width="50%" valign="top"><img src="docs/media/readme/i-browser.svg" width="44" align="left" alt=""/><b>Ajan tarayıcısı</b><br/>Varsayılan kapalı. Ajanın arama yapıp okuyabildiği, tıklayıp form doldurabildiği yerleşik tarayıcı; gönderme, parola ve satın alma onayını ister. Sayfayı işaretleyip (Ctrl+Shift+E) notları gönderebilirsin. <a href="docs/agent-browser.md">Ayrıntı</a></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><img src="docs/media/readme/i-phone.svg" width="44" align="left" alt=""/><b>Telefon ve web uzaktan kontrol</b><br/>Varsayılan kapalı. Telefonu QR kod ve 4 haneli kontrolle eşle; sohbetleri izle, kartları onayla, mesaj gönder, turu durdur. Uçtan uca şifreli; bilgisayar açık kalmalı. <a href="docs/remote-control.md">Ayrıntı</a></td>
+<td width="50%" valign="top"><img src="docs/media/readme/i-terminal.svg" width="44" align="left" alt=""/><b>Terminal ajanları</b><br/>Claude Code, Codex ve diğer CLI ajanları yerel bir MCP sunucusu üzerinden sohbetlerini listeleyebilir, birini açıp mesaj gönderebilir. <a href="docs/terminal-agents.md">Ayrıntı</a></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><img src="docs/media/readme/i-scene.svg" width="44" align="left" alt=""/><b>Sahne editörü</b><br/>Açık sahne için isteğe bağlı Hiyerarşi ve Inspector; ajan için değil, senin için. 3D görünüm yok.</td>
+<td width="50%" valign="top"><img src="docs/media/readme/i-mic.svg" width="44" align="left" alt=""/><b>Dikte</b><br/>Whisper bilgisayarında çalışır; Enter'a basana kadar hiçbir şey gönderilmez, ses makineden çıkmaz. Model içinde geldiği için Windows kurulumu yaklaşık 1,3 GB. <!-- MAC-DICTATION-TBD: macOS durumu netleşince buraya yazılacak. --></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><img src="docs/media/readme/i-models.svg" width="44" align="left" alt=""/><b>Modeller</b><br/>Claude Fable 5.2, Opus 5.5, Sonnet 5.5, Haiku 5.5; Codex için GPT-6 Luna ve Sol, GPT-6.1 Sol ve gpt-6.1-terra; agy 1.4.0 üzerinden Gemini 4 Argon.</td>
+<td width="50%" valign="top"><img src="docs/media/readme/i-image.svg" width="44" align="left" alt=""/><b>Görsel ve @</b><br/>Ajan <code>show_image</code> ile sohbete görsel koyabilir; <code>@</code> yazınca diğer sohbetlerin listelenir, ajan birine not bırakabilir.</td>
+</tr>
+</table>
 
-## ⚙️ Kurulum
+Tam liste: [CHANGELOG.md](CHANGELOG.md). Bilinen sınırlar: [sürüm notları](RELEASE_NOTES.md) (İngilizce).
 
-**Uygulamayı kullanmak için:**
-[Releases](https://github.com/BurakErdemci/gamachine/releases/latest) sayfasından
-indir, bir API anahtarı gir ya da zaten kullandığın bir CLI ajanını göster. Python,
-`uv`, OmniSharp, .NET SDK ve ffmpeg/yt-dlp uygulamanın içinde geliyor — başka bir
-kurulum gerekmiyor.
+<br/>
 
-**Kaynaktan derlemek için:** Python 3.13+ ve Node.js 20+ gerekiyor (Unity MCP
-entegrasyonunu istiyorsan Unity Editor de). Adımlar, ortam değişkenleri ve paketleme
-[Building from source](docs/building.md) dosyasında.
+<a id="belgeler"></a>
+<img src="docs/media/readme/h-docs-tr.svg" alt="Belgeler" width="100%"/>
 
-**Önceki sürüm (v3, v4 yenilemesinden önceki arayüz)**
-[`legacy-v3`](https://github.com/BurakErdemci/gamachine/tree/legacy-v3) dalında duruyor.
-Olduğu gibi korunuyor, yeni özellik almıyor.
+<table>
+<tr><td><a href="docs/engineering-notes.md"><b>Engineering notes</b></a></td><td>Kararlar, hatalar ve bedelleri</td></tr>
+<tr><td><a href="docs/architecture.md"><b>Mimari</b></a></td><td>Süreç düzeni, ajan döngüsü, araç katmanı, SSE akışı</td></tr>
+<tr><td><a href="docs/security.md"><b>Onay ve güvenlik</b></a></td><td>Neyin onaya bağlı olduğu, neyin bilerek olmadığı ve neden</td></tr>
+<tr><td><a href="docs/unity-mcp.md"><b>Unity MCP entegrasyonu</b></a></td><td>Editor araçları, URL başına araç listesi, oyun testi ve girdi sistemi</td></tr>
+<tr><td><a href="docs/providers.md"><b>Desteklenen sağlayıcılar</b></a></td><td>Bütün CLI ajanları, bulut API'leri ve yerel modeller</td></tr>
+<tr><td><a href="docs/building.md"><b>Kaynaktan derleme</b></a></td><td>Geliştirme ortamı, dmg / kurulum dosyası üretimi</td></tr>
+</table>
 
----
+<sub>Belgeler İngilizce.</sub>
 
-## 💡 Kullanım
+<br/>
 
-1. **Workspace seç** — Unity projenin klasörünü seç; ajanlar onun içinde çalışır.
-2. **Model seç** — Ayarlar'dan sağlayıcı/model seç. Bulut API ise anahtarını gir (şifreli saklanır); CLI ise makinende kurulu olması yeter. Her sohbet kendi modelini hatırlar; yeni sohbet en son seçtiğin modelle başlar.
-3. **Konuş** —
+<a id="kurulum"></a>
+<img src="docs/media/readme/h-install-tr.svg" alt="Kurulum" width="100%"/>
 
-```
-"PlayerController.cs'teki performans sorunlarını bul"
-"Inventory için ScriptableObject tabanlı ItemData scripti oluştur"
-"NullReferenceException PlayerController.cs:47 — sebebi ne, düzelt"
-"Sahneye bir Player capsule ekle ve Rigidbody bağla"   # Unity MCP açıkken
-/compact                                                # uzun sohbeti özetle
-```
+**Uygulamayı kullanmak için:** [Releases](https://github.com/BurakErdemci/gamachine/releases/latest)
+sayfasından indir, sonra bir API anahtarı ekle ya da zaten kullandığın bir CLI ajanında
+oturum aç. Bir sağlayıcı bağlanana kadar sohbet kilitli kalır; sana haber vermeden üçüncü
+taraf bir yapay zekâ aracı kurmayız. Python, `uv`, OmniSharp, .NET SDK ve ffmpeg/yt-dlp
+uygulamanın içinde gelir.
 
-4. **Onayla** — AI onay gerektiren bir işlem isteyince akış durur, diff/komut kartı açılır; onayla veya reddet. (Bulut API modellerinde dosya *yazma* kart açmaz — bkz. [Onay kapsamı](docs/security.md#️-approval-scope-what-is-and-isnt-confirmed-an-honesty-note).)
-5. **Bak ve konuş** — dosya ağacında bir `.fbx`'e ya da dokuya tıkla, yerinde önizlensin; yazmak yerine mikrofona basıp söyle.
+**Kaynaktan:** Python 3.13+ ve Node.js 20+ gerekir (Unity entegrasyonu için Unity Editor,
+2021.3 ya da yenisi). Adımlar, ortam değişkenleri ve paketleme
+[Kaynaktan derleme](docs/building.md) belgesinde.
 
----
+**Önceki sürüm (v3)** olduğu gibi
+[`legacy-v3`](https://github.com/BurakErdemci/gamachine/tree/legacy-v3) dalında duruyor;
+yeni özellik almıyor.
 
-## 🤝 Katkıda Bulunma
+<br/>
 
-Kalite kapısı üç ayrı test paketinden oluşuyor — **toplam ~3100 test**:
+<a id="katki"></a>
+<img src="docs/media/readme/h-contrib-tr.svg" alt="Katkı" width="100%"/>
+
+Kodu üç test takımı koruyor:
 
 ```bash
-# Backend (~1118 test)
+# Backend
 cd Backend && pytest
-#   Windows: venv\Scripts\python.exe -m pytest    (ortam: PYTHONUTF8=1)
+#   Windows: venv\Scripts\python.exe -m pytest   (ortam: PYTHONUTF8=1)
 
-# unity-mcp sunucusu (~1596 test)
+# unity-mcp sunucusu
 cd unity-mcp/Server && pytest
 
-# Frontend (~396 test) + TypeScript kapısı
+# Frontend + TypeScript kapısı
 cd Frontend/frontend && npm test && npx tsc --noEmit
 ```
 
-CI'da (`.github/workflows/test.yml`) dört job birden koşar: **Backend testleri**, **unity-mcp Server testleri**, **Frontend kapısı (tsc + vitest)** ve **PowerShell sözdizimi denetimi**. Dördü de yeşil olmadan sürüm çıkmaz.
+CI (`.github/workflows/test.yml`) beş iş koşturur: backend testleri, kara kutu sözleşme
+takımı, unity-mcp sunucu testleri, frontend kapısı (tsc + vitest) ve PowerShell sözdizimi
+denetimi. Sürüm derlemesi hepsinin geçmesini bekler.
 
-1. Repo'yu fork'la
-2. Feature branch aç (`git checkout -b feat/harika-ozellik`)
-3. Testleri çalıştır
+1. Depoyu fork'la
+2. Bir özellik dalı aç (`git checkout -b feat/harika-ozellik`)
+3. Testleri koştur
 4. Pull request aç
 
-> 💡 **Yerel yeşil, CI hakkında hiçbir şey söylemez.** Bu depoda defalarca ölçüldü: platform farkı (Windows ↔ Linux), yol ayırıcıları ve ortam değişkenleri yerelde geçen bir testi CI'da kırabiliyor. Push'tan sonra `gh run list` bir alışkanlık değil, bir adım.
+<br/>
 
----
-
-## 👤 Geliştirici
+<a id="gelistirici"></a>
+<img src="docs/media/readme/h-dev-tr.svg" alt="Geliştirici" width="100%"/>
 
 **Burak Emre Erdemci**
 
-Unity geliştirme sürecini AI ile kökten dönüştürmek isteyen geliştiriciler için açık kaynak bir portfolyo ve araştırma çalışması.
+Unity oyunlarının yapay zekâyla yapılış biçimini değiştirmek isteyen geliştiriciler için açık
+kaynak bir portfolyo ve araştırma projesi.
 
----
+<br/>
 
-## 📄 Lisans
+<a id="lisans"></a>
+<img src="docs/media/readme/h-license-tr.svg" alt="Lisans" width="100%"/>
 
-**[MIT](LICENSE)** — açık kaynak, hiçbir ek koşul yok:
+**[MIT](LICENSE)**: ücretsiz; lisans anahtarı yok, satın alınacak bir şey yok.
 
-- ✅ **Kullanabilirsin** — kişisel, eğitim, araştırma, kurumsal, her amaçla
-- ✅ **İnceleyebilir, değiştirebilir, fork'layabilir, yeniden dağıtabilirsin**
-- ✅ **Yaptığın oyunları satabilirsin** — bu uygulamayla ürettiğin işler tamamen senindir
+- ✅ **Kullan**: kişisel, eğitim, araştırma ya da ticari işlerde
+- ✅ **İncele, değiştir, fork'la, yeniden dağıt**
+- ✅ **Yaptığın oyunları sat**: ürettiğin şey senindir
 
-Üçüncü parti bileşenlerin lisansları için: [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)
-(Gömülü FFmpeg'in lisansı **platforma göre değişiyor** — Windows'ta LGPL-3.0,
-macOS/Linux'ta GPL-3.0 — ve her durumda yalnızca ayrı bir süreç olarak çağrılıyor.)
+Yapay zekâ sağlayıcının ücretini sen ödersin. Üçüncü taraf bileşen lisansları için
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) (gömülü FFmpeg Windows'ta LGPL-3.0,
+macOS/Linux'ta GPL-3.0; her durumda yalnızca ayrı bir süreç olarak çalıştırılır).
 
 Güvenlik açığı bildirimi: [SECURITY.md](SECURITY.md) ·
 Katkı rehberi: [CONTRIBUTING.md](CONTRIBUTING.md)
 
----
+<br/>
 
-## Markalar
+<a id="markalar"></a>
+<img src="docs/media/readme/h-tm-tr.svg" alt="Markalar" width="100%"/>
 
 Bu proje Unity Technologies ile **bağlantılı değildir**, onun tarafından
 desteklenmiyor ve onaylanmıyor. "Unity" ve "Unity Technologies", Unity
@@ -284,5 +280,13 @@ Technologies veya bağlı kuruluşlarının ABD'de ve diğer ülkelerdeki ticari
 markaları ya da tescilli ticari markalarıdır. Aynı şekilde "Unreal Engine" Epic
 Games'in, "Godot" Godot Foundation'ın, "Claude" Anthropic'in, "Codex" ve "GPT"
 OpenAI'ın, "Gemini" ve "Antigravity" Google'ın, "GitHub Copilot" GitHub'ın,
-"Cursor" Anysphere'in markalarıdır. Bu adlar yalnızca uyumluluğu **tanımlamak**
-için kullanılıyor.
+"Cursor" Anysphere'in, "Blender" Blender Foundation'ın markalarıdır. Bu adlar
+yalnızca uyumluluğu **tanımlamak** için kullanılıyor.
+
+Gamachine Unity tarafından onaylanmış ya da yetkilendirilmiş değildir; Unity'nin
+[Hizmet Şartları](https://unity.com/legal/terms-of-service)'nı kabul ettiysen, yapay zekâ
+ajanlarının erişimiyle ilgili 17.2. bölüm dahil, bu şartlara bağlı kalırsın.
+
+<br/>
+
+<p align="center"><a href="#top"><img src="docs/media/readme/footer.svg" alt="Gamachine v4, başa dön" width="100%"/></a></p>

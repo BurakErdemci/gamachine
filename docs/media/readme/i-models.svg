@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-hidden="true">
+<style>.ic{fill:none;stroke:#2CC5B4;stroke-width:3.4;stroke-linecap:round;stroke-linejoin:round} .ic .f{fill:#2CC5B4;stroke:none}</style>
+<path d="M1 1H51L63 13V63H13L1 51Z" fill="#141826" stroke="#2C344B" stroke-width="2"/>
+<g class="ic" transform="translate(8 8) scale(0.6666666666666666)"><rect x="20" y="20" width="32" height="32" rx="4"/><rect x="29" y="29" width="14" height="14" rx="2" class="f"/><path d="M28 12v8M36 12v8M44 12v8M28 52v8M36 52v8M44 52v8M12 28h8M12 36h8M12 44h8M52 28h8M52 36h8M52 44h8"/></g>
+</svg>

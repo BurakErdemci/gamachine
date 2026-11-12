@@ -1,281 +1,291 @@
+<a id="top"></a>
 <div align="center">
 
-# Gamachine
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/media/readme/banner-en-light.svg"/>
+  <img src="docs/media/readme/banner-en.svg" alt="Gamachine v4: AI agents build your Unity game, then play it to check their work." width="100%"/>
+</picture>
 
-**An agentic development studio that unifies every coding agent and live Unity control in a single desktop app**
+[![Python](https://img.shields.io/badge/Python-3.13-2C344B?style=for-the-badge&logo=python&logoColor=white&labelColor=141826)](https://python.org)
+[![FastAPI](https://img.shields.io/badge/FastAPI-2C344B?style=for-the-badge&logo=fastapi&logoColor=white&labelColor=141826)](https://fastapi.tiangolo.com)
+[![Electron](https://img.shields.io/badge/Electron-34-2C344B?style=for-the-badge&logo=electron&logoColor=white&labelColor=141826)](https://electronjs.org)
+[![React](https://img.shields.io/badge/React-18-2C344B?style=for-the-badge&logo=react&logoColor=white&labelColor=141826)](https://react.dev)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.7-2C344B?style=for-the-badge&logo=typescript&logoColor=white&labelColor=141826)](https://typescriptlang.org)
+[![Unity MCP](https://img.shields.io/badge/Unity_MCP-Embedded-FF6B3D?style=for-the-badge&logo=unity&logoColor=white&labelColor=141826)](./unity-mcp)
+[![License](https://img.shields.io/badge/License-MIT-2CC5B4?style=for-the-badge&labelColor=141826)](LICENSE)
 
-[![Python](https://img.shields.io/badge/Python-3.13-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
-[![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
-[![Electron](https://img.shields.io/badge/Electron-34-47848F?style=for-the-badge&logo=electron&logoColor=white)](https://electronjs.org)
-[![React](https://img.shields.io/badge/React-18-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://react.dev)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://typescriptlang.org)
-[![Unity MCP](https://img.shields.io/badge/Unity_MCP-Embedded-7B2FBE?style=for-the-badge&logo=unity&logoColor=white)](./unity-mcp)
-[![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
+**English** · [Türkçe](./README_TR.md)
 
-*Claude Code, Codex, Antigravity (agy), cloud APIs and live Unity Editor control — all in the same chat window, behind the same approval system, aware of the same project.*
-
-[Türkçe README](./README_TR.md)
-
-<br/>
-
-![Gamachine Demo](docs/media/demo.gif)
-
-*Develop with natural language in the code editor, then control the Unity Editor live — all from a single window.*
-
-<sub>Curious *why* it is built this way? I kept a log of the architectural decisions —
-including the wrong ones and what they cost →
-**[Engineering notes](docs/engineering-notes.md)**</sub>
+</div>
 
 <br/>
 
-### Download
+<img src="docs/media/readme/stats-en.svg" alt="55 Unity Editor tools · 6 playtest tools · 7 subscription CLIs and 9 API providers · 5 themes" width="100%"/>
 
-**[⬇ Download the latest release](https://github.com/BurakErdemci/gamachine/releases/latest)**
+<br/>
+
+<img src="docs/media/readme/hero-playtest.webp" alt="Gamachine with Unity connected: in the middle of the chat, the agent's own capture of the game it is playing in the Unity Editor" width="100%"/>
+
+<p align="center"><sub>A real session: the agent started a play session in the Unity Editor and posted what the game camera saw mid-fight.</sub></p>
+
+Gamachine is a desktop app for Windows and macOS that puts AI coding agents (Claude Code,
+Codex, Antigravity, Copilot, your own API keys) in one chat, wired to your open Unity Editor.
+In v4 the agent does more than write code: it **plays the game in the real Editor**, looks at
+what it built, and several chats work on the same project side by side.
+
+<div align="center">
+
+<br/>
+
+<a href="https://github.com/BurakErdemci/gamachine/releases/latest"><img src="docs/media/readme/download-en.svg" alt="Download the latest release" height="76"/></a>
 
 | Platform | File |
 |---|---|
 | **Windows 10/11** (x64) | `Gamachine-Setup-<version>.exe` |
 | **macOS** (Apple Silicon) | `Gamachine-<version>-arm64.dmg` |
 
-Then bring your own AI: add an API key, or point it at a CLI agent you already
-use. The chat stays locked until one is connected — **we do not install a
-third-party AI tool on your machine without telling you.**
-
-<sub>The builds are not code-signed yet, so the OS will warn you on first run:
-Windows SmartScreen → *More info* → *Run anyway*; macOS → right-click → *Open*,
-or `xattr -cr "/Applications/Gamachine.app"`. Intel Macs are not
-supported. Prefer building from source? See [Installation](#-installation).</sub>
+<sub>**Windows:** the installer is not code-signed, so SmartScreen warns on first run:
+*More info* → *Run anyway*. No Intel Macs, no Linux.
+Building from source? See [Installation](#installation).</sub>
+<!-- MAC-SIGNING-TBD: add one line here once the macOS signing state of the release is settled (signed and notarized, or right-click → Open). -->
 
 </div>
 
----
+<br/>
 
-## 🎯 Under One Roof: What Does This Project Unify?
+<a id="playtest"></a>
+<img src="docs/media/readme/h-plays-en.svg" alt="01 · Playtest: the agent plays your game" width="100%"/>
 
-Today a Unity developer juggles multiple windows for different jobs: one CLI to generate code, a separate plugin to control the Editor, yet another app to chat. Each has its own approval logic, its own configuration, its own disconnected view of the project.
+<img src="docs/media/readme/playtest-fix.webp" alt="The agent works on a reported bug with a frame of the running game in the chat, then reports: two-line fix, clean compile, same sequence replayed in Unity, fix committed" width="100%"/>
 
-**Gamachine brings them all into a single application** — and puts them behind *one approval gate*. You pick a model from a dropdown; whether it's the Claude Code CLI, Codex, Antigravity (agy), GitHub Copilot CLI, or a direct cloud API — they all:
+Six playtest tools let an agent enter Play Mode in the **real Unity Editor**, step the game
+frame by frame while pressing keys and buttons, and get the frame back as an image. Here it
+takes a playtester's report on a game in development, changes two lines, confirms a clean
+compile, replays the same sequence and commits.
 
-- run **in the same chat window**,
-- see **the same project** as their workspace,
-- show **the same file/terminal approval cards** (scope below: deletes and dangerous commands are gated on every path; code writes are gated on the CLI paths and deliberately ungated on the cloud API path),
-- and, when enabled, drive **the same live Unity Editor** over MCP.
+<sub>Also: background runs of up to 30 game-minutes across up to 50 seeds, hooks the game
+declares with `[GameHook]`, and `*.playtest.json` scenarios with pass/fail.
+Needs Unity's Input System package. A bot playing shows the game runs, not that it is fun.</sub>
 
-### Agent × Capability Matrix
+<br/>
 
-| | Chat & Analysis | Write/Edit files (approved) | Terminal (approved) | Live Unity Editor control (approved) | Auth source |
-|---|:---:|:---:|:---:|:---:|---|
-| **Claude Code** (CLI) | ✅ | ✅ MCP | ✅ MCP | ✅ unityMCP | your Anthropic subscription |
-| **Codex** (CLI) | ✅ | ✅ MCP | ✅ MCP | ✅ unityMCP | your OpenAI subscription |
-| **Antigravity / agy** (CLI) | ✅ | ✅ `unityai` bridge | ✅ bridge | ✅ unityMCP (HTTP) | your Google subscription |
-| **GitHub Copilot** (CLI) | ✅ | ✅ MCP | ✅ MCP | ✅ unityMCP | your Copilot subscription |
-| **Cursor** (CLI) | ✅ | ✅ MCP | ✅ MCP | ✅ unityMCP | your Cursor subscription |
-| **OpenCode** (CLI) | ✅ | ✅ MCP | ✅ MCP | ✅ unityMCP | free / your own key |
-| **Kimi Code** (CLI) | ✅ | ✅ MCP | ✅ MCP | ✅ unityMCP | your Moonshot subscription |
-| **Cloud API** (Claude/GPT/Gemini/…) | ✅ | ✅ function calling | ✅ function calling | ✅ function calling | your API key |
-| **Ollama** (local) | ✅ | ✅ (compatible models) | ✅ | ⚠️ partial | free, offline |
+<a id="live-unity"></a>
+<img src="docs/media/readme/h-editor-en.svg" alt="02 · Live Unity: it works inside the open Editor" width="100%"/>
 
-What this matrix delivers is simple but rare: **the experience is identical regardless of the source.** Switching from Codex to Claude Code is one dropdown; the diff viewer, terminal approval and Unity integration you're used to stay exactly the same.
+<img src="docs/media/readme/unity-language-switch.webp" alt="The request asks the agent to make the end card follow the language switch and show it in both languages; below it, the end card captured from the running game in English and in Turkish" width="100%"/>
 
-> **Important distinction:** Approval cards appear for **file deletes and dangerous terminal commands** on every path; for **file writes** on the CLI agent paths, but **not on the cloud API / Ollama function-calling path**. For **live Unity scene operations**, calls that *mutate* the scene open a card on every provider, because the Unity MCP server itself asks. All of this is step mode; in auto mode no card appears. Full table and rationale: [Approval scope](docs/security.md#️-approval-scope-what-is-and-isnt-confirmed-an-honesty-note).
+**55 Unity Editor tools** over MCP: scenes, GameObjects, prefabs, materials, scripts, the
+console. Asked to make an end card follow the language switch, the agent checked the compile
+result and showed the card in both languages, captured from the running game.
 
----
+<sub>"Compiled clean" now means it compiled: a `compile_status` verdict, not an empty console.
+Every agent action is one named Undo step, and raw `.meta` or scene-YAML writes are refused
+in every mode, so asset GUIDs stay intact.</sub>
 
-## 🚀 Why Gamachine?
+<br/>
 
-AI tools in the Unity ecosystem usually land at one of two extremes: they either just write code, or they just chat. Neither can do what a real development partner does on its own — understand the project, find the bug, fix it, test it in the terminal, and see it inside the Unity Editor.
+<a id="parallel-chats"></a>
+<img src="docs/media/readme/h-chats-en.svg" alt="03 · Parallel: several chats, one project" width="100%"/>
 
-| Traditional AI Assistants | Gamachine |
-|---|---|
-| Locked to a single provider | 7 CLI agents (Claude Code, Codex, agy, Copilot, Cursor, OpenCode, Kimi Code), 8+ cloud APIs (incl. the free NVIDIA NIM pool), Ollama — one menu |
-| Writes code, doesn't see the project | Reads, searches and lists the project's files on demand; reads the open scene and the Console through Unity MCP |
-| Can't touch the file system | Read/write/delete files — every dangerous op behind an approval card |
-| Unaware of the Unity Editor | Adds GameObjects, binds components, reads the console via MCP |
-| Can't run terminal | Secure terminal layer; dangerous commands require approval |
-| Walks away when a background job finishes | The conversation wakes itself up and reports what completed |
-| Setup hassle | `uv`, OmniSharp + .NET SDK, ffmpeg/yt-dlp, an offline speech recogniser — all **bundled into the app**, zero extra install |
+<img src="docs/media/readme/parallel-chats.webp" alt="Sidebar with an active task running while three other chats are done; the running chat's answer arrives and it moves into the chat list" width="100%"/>
 
----
+Chats run in parallel, each with its own stream, Stop button and queue; writes to one Editor
+are taken in turn. Branch a chat into a tab, ask a read-only side question, or let one chat
+leave a note that wakes another:
 
-## ✨ Features
+<p align="center"><img src="docs/media/readme/chat-note.webp" alt="A chat showing a note that arrived from another chat, and the agent replying to it" width="80%"/></p>
 
-**Many agents, one experience** — 7 CLI agents and 8+ cloud APIs plus local Ollama,
-switchable per message. When a CLI is selected the backend writes that tool's MCP
-config at call time, so nothing has to be set up by hand. Antigravity runs as one
-long-lived session per conversation rather than a fresh process per turn.
+<br/>
 
-**The model list is your account's, not ours** — each cloud provider is asked, with
-your key, which models it will actually serve you, and a public catalogue supplies the
-label, context size and price beside each name. A provider you have no key for still
-shows up, marked unconfirmed, because "this model exists" and "your account has it"
-are two different claims.
+<a id="blender"></a>
+<img src="docs/media/readme/h-blender-en.svg" alt="04 · 3D work: Blender, too" width="100%"/>
 
-**Autonomous agentic loop** — task → think → call a tool → evaluate → repeat, stopped
-by a progress guard (five identical tool/argument/result repeats) with a hard fuse at 300 steps. Every step streams live over SSE, and Stop cancels at both layers:
-it cuts the stream *and* rejects the pending approval gates on the backend.
+<table>
+<tr>
+<td width="58%"><img src="docs/media/readme/blender-trophy.webp" alt="The agent posts a work-in-progress look of a low-poly trophy modelled in Blender, then the finished look and the final 256×256 render, with its summary"/></td>
+<td width="42%"><img src="docs/media/readme/connectors.webp" alt="Settings, Connectors page: a Blender card with an Install button, and the Terminal agents switch"/></td>
+</tr>
+<tr>
+<td>Blender work done by the agent: a low-poly trophy for the game's end card, shown in the chat as it took shape, then rendered to a transparent PNG.</td>
+<td><b>Settings › Connectors</b> installs the Blender add-on (Blender 4.2+): the agent then reads the scene, runs Python in it and looks at the result.</td>
+</tr>
+</table>
 
-**One approval gate for all of them** — file writes open a side-by-side diff, deletes
-show a content preview, terminal commands show the command. CLI agents and cloud APIs
-go through the same UI. Exactly what is and isn't gated is written down in
-[Approval scope](docs/security.md#️-approval-scope-what-is-and-isnt-confirmed-an-honesty-note).
-One rule no mode switches off: inside a Unity project an agent cannot write, delete
-or move `.meta` files, or write scenes, prefabs and other Unity YAML assets as raw
-text; it is sent to the Unity tools, which keep the asset GUIDs intact.
+<br/>
 
-**Live Unity Editor control, zero install** — 52 Editor tools over MCP: scenes,
-GameObjects, prefabs, materials, physics, build settings. It can also
-[play the game](docs/unity-mcp.md#-the-ai-can-now-play-the-game-manage_input): enter
-play mode, send input, screenshot the result and judge what it built. Script writes
-wait for Unity to compile and return a verdict; "clean" only comes once the code
-compiles and the domain reload is done, because an empty console is not a clean
-compile. Each agent action is one named Unity undo step, and the agent can revert
-exactly its last one without touching edits you made after it. The `uv` toolchain
-ships inside the app.
+<a id="projects"></a>
+<img src="docs/media/readme/h-hub-en.svg" alt="05 · Projects: a small Unity Hub on the first screen" width="100%"/>
 
-**Context awareness** — `/compact` summarises long conversations before they hit the
-token limit, and a usage/context panel shows where you stand — with an honest
-"stale" or "estimate" badge when the live number is not reachable.
+<p align="center"><img src="docs/media/readme/projects-new-game.webp" alt="Projects screen: the template cards switch between URP Blank and 2D, and the project name is typed into the save slot" width="86%"/></p>
 
-**The conversation resumes itself** — a subagent or background command that finishes
-after you stopped watching used to leave the chat idle until you typed. Now the
-conversation wakes up, picks the turn back up and tells you what finished. It waits
-while an approval card is on screen and stops after three wakes in a row.
+Open a project, launch Unity, or create one with the editor and template you pick. You can
+also install a Unity version and its modules from here; it uses Unity Hub 3.21+ and never
+logs in to Unity for you.
 
-**3D models and images open in place** — click an `.fbx`, `.glb`, `.gltf`, `.obj`,
-`.stl`, `.ply` or `.dae` in the file tree and it opens in a preview instead of the
-text editor: orbit the camera, scrub the timeline, play animations at 0.25x–2x. An
-animation-only file gets a mannequin built from its own bones so there is something
-to watch. Textures and sprites open in the same slot, with an actual-size mode that
-keeps pixel art sharp.
+<br/>
 
-**Dictation that never leaves the machine** — click the microphone in the chat box,
-speak, click again: what you said lands in the box, and you read it, fix it, press
-Enter. With a graphics card the words appear while you are still speaking and the
-language follows the app: Turkish when the app is Turkish, detected otherwise. The recogniser (whisper.cpp with Whisper
-large-v3-turbo) ships inside the installer, so it works offline and no audio is
-uploaded anywhere. Windows only for now.
+<a id="providers"></a>
+<img src="docs/media/readme/h-ai-en.svg" alt="06 · Providers: bring your own AI" width="100%"/>
 
-**C# intelligence, zero install** — an OmniSharp LSP sidecar gives real Roslyn
-analysis in the Monaco editor, with the .NET SDK it needs bundled on all three
-platforms. (The SDK rather than the runtime is a measured requirement, not a
-preference — see [Architecture](docs/architecture.md).)
+<table>
+<tr>
+<td width="50%"><img src="docs/media/readme/providers.webp" alt="Settings, Models and accounts: subscription CLIs with sign-in state, and the API key providers Anthropic, OpenAI, Google, DeepSeek, Kimi, GLM, NVIDIA, Groq and OpenRouter"/></td>
+<td width="50%"><img src="docs/media/readme/mission-board.webp" alt="A fresh chat: the mascot says the project is open, a mission board offers four starter tasks, and the slash menu lists Compact and Guide"/></td>
+</tr>
+<tr>
+<td><b>7 subscription CLIs</b> run with your own login (Claude Code, Codex, Antigravity, Copilot, Cursor, OpenCode, Kimi Code), plus <b>9 API providers</b> and local Ollama. Keys stay on your computer.</td>
+<td>One work mode for every agent: <b>Safe Auto</b> (the default) lets routine work through and asks before critical, irreversible actions; <b>Step by Step</b> and <b>Auto</b> sit either side.</td>
+</tr>
+</table>
 
-**Real effort control** — the effort selector actually takes effect on every
-provider; the UI only offers the levels each model supports.
+<sub>Works best with Claude Code, which is what we build and test Gamachine with. Kimi Code
+has not been exercised end to end, and Ollama has only partial Unity control.</sub>
 
-**Video → chat** — drop in a video link (YouTube included) or a file and bundled
-ffmpeg + yt-dlp extract frames and a transcript into the analysis pipeline.
+<br/>
 
-**A real IDE around it** — Monaco editor, an xterm.js terminal on a real PTY, diff
-viewer, live thinking block, and a bilingual TR/EN interface.
+<a id="themes"></a>
+<img src="docs/media/readme/h-themes-en.svg" alt="07 · Appearance: make it yours" width="100%"/>
 
----
+<img src="docs/media/readme/themes.webp" alt="Settings, Appearance: clicking the theme cards switches the whole app between Arena, Blueprint, Workshop and Plain" width="100%"/>
 
-## 📚 Documentation
+Five themes (Arena, Plain, Blueprint, Workshop, and Custom with your own colours and fonts),
+an English or Turkish interface, a Guide screen and a six-step starter tour.
 
-| | |
-|---|---|
-| [Engineering notes](docs/engineering-notes.md) | The decisions, the mistakes, and what they cost |
-| [Architecture](docs/architecture.md) | Process layout, agentic loop, tool layer, SSE stream |
-| [Approval & security](docs/security.md) | What is gated, what deliberately isn't, and why |
-| [Unity MCP integration](docs/unity-mcp.md) | The 52 Editor tools, the fixed tool list per URL, and the input system |
-| [Supported providers](docs/providers.md) | Every CLI agent, cloud API and local model |
-| [Building from source](docs/building.md) | Dev setup and producing a dmg / installer |
+<br/>
 
----
+<a id="also-in-v4"></a>
+<img src="docs/media/readme/h-also-en.svg" alt="And more: also in v4" width="100%"/>
 
-## ⚙️ Installation
+<table>
+<tr>
+<td width="50%" valign="top"><img src="docs/media/readme/i-computer.svg" width="44" align="left" alt=""/><b>Computer use</b><br/>Off by default. The agent takes screenshots, clicks and types in desktop apps you allow one by one; a live view shows it, Ctrl+Alt+Esc (Cmd+Shift+Esc) stops it. Tested most with Claude Code and Codex; not with Ollama.</td>
+<td width="50%" valign="top"><img src="docs/media/readme/i-browser.svg" width="44" align="left" alt=""/><b>Agent browser</b><br/>Off by default. A built-in browser the agent can search, read, click and fill forms in; submitting, passwords and purchases need your approval. Annotate a page (Ctrl+Shift+E) and send the notes. <a href="docs/agent-browser.md">More</a></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><img src="docs/media/readme/i-phone.svg" width="44" align="left" alt=""/><b>Phone and web remote</b><br/>Off by default. Pair a phone with a QR code and a 4-digit check, then watch chats, approve cards, send messages and stop turns. End-to-end encrypted; the PC stays on. <a href="docs/remote-control.md">More</a></td>
+<td width="50%" valign="top"><img src="docs/media/readme/i-terminal.svg" width="44" align="left" alt=""/><b>Terminal agents</b><br/>Claude Code, Codex and other CLI agents can list your chats, open one and message it through a local MCP server. <a href="docs/terminal-agents.md">More</a></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><img src="docs/media/readme/i-scene.svg" width="44" align="left" alt=""/><b>Scene editor</b><br/>An optional Hierarchy and Inspector for the open scene, for you rather than the agent. No 3D view.</td>
+<td width="50%" valign="top"><img src="docs/media/readme/i-mic.svg" width="44" align="left" alt=""/><b>Dictation</b><br/>Whisper runs on your computer; nothing is sent until you press Enter, and no audio leaves the machine. The Windows installer is about 1.3 GB because the model ships inside it. <!-- MAC-DICTATION-TBD: state macOS availability here once settled. --></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><img src="docs/media/readme/i-models.svg" width="44" align="left" alt=""/><b>Models</b><br/>Claude Fable 5.2, Opus 5.5, Sonnet 5.5, Haiku 5.5; GPT-6 Luna and Sol, GPT-6.1 Sol and gpt-6.1-terra for Codex; Gemini 4 Argon through agy 1.4.0.</td>
+<td width="50%" valign="top"><img src="docs/media/readme/i-image.svg" width="44" align="left" alt=""/><b>Images and @</b><br/>Agents can put an image in the chat with <code>show_image</code>; typing <code>@</code> lists your other chats so the agent can leave one a note.</td>
+</tr>
+</table>
+
+Full list: [CHANGELOG.md](CHANGELOG.md). Known limits: [release notes](RELEASE_NOTES.md).
+
+<br/>
+
+<br/>
+
+<a id="documentation"></a>
+<img src="docs/media/readme/h-docs-en.svg" alt="Documentation" width="100%"/>
+
+<table>
+<tr><td><a href="docs/engineering-notes.md"><b>Engineering notes</b></a></td><td>The decisions, the mistakes, and what they cost</td></tr>
+<tr><td><a href="docs/architecture.md"><b>Architecture</b></a></td><td>Process layout, agentic loop, tool layer, SSE stream</td></tr>
+<tr><td><a href="docs/security.md"><b>Approval &amp; security</b></a></td><td>What is gated, what deliberately isn't, and why</td></tr>
+<tr><td><a href="docs/unity-mcp.md"><b>Unity MCP integration</b></a></td><td>The Editor tools, the tool list per URL, playtesting and the input system</td></tr>
+<tr><td><a href="docs/providers.md"><b>Supported providers</b></a></td><td>Every CLI agent, cloud API and local model</td></tr>
+<tr><td><a href="docs/building.md"><b>Building from source</b></a></td><td>Dev setup and producing a dmg / installer</td></tr>
+</table>
+
+<br/>
+
+<a id="installation"></a>
+<img src="docs/media/readme/h-install-en.svg" alt="Installation" width="100%"/>
 
 **Using the app:** download it from
-[Releases](https://github.com/BurakErdemci/gamachine/releases/latest) and add an API
-key or point it at a CLI agent you already use. Python, `uv`, OmniSharp, the .NET SDK
-and ffmpeg/yt-dlp are all bundled — nothing else to install.
+[Releases](https://github.com/BurakErdemci/gamachine/releases/latest), then add an API key or
+sign in to a CLI agent you already use. The chat stays locked until one is connected, and we
+never install a third-party AI tool without telling you. Python, `uv`, OmniSharp, the .NET
+SDK and ffmpeg/yt-dlp are bundled.
 
-**From source:** you need Python 3.13+ and Node.js 20+ (plus the Unity Editor if you
-want the Unity MCP integration). Full steps, environment variables and packaging are
-in [Building from source](docs/building.md).
+**From source:** you need Python 3.13+ and Node.js 20+ (plus the Unity Editor, 2021.3 or
+newer, for the Unity integration). Full steps, environment variables and packaging are in
+[Building from source](docs/building.md).
 
-**The previous version (v3, the interface before the v4 redesign)** stays available on the
-[`legacy-v3`](https://github.com/BurakErdemci/gamachine/tree/legacy-v3) branch. It is
-kept as it was and gets no new features.
+**The previous version (v3)** stays on the
+[`legacy-v3`](https://github.com/BurakErdemci/gamachine/tree/legacy-v3) branch, as it was,
+with no new features.
 
----
+<br/>
 
-## 💡 Usage
+<a id="contributing"></a>
+<img src="docs/media/readme/h-contrib-en.svg" alt="Contributing" width="100%"/>
 
-1. **Pick a workspace** — choose your Unity project folder; the agents work inside it.
-2. **Pick a model** — choose a provider/model in Settings. For a cloud API, enter your key (stored encrypted); for a CLI, just having it installed is enough. Each chat remembers its own model; a new chat starts on the last one you picked.
-3. **Talk** —
-
-```
-"Find the performance issues in PlayerController.cs"
-"Create a ScriptableObject-based ItemData script for Inventory"
-"NullReferenceException PlayerController.cs:47 — what's the cause, fix it"
-"Add a Player capsule to the scene and attach a Rigidbody"   # when Unity MCP is on
-/compact                                                      # summarize a long chat
-```
-
-4. **Approve** — when the AI requests a file/terminal operation the stream pauses and a diff/command card opens; approve or reject.
-5. **Look and talk** — click a `.fbx` or a texture in the file tree to preview it in place; press the microphone to dictate instead of typing.
-
----
-
-## 🤝 Contributing
-
-The quality gate is three separate test suites — **~3,100 tests total**:
+Three test suites guard the code:
 
 ```bash
-# Backend (~1,118 tests)
+# Backend
 cd Backend && pytest
 #   Windows: venv\Scripts\python.exe -m pytest   (env: PYTHONUTF8=1)
 
-# unity-mcp server (~1,596 tests)
+# unity-mcp server
 cd unity-mcp/Server && pytest
 
-# Frontend (~396 tests) + the TypeScript gate
+# Frontend + the TypeScript gate
 cd Frontend/frontend && npm test && npx tsc --noEmit
 ```
 
-CI (`.github/workflows/test.yml`) runs four jobs: **Backend tests**, **unity-mcp Server tests**, **Frontend gate (tsc + vitest)** and a **PowerShell syntax check**. No release ships unless all four are green.
+CI (`.github/workflows/test.yml`) runs five jobs: backend tests, a black-box contract suite,
+unity-mcp server tests, the frontend gate (tsc + vitest) and a PowerShell syntax check. The
+release build waits for all of them.
 
 1. Fork the repo
 2. Create a feature branch (`git checkout -b feat/amazing-feature`)
 3. Run the tests
 4. Open a pull request
 
----
+<br/>
 
-## 👤 Developer
+<a id="developer"></a>
+<img src="docs/media/readme/h-dev-en.svg" alt="Developer" width="100%"/>
 
 **Burak Emre Erdemci**
 
-An open-source portfolio and research project for developers who want to fundamentally transform Unity development with AI.
+An open-source portfolio and research project for developers who want to change how Unity
+games are made with AI.
 
----
+<br/>
 
-## 📄 License
+<a id="license"></a>
+<img src="docs/media/readme/h-license-en.svg" alt="License" width="100%"/>
 
-**[MIT](LICENSE)** — open source, with no strings attached:
+**[MIT](LICENSE)**: free, with no licence key and nothing to buy.
 
-- ✅ **Use it** — personal, educational, research, or commercial settings
+- ✅ **Use it** for personal, educational, research or commercial work
 - ✅ **Study, modify, fork and redistribute it**
-- ✅ **Sell the games you make with it** — whatever you create is entirely yours
+- ✅ **Sell the games you make with it**: what you create is yours
 
-For third-party component licenses, see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)
-(The bundled FFmpeg's licence **differs per platform** — LGPL-3.0 on Windows,
-GPL-3.0 on macOS/Linux — and in every case it is invoked only as a separate process.)
+You pay your own AI provider. For third-party component licences, see
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) (the bundled FFmpeg is LGPL-3.0 on Windows
+and GPL-3.0 on macOS/Linux, and is only ever run as a separate process).
 
 Reporting a vulnerability: [SECURITY.md](SECURITY.md) ·
 Contributing: [CONTRIBUTING.md](CONTRIBUTING.md)
 
----
+<br/>
 
-## Trademarks
+<a id="trademarks"></a>
+<img src="docs/media/readme/h-tm-en.svg" alt="Trademarks" width="100%"/>
 
 This project is **not affiliated with, sponsored by, or endorsed by** Unity
 Technologies. "Unity" and "Unity Technologies" are trademarks or registered
 trademarks of Unity Technologies or its affiliates in the U.S. and elsewhere.
 Likewise "Unreal Engine" is a trademark of Epic Games, "Godot" of the Godot
 Foundation, "Claude" of Anthropic, "Codex" and "GPT" of OpenAI, "Gemini" and
-"Antigravity" of Google, "GitHub Copilot" of GitHub, and "Cursor" of Anysphere.
-These names are used only to **describe** compatibility.
+"Antigravity" of Google, "GitHub Copilot" of GitHub, "Cursor" of Anysphere, and
+"Blender" of the Blender Foundation. These names are used only to **describe**
+compatibility.
+
+Gamachine is not endorsed or authorised by Unity; if you have accepted Unity's
+[Terms of Service](https://unity.com/legal/terms-of-service), you remain bound by them,
+including Section 17.2 on AI-agent access.
+
+<br/>
+
+<p align="center"><a href="#top"><img src="docs/media/readme/footer.svg" alt="Gamachine v4, back to top" width="100%"/></a></p>
