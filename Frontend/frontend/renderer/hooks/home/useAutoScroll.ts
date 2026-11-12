@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 /**
  * "Stick to bottom" scrolling for an append-only list (chat, console log).
@@ -40,6 +40,14 @@ export interface AutoScroll {
   repin: () => void;
 }
 
+/** The nearest ancestor that actually scrolls vertically, or null (also in jsdom, which has no layout). */
+const scrollingAncestor = (el: HTMLElement | null): HTMLElement | null => {
+  for (let node = el?.parentElement ?? null; node; node = node.parentElement) {
+    if (node.scrollHeight > node.clientHeight) return node;
+  }
+  return null;
+};
+
 export const useAutoScroll = (): AutoScroll => {
   const endRef = useRef<HTMLDivElement>(null);
   // A ref as well as state: the follow decision is read inside effects that must
@@ -47,26 +55,80 @@ export const useAutoScroll = (): AutoScroll => {
   // recorded "user scrolled away"). The state copy exists only for rendering.
   const pinnedRef = useRef(true);
   const [isPinned, setIsPinned] = useState(true);
+  // Last scroll position seen on the container, to tell "the user went up" from
+  // "our own follow scroll has not caught up with the content yet".
+  const lastTopRef = useRef<{ el: HTMLElement; top: number } | null>(null);
+  const growthRef = useRef<{ observer: ResizeObserver; target: Element } | null>(null);
 
   const setPinned = useCallback((value: boolean) => {
     pinnedRef.current = value;
     setIsPinned(prev => (prev === value ? prev : value));
   }, []);
 
-  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
+  // Records where the container is before a programmatic scroll, so the first
+  // scroll event that scroll produces is compared with a real starting point.
+  const scrollEnd = useCallback((behavior: ScrollBehavior) => {
+    // The container `onScroll` already reported wins over the layout guess: an
+    // inner box that overflows by a pixel must not take its place.
+    const seen = lastTopRef.current?.el;
+    const container = seen?.isConnected && endRef.current && seen.contains(endRef.current)
+      ? seen : scrollingAncestor(endRef.current);
+    if (container) lastTopRef.current = { el: container, top: container.scrollTop };
     endRef.current?.scrollIntoView({ behavior });
-    setPinned(true);
-  }, [setPinned]);
-
-  const followIfPinned = useCallback(() => {
-    if (!pinnedRef.current) return false;
-    endRef.current?.scrollIntoView({ behavior: 'smooth' });
-    return true;
   }, []);
 
+  /**
+   * Follows growth that is not a new message: an image that finishes loading, a
+   * tool card that expands. Neither changes `messages`, so the follow effect in
+   * the caller never ran for them and the bottom drifted out of view (measured
+   * on 4.0.0, 12 Nov 2026: the view stopped following after the first image).
+   * Observes the list the sentinel sits in; re-attaches when that list changes
+   * (empty chat -> thread). `auto`, not `smooth`: a smooth animation aims at the
+   * bottom as it was when it started and lands short while content keeps growing.
+   */
+  const watchGrowth = useCallback(() => {
+    const target = endRef.current?.parentElement;
+    if (!target || typeof ResizeObserver === 'undefined') return;
+    if (growthRef.current?.target === target) return;
+    growthRef.current?.observer.disconnect();
+    const observer = new ResizeObserver(() => { if (pinnedRef.current) scrollEnd('auto'); });
+    observer.observe(target);
+    growthRef.current = { observer, target };
+  }, [scrollEnd]);
+
+  useEffect(() => { watchGrowth(); });
+  useEffect(() => () => { growthRef.current?.observer.disconnect(); growthRef.current = null; }, []);
+
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
+    watchGrowth();
+    scrollEnd(behavior);
+    setPinned(true);
+  }, [setPinned, scrollEnd, watchGrowth]);
+
+  const followIfPinned = useCallback(() => {
+    watchGrowth();
+    if (!pinnedRef.current) return false;
+    scrollEnd('smooth');
+    return true;
+  }, [scrollEnd, watchGrowth]);
+
+  /**
+   * Following stops only when the user moves UP. The position alone used to
+   * decide, so the follow scroll's own frames switched following off whenever
+   * the content grew faster than the animation (an image arriving mid-scroll
+   * left the last frame hundreds of px above the new bottom), and the
+   * "new messages" notice appeared for a user who never scrolled. Content growth
+   * fires no scroll event and a follow scroll only moves down, so "moved up and
+   * is away from the bottom" is a user's act. With no earlier position for this
+   * container the position alone decides, as before.
+   */
   const onScroll = useCallback((e: React.UIEvent<HTMLElement>) => {
     const el = e.currentTarget;
-    setPinned(el.scrollHeight - el.scrollTop - el.clientHeight <= BOTTOM_TOLERANCE_PX);
+    const top = el.scrollTop;
+    const prev = lastTopRef.current?.el === el ? lastTopRef.current.top : null;
+    lastTopRef.current = { el, top };
+    if (el.scrollHeight - top - el.clientHeight <= BOTTOM_TOLERANCE_PX) setPinned(true);
+    else if (prev === null || top < prev) setPinned(false);
   }, [setPinned]);
 
   const repin = useCallback(() => setPinned(true), [setPinned]);
