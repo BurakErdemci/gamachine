@@ -22,6 +22,7 @@ WHY A REAL CHILD PROCESS
 import json
 import logging
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -514,6 +515,70 @@ def test_child_env_excludes_backend_secrets(server_factory, monkeypatch):
         data = json.loads(res.read())
 
     assert "LOCAL_APP_TOKEN" not in data["keys"]
+
+
+# ── POSIX: the server dies with the backend ──────────────────────────────────
+
+_BACKEND_STAND_IN = """
+import sys
+sys.path.insert(0, {app!r})
+from providers import stt_whisper
+server = stt_whisper.WhisperServer(
+    command=lambda: [sys.executable, {fake!r}, "--fake-gpu", "silent"],
+    model=lambda: {model!r}, threads=1, startup_timeout_s=10)
+server.ensure_started()
+server.wait_ready()
+print(server.pid, flush=True)
+sys.stdin.read()    # "exit" closes stdin: the backend ends without stop()
+"""
+
+
+def _process_exists(pid):
+    """A zombie counts as gone: in a container whose PID 1 never reaps, an
+    orphan that died stays listed."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    stat = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout
+    return bool(stat.strip()) and not stat.strip().startswith("Z")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows ties the server with a kill-on-close job")
+@pytest.mark.parametrize("ending", ["group-sigkill", "sigkill", "sigterm", "exit"])
+def test_the_server_does_not_outlive_the_backend(tmp_path, ending):
+    """Electron quits the backend with kill(-pgid, SIGKILL); a crash or a
+    plain SIGTERM ends it with no lifespan shutdown either. Each left a loaded
+    model behind (~1 GB per quit, measured 12 Nov 2026). The fake stays
+    silent after it is ready, like the idle real server, so it cannot die of
+    a broken log pipe instead."""
+    code = _BACKEND_STAND_IN.format(app=str(Path(__file__).resolve().parents[1] / "app"),
+                                    fake=FAKE, model=_model_file(tmp_path))
+    # Its own group, as Electron starts it (detached: true).
+    backend = subprocess.Popen([sys.executable, "-c", code], stdin=subprocess.PIPE,
+                               stdout=subprocess.PIPE, text=True, start_new_session=True)
+    server_pid = None
+    try:
+        server_pid = int(backend.stdout.readline())
+        assert _process_exists(server_pid)
+        if ending == "group-sigkill":
+            os.killpg(backend.pid, signal.SIGKILL)
+        elif ending == "sigkill":
+            os.kill(backend.pid, signal.SIGKILL)
+        elif ending == "sigterm":
+            os.kill(backend.pid, signal.SIGTERM)
+        else:
+            backend.stdin.close()
+        backend.wait(10)
+
+        assert _wait_until(lambda: not _process_exists(server_pid), timeout=5.0, interval=0.05), \
+            f"whisper-server (pid {server_pid}) outlived the backend ({ending})"
+    finally:
+        if backend.poll() is None:
+            os.killpg(backend.pid, signal.SIGKILL)
+            backend.wait(10)
+        if server_pid and _process_exists(server_pid):
+            os.kill(server_pid, signal.SIGKILL)
 
 
 # ── Idle unload (real child process) ─────────────────────────────────────────

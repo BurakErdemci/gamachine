@@ -30,6 +30,7 @@ import logging
 import os
 import re
 import secrets
+import signal
 import socket
 import subprocess
 import sys
@@ -421,6 +422,60 @@ class _KillOnCloseJob:
             self.handle = None
 
 
+# ── POSIX: the child dies with the backend ───────────────────────────────────
+
+_TIE_WITH_WATCH = sys.platform != "win32"
+
+
+class _ParentDeathWatch:
+    """POSIX has no kill-on-close job and macOS no PR_SET_PDEATHSIG, so a
+    tiny /bin/sh blocks reading a pipe only this backend can write to and
+    SIGKILLs the server at EOF, i.e. once the backend is gone in any way.
+
+    The server shares the backend's process group, so Electron's kill(-pgid)
+    ends it directly; this watch covers a signal to the backend alone (crash,
+    SIGKILL, an exit that skipped shutdown). It ignores HUP/INT/TERM so a
+    signal to the whole group cannot end it ahead of the server. posix_spawn,
+    not Popen: it is no server child and has no output to read.
+
+    ``close`` kills the watch before the pipe closes, so a normal stop never
+    makes it signal a PID the backend has already reaped."""
+
+    _SCRIPT = "trap '' HUP INT TERM; read _; kill -9 \"$0\" 2>/dev/null"
+
+    def __init__(self):
+        self.pid = None
+        self._fd = None
+
+    def assign(self, proc: subprocess.Popen) -> None:
+        read_end, write_end = os.pipe()       # both non-inheritable
+        try:
+            self.pid = os.posix_spawn(
+                "/bin/sh", ["sh", "-c", self._SCRIPT, str(proc.pid)], {},
+                file_actions=[(os.POSIX_SPAWN_DUP2, read_end, 0),
+                              (os.POSIX_SPAWN_OPEN, 1, os.devnull, os.O_WRONLY, 0),
+                              (os.POSIX_SPAWN_DUP2, 1, 2)],
+                setsigmask=())
+        except BaseException:
+            os.close(write_end)
+            raise
+        finally:
+            os.close(read_end)
+        self._fd = write_end
+
+    def close(self) -> None:
+        if self.pid is not None:
+            try:
+                os.kill(self.pid, signal.SIGKILL)
+                os.waitpid(self.pid, 0)
+            except (ProcessLookupError, ChildProcessError):
+                pass
+            self.pid = None
+        if self._fd is not None:
+            os.close(self._fd)
+            self._fd = None
+
+
 # ── The server manager ───────────────────────────────────────────────────────
 
 def _terminate(proc: subprocess.Popen) -> None:
@@ -470,7 +525,7 @@ class WhisperServer:
         self._idle_wake = None
         self._lock = threading.RLock()
         self._proc = None
-        self._job = None
+        self._tie = None
         self._port = None
         self._prefix = None
         self._gpu = None
@@ -594,25 +649,26 @@ class WhisperServer:
                 # The repo-wide allowlist (spawn_env): OS basics the Vulkan
                 # loader needs, never the app token or provider keys.
                 env=build_spawn_env(),
+                # POSIX: no new session. The server stays in the backend's
+                # process group so Electron's kill(-pgid) on quit ends it too.
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if windows else 0,
-                start_new_session=not windows,
             )
         except OSError as exc:
             self._failure = f"could not start whisper-server: {exc}"
             self._done.set()
             raise SttEngineFailed(self._failure) from exc
         self._proc = proc
-        if _TIE_WITH_JOB:
-            job = None
+        if _TIE_WITH_JOB or _TIE_WITH_WATCH:
+            tie = None
             try:
-                job = _KillOnCloseJob()
-                job.assign(proc)
-                self._job = job
+                tie = _KillOnCloseJob() if _TIE_WITH_JOB else _ParentDeathWatch()
+                tie.assign(proc)
+                self._tie = tie
             except Exception as exc:                 # noqa: BLE001 — fail closed on any failure
                 # An untied child outlives a crashed backend with ~1.2 GB of
                 # model/VRAM, and every restart would add another one.
-                if job is not None:
-                    job.close()
+                if tie is not None:
+                    tie.close()
                 _terminate(proc)
                 self._reap()
                 self._failure = f"could not tie whisper-server to the backend's lifetime ({exc}); not started"
@@ -758,9 +814,9 @@ class WhisperServer:
                 proc.stdout and proc.stdout.close()
             except OSError:
                 pass
-        if self._job is not None:
-            self._job.close()
-            self._job = None
+        if self._tie is not None:
+            self._tie.close()
+            self._tie = None
 
     def stop(self) -> None:
         with self._lock:

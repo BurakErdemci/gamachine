@@ -171,8 +171,10 @@ answers the mic button with "speech recognition files are missing".
 At runtime the backend (`Backend/app/providers/stt_whisper.py`) starts one server
 on the first dictation, on a free loopback port and behind a random request path
 (the server has an unauthenticated `/load` endpoint and answers any origin), with
-`-bs 5 -bo 5 -nlp -t <physical cores>`. On Windows the child is tied to the
-backend with a kill-on-close job object, so it cannot outlive a crashed backend.
+`-bs 5 -bo 5 -nlp -t <physical cores>`. It cannot outlive the backend: on Windows
+a kill-on-close job object ties it; on macOS and Linux it shares the backend's
+process group (Electron's quit kills the group) and a small `/bin/sh` watch
+kills it once the backend is gone in any other way.
 For development without packaging, `GAMACHINE_WHISPER_DIR` points the backend at
 any folder with the same `bin/` + `models/` layout.
 
