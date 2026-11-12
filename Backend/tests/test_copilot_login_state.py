@@ -5,6 +5,8 @@ import os
 import sys
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app"))
 
 from routes.config_routes import _parse_opencode_models, create_config_router
@@ -22,10 +24,15 @@ def _available():
         return asyncio.run(_route("/available-models")(refresh=False))
 
 
-def _doctor_copilot(monkeypatch, home):
+def _doctor_copilot(monkeypatch, home, env=None):
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setenv("LOCAL_APP_TOKEN", "t")
+    for k in ("GH_TOKEN", "GITHUB_TOKEN", "COPILOT_GITHUB_TOKEN", "GH_CONFIG_DIR"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("APPDATA", str(home / "AppData" / "Roaming"))
+    for k, v in (env or {}).items():
+        monkeypatch.setenv(k, v)
     installed = {"claude": False, "codex": False, "agy": False, "cursor": False,
                  "copilot": True, "opencode": False, "kimi": False}
     with patch("providers.oneshot_cli.installed_clis", return_value=installed):
@@ -46,3 +53,15 @@ def test_copilot_with_logged_in_user_is_signed_in(monkeypatch, tmp_path):
     (tmp_path / ".copilot").mkdir()
     (tmp_path / ".copilot" / "config.json").write_text('{"lastLoggedInUser": {"login": "x"}}', encoding="utf-8")
     assert _doctor_copilot(monkeypatch, tmp_path) is True
+
+
+@pytest.mark.parametrize("key", ["GH_TOKEN", "GITHUB_TOKEN", "COPILOT_GITHUB_TOKEN"])
+def test_copilot_without_config_but_token_env_is_not_signed_out(monkeypatch, tmp_path, key):
+    assert _doctor_copilot(monkeypatch, tmp_path, {key: "x"}) is not False
+
+
+def test_copilot_without_config_but_gh_login_is_not_signed_out(monkeypatch, tmp_path):
+    gh = tmp_path / "AppData" / "Roaming" / "GitHub CLI" if os.name == "nt" else tmp_path / ".config" / "gh"
+    gh.mkdir(parents=True)
+    (gh / "hosts.yml").write_text("github.com: {}"+chr(10), encoding="utf-8")
+    assert _doctor_copilot(monkeypatch, tmp_path) is not False

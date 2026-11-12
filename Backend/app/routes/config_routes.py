@@ -782,8 +782,14 @@ def create_config_router(db):
                     txt = "\n".join(l for l in f.read().splitlines() if not l.strip().startswith("//"))
                 return bool((_json.loads(txt) or {}).get("lastLoggedInUser"))
             except FileNotFoundError:
-                # Copilot has not written its config yet: nobody has signed in.
-                return False
+                # No config yet: signed out, unless a token env var or a gh login
+                # (which Copilot CLI also accepts) may be authenticating it.
+                if any(os.environ.get(k) for k in ("GH_TOKEN", "GITHUB_TOKEN", "COPILOT_GITHUB_TOKEN")):
+                    return None
+                gh_dir = os.environ.get("GH_CONFIG_DIR") or (
+                    os.path.join(os.environ.get("APPDATA") or "", "GitHub CLI") if os.name == "nt"
+                    else os.path.expanduser(os.path.join("~", ".config", "gh")))
+                return None if os.path.isfile(os.path.join(gh_dir, "hosts.yml")) else False
             except Exception:
                 return None
 
