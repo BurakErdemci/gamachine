@@ -63,10 +63,11 @@ python3 scripts/fetch_omnisharp.py
 # 3) Download the video tools (ffmpeg + yt-dlp — the video→chat feature)
 bash Backend/vendor/fetch_video_bins.sh
 
-# 4) Windows: build the dictation engine (whisper.cpp + model) — see below.
+# 4) Build the dictation engine (whisper.cpp + model) — see below.
 #    `npm run build` runs it by itself through its prebuild hook; running it
-#    here first only moves the ~2 minute compile out of the packaging step.
-#    powershell -File Backend/vendor/build_whisper.ps1
+#    here first only moves the compile out of the packaging step.
+#    macOS:   bash Backend/vendor/build_whisper.sh
+#    Windows: powershell -File Backend/vendor/build_whisper.ps1
 
 # 5) Compile the backend with PyInstaller, then package the Electron app
 cd Backend && ./build_backend.sh        # Windows: build_backend.bat
@@ -162,7 +163,7 @@ To skip the 874 MB download when you already have the file, pass
 `-ModelFile <path>` (or set `GAMACHINE_WHISPER_MODEL_FILE`); it is verified against
 the same pinned digest.
 
-**The prebuild hook fails a Windows build without the engine** — an installer
+**The prebuild hook fails a Windows or macOS build without the engine** — an installer
 without it would break the product rule. To package without dictation on purpose
 (no toolchain on this machine), set `GAMACHINE_ALLOW_NO_DICTATION=1`; the app then
 answers the mic button with "speech recognition files are missing".
@@ -175,25 +176,64 @@ backend with a kill-on-close job object, so it cannot outlive a crashed backend.
 For development without packaging, `GAMACHINE_WHISPER_DIR` points the backend at
 any folder with the same `bin/` + `models/` layout.
 
-#### macOS (not implemented)
+#### macOS (Apple silicon)
 
-The Windows build does not apply as is. What a macOS build would need:
+`Backend/vendor/build_whisper.sh` is the macOS counterpart: the same whisper.cpp
+commit and the same pinned model, built with **Metal** for arm64. It reads the
+commit, repo URL and model key from `build_whisper.ps1`, so the pin lives in one
+place. The output has the same layout:
 
-- Build the same commit with **Metal** instead of Vulkan:
-  `-DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON` (the shader library embedded in the
-  binary, so nothing has to sit next to it), `-DBUILD_SHARED_LIBS=OFF` (one
-  self-contained `whisper-server`), `-DGGML_NATIVE=OFF`; for both architectures
-  either `-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"` or two builds. Needs Xcode's
-  command line tools; no Vulkan SDK, no VC++ runtime.
-- A `build_whisper.sh` producing the same `bin/` + `models/` layout; the resolver in
-  `stt_whisper.py` already looks for `whisper-server` without `.exe`.
-- Signing: `scripts/sign-mac-nested.js` signs every Mach-O under Resources, so a
-  bundled `whisper-server` would be signed with the hardened runtime too, and the microphone description in `electron-builder.yml`
-  (`NSMicrophoneUsageDescription`) is already in place.
-- Measure it before shipping: the GPU/CPU detection reads the server's startup log
-  (`using … backend` / `no GPU found`) and was only measured on Windows + Vulkan.
+| Output | What |
+|---|---|
+| `bin/whisper-server` | one self-contained arm64 binary (≈ 5 MB): static ggml + whisper, Metal shader source embedded; links only system frameworks (Metal, MetalKit, Accelerate, Foundation), checked with `otool -L` by the script |
+| `bin/LICENSE-whisper.cpp.txt` | upstream MIT license text |
+| `models/ggml-large-v3-turbo-q8_0.bin` | the same pinned model, verified before it is placed |
+| `.built` | the same stamp format as on Windows |
 
-Until then `scripts/fetch-whisper.js` warns and the dmg ships without dictation.
+```
+cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3 \
+      -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF \
+      -DWHISPER_BUILD_TESTS=OFF
+```
+
+What it needs on the build machine: **cmake** and the **Xcode command line tools**
+(clang), plus git, curl and python3. Not the Metal compiler: with
+`GGML_METAL_EMBED_LIBRARY` the shader source is embedded and compiled on the user's
+Mac. GitHub's `macos-latest` runner (macOS 26 arm64, image 20261102) lists CMake
+4.4.5, Xcode 26.6, Python 3 and Git as preinstalled (runner-images
+`macos-26-arm64-Readme.md`, read 12 Nov 2026); the release workflow runs the script
+in the step "Dikte motoru (macOS)". Locally: `brew install cmake`.
+
+The source goes to `$TMPDIR/gm-whisper-d09f61a7` (override with `--source-dir` or
+`GAMACHINE_WHISPER_SOURCE_DIR`); `--model-file <path>` or `GAMACHINE_WHISPER_MODEL_FILE`
+skips the model download and is verified against the pinned digest.
+
+**Dictation needs macOS 13.3 or newer** (the app itself runs on 11+). At this commit
+ggml calls the macOS 13.3 Accelerate `cblas_sgemm` and a macOS 12 Metal API without
+availability checks; a binary built for 11.0 compiles with warnings and would crash
+on the first dictation on an older Mac. With 13.3 the loader refuses to start it
+there and the backend reports that the server could not start.
+
+Measured on a MacBook Air M4 (10 cores, 16 GB), 12 Nov 2026:
+
+- Script run: 65 s from nothing (32 s of it the 874 MB download), 22 s for a clean
+  compile with the source already fetched, 3 s when nothing changed.
+- First server start after a new binary: 22.9 s to ready, because Metal compiles
+  the embedded shaders (`compiled 'fa' library in 22.275 sec`); macOS caches the
+  result, and the next start was ready in 0.42 s. This first start is inside the
+  backend's 90 s startup window.
+- The startup log says `whisper_backend_init_gpu: using MTL0 backend`, which the
+  backend's GPU detection reads, so live text is on.
+- Two `say` clips (Turkish, voice Yelda, 5.5 s; English, 4.7 s; 16 kHz mono) were
+  transcribed word for word. Server `/inference`: 1.36-1.78 s Turkish, 1.27-1.31 s
+  English, 2.43-2.53 s English with `language=auto`. Through the backend's
+  `/transcribe/session` routes: 1.40 s from finish to text (Turkish, fixed
+  language), 2.83 s (English UI, auto); each live-text update took ≈ 1.4 s.
+
+Signing: `scripts/sign-mac-nested.js` signs every Mach-O under `Contents/Resources`,
+so `resources/whisper/bin/whisper-server` is signed with the hardened runtime and
+the same entitlements as the other nested binaries; the microphone description
+(`NSMicrophoneUsageDescription`) is in `electron-builder.yml`.
 
 ---
 

@@ -17,7 +17,8 @@ be used.
 Layout (``<root>/bin/whisper-server[.exe]`` + DLLs, ``<root>/models/<model>``):
 frozen: ``<app>/resources/whisper`` — the frozen backend is
 ``<app>/resources/Backend/backend.exe``, hence the ``..`` hop; dev:
-``Backend/vendor/whisper`` (filled by ``Backend/vendor/build_whisper.ps1``).
+``Backend/vendor/whisper`` (filled by ``Backend/vendor/build_whisper.ps1`` on
+Windows, ``build_whisper.sh`` on macOS).
 """
 import array
 import atexit
