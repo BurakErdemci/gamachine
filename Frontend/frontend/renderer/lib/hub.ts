@@ -141,7 +141,7 @@ export function launchWithToast(
   t: (key: TKey, values?: TValues) => string,
   onInstall?: (version: string) => void,
 ): Promise<boolean> {
-  const key = path.replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase();
+  const key = projectKey(path);
   const pending = pendingLaunches.get(key);
   if (pending) return pending;
   const run = (async () => {
@@ -393,8 +393,42 @@ export async function cancelInstall(): Promise<{ cancelled: boolean; reason?: 'i
 // A version another screen asked the install flow to open at (the top bar's "Install Unity X" on a launch that
 // found the editor missing). That screen closes the workspace; the mini Hub mounts and takes the request once.
 let installRequest = '';
-export const requestInstallVersion = (version: string) => { installRequest = version; };
+const installRequestListeners = new Set<() => void>();
+export const requestInstallVersion = (version: string) => {
+  installRequest = version;
+  installRequestListeners.forEach(listener => listener());
+};
 export const takeInstallRequest = (): string => { const v = installRequest; installRequest = ''; return v; };
+/** A mini Hub that is already on screen takes a request the moment it is made; returns the unsubscribe. */
+export const subscribeInstallRequest = (listener: () => void): (() => void) => {
+  installRequestListeners.add(listener);
+  return () => { installRequestListeners.delete(listener); };
+};
+
+const projectKey = (path: string) => path.replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase();
+
+export interface InstallToastDeps {
+  /** The project the toast was shown for. */
+  toastPath: string;
+  /** Read when the button is clicked, never captured when the toast was made. */
+  workspacePath: () => string | null;
+  isDirty: () => boolean;
+  confirmDiscard: () => Promise<boolean>;
+  closeWorkspace: () => void;
+}
+
+/**
+ * The launch toast's "Install Unity X". The wizard lives on the project screen, so when the open workspace is the
+ * toast's project it closes (after the sidebar switch's unsaved-file question, asked about the buffer as it is now).
+ * Any other workspace is left alone: the request waits for the project screen.
+ */
+export async function installFromLaunchToast(version: string, deps: InstallToastDeps): Promise<void> {
+  const open = deps.workspacePath();
+  const closes = open !== null && projectKey(open) === projectKey(deps.toastPath);
+  if (closes && deps.isDirty() && !(await deps.confirmDiscard())) return;
+  requestInstallVersion(version);
+  if (closes) deps.closeWorkspace();
+}
 
 /** The existing open-unity-hub channel: Hub fetches its install tool on its first launch. */
 export async function openUnityHub(): Promise<boolean> {

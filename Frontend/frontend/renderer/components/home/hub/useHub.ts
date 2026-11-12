@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { useLang } from '../../../lib/i18n';
 import {
   cancelInstallRun, cancelRun, clearInstall, clearRun, clearRunIf, getInstall, getRun, launchWithToast, listEditors, listTemplates,
-  nameProblem, pickParentDir, runInstall, sortTemplates, startCreate, subscribeInstall, subscribeRun, takeInstallRequest,
+  nameProblem, pickParentDir, runInstall, sortTemplates, startCreate, subscribeInstall, subscribeInstallRequest, subscribeRun, takeInstallRequest,
   type HubEditor, type HubRun, type HubTemplate, type InstallRun, type InstallTarget, type NameProblem,
 } from '../../../lib/hub';
 import type { RecentWorkspace } from '../../../hooks/home/useRecentWorkspaces';
@@ -184,10 +184,15 @@ export function useHub({ recent, onSelectWorkspace, showToast, onCreated }: HubD
   /** The card's version was applied (or not found): a remount must not apply it again. */
   const consumeInstallWant = useCallback(() => setInstallWant(''), []);
   const closeInstall = () => { clearInstall(); setInstallFor(undefined); setInstallWant(''); };
-  // Another screen asked for the install flow at a version (see requestInstallVersion): opened once, on mount.
+  // Another screen asked for the install flow at a version (see requestInstallVersion): opened once, on mount
+  // or, when this screen is already up, as soon as it is asked.
   useEffect(() => {
-    const wanted = takeInstallRequest();
-    if (wanted) openInstallVersion(wanted);
+    const take = () => {
+      const wanted = takeInstallRequest();
+      if (wanted) openInstallVersion(wanted);
+    };
+    take();
+    return subscribeInstallRequest(take);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   /** The new-project form with a just-installed version already chosen. */
   const newWithVersion = (v: string) => { closeInstall(); setVersion(v); setView('new'); };

@@ -48,6 +48,11 @@ export type UnityMCPStatus = typeof UNITY_MCP_DURUMLARI[number];
  */
 export const unityConnectable = (status: UnityMCPStatus): boolean => status === 'off' || status === 'blocked';
 
+/** The Hierarchy panel's Connect: turns the link on when it can be, and does nothing otherwise. */
+export const connectUnityMcp = (status: UnityMCPStatus, toggle: () => unknown): void => {
+  if (unityConnectable(status)) void toggle();
+};
+
 /** `GET /mcp/unity/status` `dialog`: a native Unity dialog of the active project holding the connection. */
 export interface UnityMCPDialog {
   title: string;

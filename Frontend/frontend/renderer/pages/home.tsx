@@ -33,7 +33,7 @@ import { ProjectFiles } from '../components/home/FileTree';
 import { ControlPanel, ThinkingLevel, EffortCaps } from '../components/home/ControlPanel';
 import { SessionReportPanel } from '../components/home/SessionReportPanel';
 import { UnityMcpToggle } from '../components/home/UnityMcpToggle';
-import { launchWithToast, requestInstallVersion } from '../lib/hub';
+import { launchWithToast, installFromLaunchToast } from '../lib/hub';
 import { confirmDialog } from '../components/ui/ConfirmDialog';
 import { isRemotePage } from '../lib/remote/transport';
 import { AnimatedChatInput, type ComposerPickers, type ComposerDraft } from '../components/ui/animated-ai-chat';
@@ -50,7 +50,7 @@ import { useUsageLimits } from '../hooks/home/useUsageLimits';
 import { GROUP_USAGE_FAMILY } from '../lib/usageLimits';
 import { CLI_GROUPS, activeProviderKey } from '../components/home/providerGroups';
 import { useSideChat, sideQuote } from '../hooks/home/useSideChat';
-import { useAIConfig, unityConnectable } from '../hooks/home/useAIConfig';
+import { useAIConfig, connectUnityMcp } from '../hooks/home/useAIConfig';
 import { useMCPApproval } from '../hooks/home/useMCPApproval';
 import { useChatNotifications } from '../hooks/home/useChatNotifications';
 import { useAutoScroll } from '../hooks/home/useAutoScroll';
@@ -318,15 +318,20 @@ export default function Home() {
   const t = (key: string, degerler?: TValues) => ceviriUygula(lang, key, degerler);
   // Same toasts as the project card's launch (useHub.launch); a remote browser cannot spawn Unity on the host.
   // A missing editor's toast offers its install: the mini Hub's install flow, which lives on the project screen,
-  // so the workspace closes (after the same unsaved-file check as the sidebar's switch) and the Hub opens it there.
-  const installFromTopBar = async (version: string) => {
-    if (fs.isDirty && !(await confirmDialog(t('sidebar.switchProjectDirty'), t('sidebar.switchProjectConfirm'), t('confirm.cancel')))) return;
-    requestInstallVersion(version);
-    fs.closeWorkspace();
-  };
+  // so the toast's own workspace closes (after the same unsaved-file check as the sidebar's switch) and the Hub opens
+  // it there. The toast outlives this render: the buffer and the open workspace are read when it is clicked.
+  const fsNow = useRef(fs);
+  fsNow.current = fs;
+  const installFromTopBar = (toastPath: string) => (version: string) => installFromLaunchToast(version, {
+    toastPath,
+    workspacePath: () => fsNow.current.workspacePath || null,
+    isDirty: () => fsNow.current.isDirty,
+    confirmDiscard: () => confirmDialog(t('sidebar.switchProjectDirty'), t('sidebar.switchProjectConfirm'), t('confirm.cancel')),
+    closeWorkspace: () => fsNow.current.closeWorkspace(),
+  });
   const launchWorkspaceUnity = fs.workspacePath && typeof window !== 'undefined' && (window as any).ipc && !isRemotePage()
     ? async () => {
-        return launchWithToast(fs.workspacePath, undefined, showToast, t, installFromTopBar);
+        return launchWithToast(fs.workspacePath, undefined, showToast, t, installFromTopBar(fs.workspacePath));
       }
     : undefined;
   // Announce state to non-React consumers before they render translated text.
@@ -1284,7 +1289,7 @@ export default function Home() {
         onHierarchyVisible={setHierarchyVisible}
         hierarchy={<HierarchyPanel unityStatus={ai.unityMcpStatus} tree={sceneEditor.tree} loading={sceneEditor.loading}
           error={sceneEditor.error} stale={sceneEditor.stale} selectedId={sceneEditor.selectedId}
-          onSelect={selectSceneObject} onConnect={() => { if (unityConnectable(ai.unityMcpStatus)) void ai.toggleUnityMcp(); }} actions={sceneEditor} />}
+          onSelect={selectSceneObject} onConnect={() => connectUnityMcp(ai.unityMcpStatus, ai.toggleUnityMcp)} actions={sceneEditor} />}
         profileLevel={profileStats.latest ? {
           level: profileStats.latest.level, xp: profileStats.latest.xp,
           levelXp: profileStats.latest.level_xp, levelNeed: profileStats.latest.level_need,

@@ -138,7 +138,6 @@ describe('hierarchy panel Connect', () => {
   it('the page routes the panel Connect through that guard', () => {
     const home = readFileSync(resolve(__dirname, '../renderer/pages/home.tsx'), 'utf8')
     const line = home.split('\n').find(l => l.includes('onConnect='))!
-    expect(line).toMatch(/unityConnectable\(ai\.unityMcpStatus\)/)
-    expect(line).toMatch(/toggleUnityMcp/)
+    expect(line).toMatch(/connectUnityMcp\(ai\.unityMcpStatus, ai\.toggleUnityMcp\)/)
   })
 })
