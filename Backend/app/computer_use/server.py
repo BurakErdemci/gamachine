@@ -28,11 +28,9 @@ SCREEN_RECORDING_MISSING = (
 _CAPTURE_TOOLS = frozenset({"computer_window_state", "computer_zoom"})
 
 def _capture_failed(tool, args, result) -> bool:
-    if result.is_error is True:
-        return True
     if tool == "computer_window_state" and args.get("include_screenshot") is False:
         return False
-    return not any(isinstance(block, ImageContent) for block in result.content)
+    return result.is_error is True or not any(isinstance(block, ImageContent) for block in result.content)
 
 
 UNVERIFIED_REASON = "Durdurma durumu doğrulanamadı; işlem çalıştırılmadı."
@@ -707,9 +705,7 @@ class ComputerServer:
                     return _text(refusal, True)
                 result = await driver.call(validated.driver_tool, forward_args)
             if tool in _CAPTURE_TOOLS and _capture_failed(tool, args, result) and macos.screen_recording_missing():
-                if result.is_error is True:
-                    return _text(SCREEN_RECORDING_MISSING, True)
-                # The driver may report a failed capture as a normal result; keep the tree it did return.
+                # Never replace the driver's result: its own error and any tree it returned stay.
                 result = result.model_copy(update={
                     "content": [*result.content, TextContent(type="text", text=SCREEN_RECORDING_MISSING)]})
             if tool in {"computer_window_state", "computer_run_steps"}:

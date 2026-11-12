@@ -1345,7 +1345,54 @@ def _capture_failure_result(fake, monkeypatch, preflight, tool="computer_window_
 @pytest.mark.parametrize("tool", ["computer_window_state", "computer_zoom"])
 def test_capture_failure_without_screen_recording_grant_names_the_permission(fake, monkeypatch, tool):
     result = _capture_failure_result(fake, monkeypatch, lambda: False, tool)
-    assert result.is_error is True and result.content[0].text == MISSING_PERMISSION_TEXT
+    assert result.is_error is True
+    assert [block.text for block in result.content] == ["capture already in flight", MISSING_PERMISSION_TEXT]
+
+
+def test_driver_error_keeps_structured_content_when_permission_text_is_appended(fake, monkeypatch):
+    errored = CallToolResult(content=[TextContent(type="text", text="no such window")],
+                             structured_content={"code": "window_not_found"}, is_error=True)
+    result = _capture_failure_result(fake, monkeypatch, lambda: False, driver_result=errored)
+    assert result.is_error is True and result.structured_content == {"code": "window_not_found"}
+    assert [block.text for block in result.content] == ["no such window", MISSING_PERMISSION_TEXT]
+
+
+def test_error_without_screenshot_request_never_asks_the_preflight(fake, monkeypatch):
+    asked = []
+    result = _capture_failure_result(fake, monkeypatch, lambda: asked.append(1) or False,
+                                     extra_args={"include_screenshot": False})
+    assert result.is_error is True and [block.text for block in result.content] == ["capture already in flight"]
+    assert asked == []
+
+
+@pytest.mark.parametrize("tool,args", [("computer_list_windows", {"pid": 4242}),
+                                       ("computer_click", {"pid": 4242, "window_id": 7, "x": 1, "y": 2})])
+def test_non_capture_tools_never_ask_the_preflight(fake, monkeypatch, tool, args):
+    driver, _, _ = fake
+    real_call = driver.call
+    asked = []
+    failure = CallToolResult(content=[TextContent(type="text", text="driver failed")], is_error=True)
+
+    async def call(driver_tool, driver_args):
+        return failure if driver_tool in {"list_windows", "click"} else await real_call(driver_tool, driver_args)
+
+    monkeypatch.setattr(driver, "call", call)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(macos, "_cg_preflight_screen_capture", lambda: asked.append(1) or False)
+
+    async def run():
+        handler = ComputerServer(driver)
+        try:
+            return await handler.call(tool, args)
+        finally:
+            await handler.close()
+    result = asyncio.run(run())
+    assert [block.text for block in result.content] == ["driver failed"] and asked == []
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="CoreGraphics exists only on macOS")
+def test_real_coregraphics_preflight_answers_a_bool_without_raising():
+    assert isinstance(macos._cg_preflight_screen_capture(), bool)
 
 
 def test_capture_failure_with_screen_recording_granted_keeps_driver_error(fake, monkeypatch):
