@@ -1309,3 +1309,57 @@ def test_backend_approvals_refuse_dispatch_after_stop(monkeypatch, stop, expecte
     refusal = asyncio.run(REAL_DISPATCH_REFUSAL(server.BackendApprovals(), {"bundle_id": "com.apple.TextEdit"}))
     assert refusal == expected
     assert check.await_args.kwargs == {"check_only": True}
+
+
+MISSING_PERMISSION_TEXT = (
+    "Screen Recording permission is missing for Gamachine. Grant it in System Settings > Privacy & Security > "
+    "Screen & System Audio Recording, then restart Gamachine.")
+
+
+def _capture_failure_result(fake, monkeypatch, preflight, tool="computer_window_state"):
+    driver, _, _ = fake
+    real_call = driver.call
+    failure = CallToolResult(content=[TextContent(type="text", text="capture already in flight")], is_error=True)
+
+    async def call(driver_tool, args):
+        return failure if driver_tool in {"get_window_state", "zoom"} else await real_call(driver_tool, args)
+
+    monkeypatch.setattr(driver, "call", call)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(macos, "_cg_preflight_screen_capture", preflight)
+    args = {"pid": 4242, "window_id": 7}
+    if tool == "computer_zoom":
+        args.update(x1=0, y1=0, x2=10, y2=10)
+
+    async def run():
+        handler = ComputerServer(driver)
+        try:
+            return await handler.call(tool, args)
+        finally:
+            await handler.close()
+    return asyncio.run(run())
+
+
+@pytest.mark.parametrize("tool", ["computer_window_state", "computer_zoom"])
+def test_capture_failure_without_screen_recording_grant_names_the_permission(fake, monkeypatch, tool):
+    result = _capture_failure_result(fake, monkeypatch, lambda: False, tool)
+    assert result.is_error is True and result.content[0].text == MISSING_PERMISSION_TEXT
+
+
+def test_capture_failure_with_screen_recording_granted_keeps_driver_error(fake, monkeypatch):
+    result = _capture_failure_result(fake, monkeypatch, lambda: True)
+    assert result.is_error is True and result.content[0].text == "capture already in flight"
+
+
+def test_capture_failure_keeps_driver_error_when_preflight_raises(fake, monkeypatch):
+    def broken():
+        raise OSError("no CoreGraphics")
+    result = _capture_failure_result(fake, monkeypatch, broken)
+    assert result.is_error is True and result.content[0].text == "capture already in flight"
+
+
+def test_screen_recording_check_is_never_asked_off_macos(monkeypatch):
+    asked = []
+    monkeypatch.setattr(macos, "_cg_preflight_screen_capture", lambda: asked.append(1) or False)
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert macos.screen_recording_missing() is False and asked == []

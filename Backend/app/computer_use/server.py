@@ -19,7 +19,13 @@ from . import platform, policy
 from .gate import HALTED_REASON, INACTIVE_REASON
 from .driver_client import DriverClient, DriverError, DriverUnavailable
 from .platform.base import WindowListUnavailable
+from .platform import macos
 from .platform.macos import fetch_runtime
+
+SCREEN_RECORDING_MISSING = (
+    "Screen Recording permission is missing for Gamachine. Grant it in System Settings > Privacy & Security > "
+    "Screen & System Audio Recording, then restart Gamachine.")
+_CAPTURE_TOOLS = frozenset({"computer_window_state", "computer_zoom"})
 
 UNVERIFIED_REASON = "Durdurma durumu doğrulanamadı; işlem çalıştırılmadı."
 
@@ -692,6 +698,8 @@ class ComputerServer:
                 if refusal is not None:
                     return _text(refusal, True)
                 result = await driver.call(validated.driver_tool, forward_args)
+            if tool in _CAPTURE_TOOLS and result.is_error is True and macos.screen_recording_missing():
+                return _text(SCREEN_RECORDING_MISSING, True)
             if tool in {"computer_window_state", "computer_run_steps"}:
                 self._cache_snapshot(result, args)
             if tool == "computer_window_state":

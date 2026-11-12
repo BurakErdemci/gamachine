@@ -164,6 +164,25 @@ class _CGRect(ctypes.Structure):
     _fields_ = [("origin", _CGPoint), ("size", _CGSize)]
 
 
+def _cg_preflight_screen_capture() -> bool:
+    """CGPreflightScreenCaptureAccess: reports the grant and never shows the permission prompt."""
+    cg = ctypes.CDLL(os.path.join(os.sep, "System", "Library", "Frameworks",
+                                  "CoreGraphics.framework", "CoreGraphics"))
+    cg.CGPreflightScreenCaptureAccess.argtypes = []
+    cg.CGPreflightScreenCaptureAccess.restype = ctypes.c_bool
+    return bool(cg.CGPreflightScreenCaptureAccess())
+
+
+def screen_recording_missing() -> bool:
+    """True only when macOS reports Screen Recording as not granted; any doubt answers False."""
+    if sys.platform != "darwin":
+        return False
+    try:
+        return not _cg_preflight_screen_capture()
+    except Exception:
+        return False
+
+
 _CG_LOAD_LOCK = threading.Lock()
 
 
