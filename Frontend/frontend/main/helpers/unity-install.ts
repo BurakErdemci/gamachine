@@ -267,8 +267,14 @@ async function getReleases(url: string, deps: InstallDeps): Promise<any[]> {
   }
 }
 
-/** `requested` (a project's version) is fetched by exact lookup when it is not among the newest lists. */
-export async function loadCatalog(deps: InstallDeps, requested?: string): Promise<CatalogResult> {
+// The user's projects can name any number of versions; each one outside the lists costs a request.
+const MAX_PROJECT_LOOKUPS = 8
+
+/**
+ * `requested` (a project's version) is fetched by exact lookup when it is not among the newest lists, and so are
+ * `projects` (the versions the user's projects use: the flow offers them even when they are not the newest).
+ */
+export async function loadCatalog(deps: InstallDeps, requested?: string, projects?: unknown): Promise<CatalogResult> {
   const cli = cliState(deps)
   const platform = deps.platform === 'win32' ? 'WINDOWS' : deps.platform === 'darwin' ? 'MAC_OS' : null
   if (!platform) return { ok: false, cli, code: 'catalogFailed' }
@@ -286,6 +292,8 @@ export async function loadCatalog(deps: InstallDeps, requested?: string): Promis
     const want = typeof requested === 'string' && VERSION_RE.test(requested) ? requested : undefined
     const missing = deps.editors().map(e => e.version).filter(v => !releases.has(v)).slice(0, 5)
     if (want && !releases.has(want) && !missing.includes(want)) missing.push(want)
+    const used = Array.isArray(projects) ? projects.filter((v): v is string => typeof v === 'string' && VERSION_RE.test(v)) : []
+    for (const v of used.filter(v => !releases.has(v) && !missing.includes(v)).slice(0, MAX_PROJECT_LOOKUPS)) missing.push(v)
     const extra = await Promise.all(missing.map(v =>
       getReleases(`${RELEASE_API}?version=${encodeURIComponent(v)}&${target}`, deps).catch(() => [] as any[])))
     for (const raw of extra.flat()) {

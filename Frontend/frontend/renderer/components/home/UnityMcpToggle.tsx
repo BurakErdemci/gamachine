@@ -110,10 +110,19 @@ interface UnityMcpToggleProps {
   onLaunchUnity?: () => Promise<boolean | void> | boolean | void;
   /** Identifies the open project; a change drops the launch cooldown of the previous one. */
   projectKey?: string;
+  /** When this project's editor started while it has not opened the project yet (NaN = time unknown). */
+  editorLoadingSince?: number | null;
 }
 
 /** After a launch resolves the editor takes a while to appear; a second click in that window would spawn a second one. */
 export const LAUNCH_COOLDOWN_MS = 60000;
+
+/** m:ss, or h:mm:ss past an hour. */
+export const elapsedClock = (ms: number) => {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const mmss = `${Math.floor(s / 60) % 60}:${String(s % 60).padStart(2, '0')}`;
+  return s >= 3600 ? `${Math.floor(s / 3600)}:${mmss.padStart(5, '0')}` : mmss;
+};
 
 const PlugGlyph = () => (
   <svg className="ic us-plug" viewBox="0 0 20 20" aria-hidden="true">
@@ -150,10 +159,12 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
   editorOpen = null,
   onLaunchUnity,
   projectKey,
+  editorLoadingSince = null,
 }) => {
   const { t } = useLang();
   const [launching, setLaunching] = useState(false);
   const [launched, setLaunched] = useState(false);
+  const launchedAt = useRef(0);
   useEffect(() => { if (editorOpen === true) setLaunched(false); }, [editorOpen]);
   useEffect(() => { setLaunched(false); }, [projectKey]);
   useEffect(() => {
@@ -166,7 +177,7 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
     setLaunching(true);
     try {
       // A refused launch keeps the button: only a started editor needs the cooldown.
-      if ((await onLaunchUnity()) !== false) setLaunched(true);
+      if ((await onLaunchUnity()) !== false) { launchedAt.current = Date.now(); setLaunched(true); }
     } catch {
       // The handler reports its own failure; the button stays so the user can retry.
     } finally {
@@ -176,13 +187,26 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
   const shown = useShownUnityStatus(status);
   // Everything the pill shows follows `shown`: inside the drop grace it reads "connected", so no
   // waiting hint, launch button or compile reason may contradict it. The switch itself stays real.
-  const showLaunch = !!onLaunchUnity && editorOpen === false && shown !== 'connected' && !launched;
+  // The editor is on its way (this app launched it, or the backend sees it opening the project): "not open"
+  // and a second Launch would both be wrong. A first open took ~8 min (12 Nov 2026).
+  const loadingSince = shown === 'connected' || status === 'blocked' || editorOpen === true ? null
+    : editorLoadingSince ?? (launched ? launchedAt.current : null);
+  const [, tick] = useState(0);
+  useEffect(() => {
+    if (loadingSince === null) return;
+    const id = setInterval(() => tick(n => n + 1), 1000);
+    return () => clearInterval(id);
+  }, [loadingSince]);
+  const showLaunch = !!onLaunchUnity && editorOpen === false && shown !== 'connected' && !launched && loadingSince === null;
   const state = STATE[shown];
   const waiting = shown === 'starting' || shown === 'running';
-  const hint = state.hint ?? (state.visual === 'on' && projectMismatch ? 'unity.hintProjectMismatch'
+  const hint = loadingSince !== null ? 'unity.hintLoading' : state.hint ?? (state.visual === 'on' && projectMismatch ? 'unity.hintProjectMismatch'
     : waiting && dialog ? 'unity.dialogBlocking'
     : waiting && slowConnect ? 'unity.hintBringForward' : null);
-  const hintText = hint === 'unity.dialogBlocking' && dialog ? t('unity.dialogBlocking', { title: dialog.title })
+  const hintText = hint === 'unity.hintLoading' && loadingSince !== null
+    ? `${typeof targetProject === 'string' && targetProject.length > 0 ? t('unity.hintLoading', { name: targetProject }) : t('unity.hintLoadingGeneric')}${
+      Number.isFinite(loadingSince) ? ` · ${elapsedClock(Date.now() - loadingSince)}` : ''}`
+    : hint === 'unity.dialogBlocking' && dialog ? t('unity.dialogBlocking', { title: dialog.title })
     : hint === 'unity.hintBringForward'
     ? typeof targetProject === 'string' && targetProject.length > 0
       ? t('unity.hintBringForward', { name: targetProject }) : t('unity.hintBringForwardGeneric')
@@ -252,7 +276,7 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
         {state.visual === 'on' && projectName && (
           <span className="unity-path min-w-0 max-w-[220px] truncate" title={projectName}>{projectName}</span>
         )}
-        {hint && !showReason && <span className="unity-hint">{hintText}</span>}
+        {hint && !showReason && <span className="unity-hint" data-testid={hint === 'unity.hintLoading' ? 'unity-loading' : undefined}>{hintText}</span>}
         {showReason && (
           <button
             className="unity-why-btn"

@@ -2139,6 +2139,12 @@ export const tr = {
   'phone.sheet.autoConfirm': 'Otomatik moda geç',
   'phone.screen.status': 'Bilgisayar kullanımı: açık · son kare {n} sn önce',
   'phone.screen.statusNoFrame': 'Bilgisayar kullanımı: açık · henüz kare yok',
+  // Unity flows for a first-time user: an editor still opening, and the versions the user's projects need
+  'unity.hintLoading': 'Unity {name} projesini hâlâ açıyor',
+  'unity.hintLoadingGeneric': 'Unity projeyi hâlâ açıyor',
+  'unity.loadingRefused': 'Unity {name} projesini hâlâ açıyor. Bir projenin ilk açılışı birkaç dakika sürebilir; açıldığında Unity bağlantısını yeniden aç.',
+  'hub.install.forProjects': 'Projelerinin kullandığı sürümler',
+  'hub.install.usedBy': '{names} kullanıyor',
 } as const;
 
 /** Exported for the same reason `tr` is. */
@@ -4243,6 +4249,12 @@ export const en: Record<keyof typeof tr, string> = {
   'phone.sheet.autoConfirm': 'Switch to Auto',
   'phone.screen.status': 'Computer use: on · last frame {n} s ago',
   'phone.screen.statusNoFrame': 'Computer use: on · no frame yet',
+  // Unity flows for a first-time user: an editor still opening, and the versions the user's projects need
+  'unity.hintLoading': 'Unity is still opening {name}',
+  'unity.hintLoadingGeneric': 'Unity is still opening the project',
+  'unity.loadingRefused': "Unity is still opening {name}. A project's first open can take several minutes; turn the Unity connection on again once it is open.",
+  'hub.install.forProjects': 'Versions your projects use',
+  'hub.install.usedBy': 'Used by {names}',
 };
 
 export const translations: Record<Lang, Record<string, string>> = { tr, en };

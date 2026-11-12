@@ -4,12 +4,29 @@ import { useLang } from '../../lib/i18n'
 
 export type ToastType = 'success' | 'error' | 'warning' | 'info'
 
+/** One button on the toast that does the thing its message is about; a press also closes the toast. */
+export interface ToastAction {
+  label: string
+  onClick: () => void
+}
+
+export interface ToastOptions {
+  action?: ToastAction
+}
+
+/**
+ * Shows a toast and returns the function that takes it down early (a "starting..." toast whose
+ * outcome arrived). Callers that only show a message ignore the return.
+ */
+export type ShowToast = (message: string, type: ToastType, duration?: number, options?: ToastOptions) => (() => void) | void
+
 export interface Toast {
   id: number
   message: string
   type: ToastType
   /** Lifetime in ms; drives the life bar. */
   duration?: number
+  action?: ToastAction
 }
 
 const ICONS: Record<ToastType, React.ReactNode> = {
@@ -23,10 +40,12 @@ export function useToast() {
   const [toasts, setToasts] = useState<Toast[]>([])
   const counter = useRef(0)
 
-  const showToast = useCallback((message: string, type: ToastType = 'info', duration = 4000) => {
+  const showToast = useCallback((message: string, type: ToastType = 'info', duration = 4000, options?: ToastOptions) => {
     const id = ++counter.current
-    setToasts(prev => [...prev, { id, message, type, duration }])
-    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), duration)
+    const drop = () => setToasts(prev => prev.filter(t => t.id !== id))
+    setToasts(prev => [...prev, { id, message, type, duration, ...(options?.action ? { action: options.action } : {}) }])
+    setTimeout(drop, duration)
+    return drop
   }, [])
 
   const dismissToast = useCallback((id: number) => {
@@ -61,6 +80,15 @@ export function ToastContainer({ toasts, onDismiss }: ToastContainerProps) {
           <span className="gm-toast-text">
             <span className="gm-toast-k">{t(`toast.${toast.type}`)}</span>
             <span className="gm-toast-msg">{toast.message}</span>
+            {toast.action && (
+              <button
+                type="button"
+                className="gm-toast-act"
+                onClick={() => { onDismiss(toast.id); toast.action!.onClick() }}
+              >
+                {toast.action.label}
+              </button>
+            )}
           </span>
           <button
             type="button"

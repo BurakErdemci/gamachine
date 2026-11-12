@@ -3,10 +3,11 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { useLang } from '../../../lib/i18n';
 import {
   cancelInstallRun, cancelRun, clearInstall, clearRun, clearRunIf, getInstall, getRun, launchWithToast, listEditors, listTemplates,
-  nameProblem, pickParentDir, runInstall, sortTemplates, startCreate, subscribeInstall, subscribeRun,
+  nameProblem, pickParentDir, runInstall, sortTemplates, startCreate, subscribeInstall, subscribeRun, takeInstallRequest,
   type HubEditor, type HubRun, type HubTemplate, type InstallRun, type InstallTarget, type NameProblem,
 } from '../../../lib/hub';
 import type { RecentWorkspace } from '../../../hooks/home/useRecentWorkspaces';
+import type { ShowToast } from '../../ui/Toast';
 
 export type HubView = 'projects' | 'editors' | 'new';
 export type { HubRun, InstallRun };
@@ -15,12 +16,10 @@ export type { HubRun, InstallRun };
 export const EXPECTED_MS = 100_000;
 export const estimate = (ms: number) => Math.min(0.95, Math.max(0, ms / EXPECTED_MS));
 
-type ToastKind = 'success' | 'error' | 'warning' | 'info';
-
 export interface HubDeps {
   recent: RecentWorkspace[];
   onSelectWorkspace: (hostPath: string) => Promise<boolean | void> | boolean | void;
-  showToast: (message: string, type: ToastKind) => void;
+  showToast: ShowToast;
   /** Called once when a creation finishes, with the new project's host path (saves it to the recents). */
   onCreated?: (hostPath: string) => Promise<void>;
 }
@@ -158,13 +157,19 @@ export function useHub({ recent, onSelectWorkspace, showToast, onCreated }: HubD
   };
 
   const launch = async (path: string, v?: string) => {
-    await launchWithToast(path, v, showToast, t);
+    await launchWithToast(path, v, showToast, t, openInstallVersion);
   };
 
   /** How many recent projects were last saved with each editor version. */
   const usage = useMemo(() => {
     const m = new Map<string, number>();
     for (const r of recent) if (r.unityVersion) m.set(r.unityVersion, (m.get(r.unityVersion) ?? 0) + 1);
+    return m;
+  }, [recent]);
+  /** Editor version -> the names of the recent projects that use it (the install flow offers these versions). */
+  const neededBy = useMemo(() => {
+    const m = new Map<string, string[]>();
+    for (const r of recent) if (r.unityVersion) m.set(r.unityVersion, [...(m.get(r.unityVersion) ?? []), r.name]);
     return m;
   }, [recent]);
 
@@ -179,6 +184,11 @@ export function useHub({ recent, onSelectWorkspace, showToast, onCreated }: HubD
   /** The card's version was applied (or not found): a remount must not apply it again. */
   const consumeInstallWant = useCallback(() => setInstallWant(''), []);
   const closeInstall = () => { clearInstall(); setInstallFor(undefined); setInstallWant(''); };
+  // Another screen asked for the install flow at a version (see requestInstallVersion): opened once, on mount.
+  useEffect(() => {
+    const wanted = takeInstallRequest();
+    if (wanted) openInstallVersion(wanted);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   /** The new-project form with a just-installed version already chosen. */
   const newWithVersion = (v: string) => { closeInstall(); setVersion(v); setView('new'); };
   // A run under way or just ended keeps the flow on screen even after a remount.
@@ -187,7 +197,7 @@ export function useHub({ recent, onSelectWorkspace, showToast, onCreated }: HubD
   return {
     view, setView, editors, refreshEditors, syncEditors, templates, template, templateId, setTemplateId,
     name, setName, nameTouched, setNameTouched, tried, problem, parent, pickParent, version, setVersion,
-    canCreate, create, cancel, retryTemplates: () => void loadTemplates(versionRef.current), run, back, another, openCreated, launch, usage, recentCount: recent.length,
+    canCreate, create, cancel, retryTemplates: () => void loadTemplates(versionRef.current), run, back, another, openCreated, launch, usage, neededBy, recentCount: recent.length,
     install, installShown, installFor: installFor ?? '', installWant, consumeInstallWant, openInstall, openInstallVersion, closeInstall, newWithVersion,
     startInstall: (target: InstallTarget) => void runInstall(target), cancelInstall: () => void cancelInstallRun(),
   };

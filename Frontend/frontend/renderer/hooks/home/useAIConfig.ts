@@ -152,11 +152,20 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
   const [unityMcpDialog, setUnityMcpDialog] = useState<UnityMCPDialog | null>(null);
   // null = unknown (no workspace, backend gave no answer, or the poll failed).
   const [unityEditorOpen, setUnityEditorOpen] = useState<boolean | null>(null);
+  // When this project's editor started, while it runs but has not opened the project yet (the status poll's
+  // editor_loading); NaN = started, time unknown; null = not opening.
+  const [unityEditorLoadingSince, setUnityEditorLoadingSince] = useState<number | null>(null);
+  // The toggle reads the answer of the poll it has just awaited, before React renders it.
+  const editorLoadingRef = useRef<number | null>(null);
+  const setEditorLoading = useCallback((since: number | null) => {
+    editorLoadingRef.current = since;
+    setUnityEditorLoadingSince(since);
+  }, []);
   // The poll's interval keeps the first render's callback, so the workspace is read through a ref.
   const workspacePathRef = useRef(workspacePath);
   workspacePathRef.current = workspacePath;
   // The previous project's answer must not stay on screen for the new one until the next poll.
-  useEffect(() => { setUnityEditorOpen(null); }, [workspacePath]);
+  useEffect(() => { setUnityEditorOpen(null); setEditorLoading(null); }, [workspacePath, setEditorLoading]);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Yoklama kuşağı sayacı + montaj bayrağı; ikisi de `fetchUnityMcpStatus`'ta
   // kullanılıyor, gerekçe orada.
@@ -204,6 +213,9 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
       // An answer sent for a project the user has since left says nothing about the current one.
       if (workspacePathRef.current === hostWorkspace) {
         setUnityEditorOpen(statusWorkspace && typeof res.data?.editor_open === 'boolean' ? res.data.editor_open : null);
+        const loadingS = res.data?.editor_loading_s;
+        setEditorLoading(statusWorkspace && res.data?.editor_loading === true
+          ? (typeof loadingS === 'number' && Number.isFinite(loadingS) ? Date.now() - loadingS * 1000 : NaN) : null);
       }
       const status = unityMcpStatusOku(res.data?.status);
       const reason = typeof res.data?.reason === 'string' ? res.data.reason : null;
@@ -262,10 +274,11 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
       setUnityMcpReasonLines([]);
       setUnityMcpDialog(null);
       setUnityEditorOpen(null);
+      setEditorLoading(null);
       stopPolling();
       pollRef.current = setInterval(fetchUnityMcpStatus, 5000);
     }
-  }, [API, stopPolling, updateConnectionWait]);
+  }, [API, stopPolling, updateConnectionWait, setEditorLoading]);
 
   const toggleUnityMcp = useCallback(async (): Promise<boolean> => {
     if (!API || unityMcpToggling || unityMcpStatus === 'starting') return false;
@@ -322,6 +335,24 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
       return true;
     } catch (err: any) {
       if (!guncelMi()) return false;
+      // While this project's editor is still opening, the backend's "not open in Unity" is the wrong
+      // answer: it is on its way (a first open took ~8 min, 12 Nov 2026). Re-read first, then say so.
+      let measured = false;
+      if (err?.response?.status === 409 && workspacePath) {
+        await fetchUnityMcpStatus();
+        measured = true;
+        // Not guncelMi(): that poll took the generation over, as the closing re-read below always has.
+        if (!mountedRef.current) return false;
+        if (editorLoadingRef.current !== null) {
+          const name = workspacePath.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || workspacePath;
+          const msg = cevir('unity.loadingRefused', { name });
+          showToast(msg, 'info');
+          setUnityMcpError(msg);
+          if (errorClearRef.current) clearTimeout(errorClearRef.current);
+          errorClearRef.current = setTimeout(() => setUnityMcpError(null), 6000);
+          return false;
+        }
+      }
       // `detail` artık HER durum kodunda okunuyor. 500'ün gövdesi portu tutan
       // sürecin ADINI taşıyor (`unity_mcp_manager._blocked_reason`) ve eskiden
       // sabit bir "toggle başarısız" metniyle eziliyordu: sebep üretiliyor ama
@@ -343,7 +374,7 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
       // Durumu TAHMİN etmiyoruz, ÖLÇÜYORUZ. Eskiden koşulsuz 'off' yazılıyordu;
       // port başkasındayken bu yanlış bilgi: kullanıcı gri "kapalı" görüyor,
       // aynı düğmeye basıyor ve sebebi hiç öğrenmiyor.
-      await fetchUnityMcpStatus();
+      if (!measured) await fetchUnityMcpStatus();
       return false;
     } finally {
       setUnityMcpToggling(false);
@@ -647,6 +678,7 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
     unityMcpReasonLines,
     unityMcpDialog,
     unityEditorOpen,
+    unityEditorLoadingSince,
     toggleUnityMcp,
     // Durumu dışarıdan tazelemek için. İki tüketicisi var ve ikisi de aynı
     // soruyu soruyor: "şu an gerçekten ne durumda" — hata sonrası ölçüm, ve

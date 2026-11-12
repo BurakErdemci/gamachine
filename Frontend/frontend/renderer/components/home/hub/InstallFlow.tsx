@@ -78,6 +78,10 @@ const Picker = ({ h, words, onGetUnity }: Omit<Props, 'className'>) => {
   const [wantMissing, setWantMissing] = useState('');
   // Set once the card's version was consumed: the rerun that clearing it causes must not reload.
   const wantConsumed = useRef(false);
+  // The versions the user's projects use and that are not installed (main looks up installed ones anyway).
+  // Read at load time, not a load dependency: projects arriving later must not reload a flow the user is in.
+  const neededRef = useRef<string[]>([]);
+  neededRef.current = [...h.neededBy.keys()].filter(v => !h.editors?.some(e => e.version === v));
   const alive = useRef(true);
   const planSeq = useRef(0);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
@@ -97,7 +101,7 @@ const Picker = ({ h, words, onGetUnity }: Omit<Props, 'className'>) => {
     setCatalog(undefined);
     setWantMissing('');
     const want = h.installWant;
-    const res = await loadInstallCatalog(want || undefined);
+    const res = await loadInstallCatalog(want || undefined, neededRef.current);
     if (!alive.current) return;
     setCatalog(res);
     // A project's missing editor is preselected as a new install; one Unity does not list gets a plain message.
@@ -187,7 +191,15 @@ const Picker = ({ h, words, onGetUnity }: Omit<Props, 'className'>) => {
 
   if (step === 'version') {
     const rec = releases.find(r => r.recommended) ?? releases.find(r => r.stream === 'LTS') ?? releases[0];
-    const rest = releases.filter(r => r !== rec);
+    // The versions the user's projects need come first and in the open, whatever their age or stream.
+    const forProjects = releases.filter(r => r !== rec && !r.installed && h.neededBy.has(r.version));
+    const rest = releases.filter(r => r !== rec && !forProjects.includes(r));
+    const usedBy = (v: string) => {
+      const names = h.neededBy.get(v);
+      if (!names?.length) return null;
+      const shown = names.length > 2 ? `${names.slice(0, 2).join(', ')} +${names.length - 2}` : names.join(', ');
+      return <span className="hub-inst-used" data-testid={`hub-install-used-${v}`}>{t('hub.install.usedBy', { names: shown })}</span>;
+    };
     const pickBtn = (r: InstallRelease, cls: string) => (r.installed
       ? <span className="hub-inst-pill is-installed">{t('hub.install.installed')}</span>
       : <button type="button" className={cls} onClick={() => choose(r, releases)} data-testid={`hub-install-pick-${r.version}`}>{t('hub.install.pick')}</button>);
@@ -208,8 +220,24 @@ const Picker = ({ h, words, onGetUnity }: Omit<Props, 'className'>) => {
             <b className="hub-inst-ver num">{rec.version}</b>
             <span className="hub-inst-meta">{t(rec.stream === 'LTS' ? 'hub.install.streamLts' : 'hub.install.streamSupported')} · {formatDate(rec.releaseDate, lang)}</span>
             <span className="hub-inst-size num">{t('hub.install.sizes', { download: size(rec.downloadBytes), disk: size(rec.installedBytes) })}</span>
+            {usedBy(rec.version)}
             {pickBtn(rec, 'btn btn-primary hub-inst-go')}
           </div>
+        )}
+        {!!forProjects.length && (
+          <section className="hub-inst-group hub-inst-projects" data-testid="hub-install-for-projects">
+            <h4 className="hub-inst-group-h">{t('hub.install.forProjects')}</h4>
+            <ul className="hub-inst-rows">
+              {forProjects.map(r => (
+                <li key={r.version} className="hub-inst-row" data-testid={`hub-install-ver-${r.version}`}>
+                  <b className="num">{r.version}</b>
+                  {usedBy(r.version)}
+                  <span className="hub-inst-size num">{size(r.downloadBytes)}</span>
+                  {pickBtn(r, 'set-link')}
+                </li>
+              ))}
+            </ul>
+          </section>
         )}
         {!!rest.length && (
           <details className="hub-inst-more" data-testid="hub-install-more">
@@ -225,7 +253,7 @@ const Picker = ({ h, words, onGetUnity }: Omit<Props, 'className'>) => {
                     {list.map(r => (
                       <li key={r.version} className={`hub-inst-row${r.installed ? ' is-installed' : ''}`} data-testid={`hub-install-ver-${r.version}`}>
                         <b className="num">{r.version}</b>
-                        <span className="hub-inst-meta">{formatDate(r.releaseDate, lang)}</span>
+                        {usedBy(r.version) ?? <span className="hub-inst-meta">{formatDate(r.releaseDate, lang)}</span>}
                         <span className="hub-inst-size num">{size(r.downloadBytes)}</span>
                         {pickBtn(r, 'set-link')}
                       </li>

@@ -33,7 +33,8 @@ import { ProjectFiles } from '../components/home/FileTree';
 import { ControlPanel, ThinkingLevel, EffortCaps } from '../components/home/ControlPanel';
 import { SessionReportPanel } from '../components/home/SessionReportPanel';
 import { UnityMcpToggle } from '../components/home/UnityMcpToggle';
-import { launchWithToast } from '../lib/hub';
+import { launchWithToast, requestInstallVersion } from '../lib/hub';
+import { confirmDialog } from '../components/ui/ConfirmDialog';
 import { isRemotePage } from '../lib/remote/transport';
 import { AnimatedChatInput, type ComposerPickers, type ComposerDraft } from '../components/ui/animated-ai-chat';
 import { ToastContainer } from '../components/ui/Toast';
@@ -316,9 +317,16 @@ export default function Home() {
   };
   const t = (key: string, degerler?: TValues) => ceviriUygula(lang, key, degerler);
   // Same toasts as the project card's launch (useHub.launch); a remote browser cannot spawn Unity on the host.
+  // A missing editor's toast offers its install: the mini Hub's install flow, which lives on the project screen,
+  // so the workspace closes (after the same unsaved-file check as the sidebar's switch) and the Hub opens it there.
+  const installFromTopBar = async (version: string) => {
+    if (fs.isDirty && !(await confirmDialog(t('sidebar.switchProjectDirty'), t('sidebar.switchProjectConfirm'), t('confirm.cancel')))) return;
+    requestInstallVersion(version);
+    fs.closeWorkspace();
+  };
   const launchWorkspaceUnity = fs.workspacePath && typeof window !== 'undefined' && (window as any).ipc && !isRemotePage()
     ? async () => {
-        return launchWithToast(fs.workspacePath, undefined, showToast, t);
+        return launchWithToast(fs.workspacePath, undefined, showToast, t, installFromTopBar);
       }
     : undefined;
   // Announce state to non-React consumers before they render translated text.
@@ -1310,6 +1318,7 @@ export default function Home() {
             editorOpen={ai.unityEditorOpen}
             onLaunchUnity={launchWorkspaceUnity}
             projectKey={fs.workspacePath ?? ''}
+            editorLoadingSince={ai.unityEditorLoadingSince}
           />
           {/* Not in the mockup: the sidebar toggle. The editor's controls that shared this spot (the
               terminal button, the open file's name / save / close) moved into the workspace: the

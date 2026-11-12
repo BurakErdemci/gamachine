@@ -5,7 +5,9 @@
    Imported from welcome.css (the welcome screen owns this area). */
 
 /* ======================= shared frame ======================= */
-.hub { flex: 1; width: 100%; max-width: 1040px; margin: 0 auto; padding: 26px 48px 20px; display: flex; flex-direction: column; gap: 22px; min-height: 0; }
+/* Grows to fill .wl-main but never shrinks below its content: .wl-main is the scroller, and a hub squeezed to the
+   window height let the version and module lists run on under the "Gamachine x.y.z" line after it (Mac, 12 Nov 2026). */
+.hub { flex: 1 0 auto; width: 100%; max-width: 1040px; margin: 0 auto; padding: 26px 48px 20px; display: flex; flex-direction: column; gap: 22px; }
 .hub .wl-col { max-width: none; margin: 0; padding: 0; }
 .hub-panel { min-width: 0; }
 .hub-tabs { display: flex; align-items: stretch; gap: 6px; }
@@ -563,6 +565,9 @@
 .hub-inst-ver { font-size: 24px; font-weight: 700; color: var(--ink); }
 .hub-inst-meta { font-size: 13px; color: var(--ink-dim); }
 .hub-inst-size { font-size: var(--fs-meta); color: var(--ink-dim); }
+.hub-inst-used { font-size: 13px; color: var(--accent-text); overflow-wrap: anywhere; }
+.hub-inst-projects { padding: 10px 14px 4px; border: var(--line-w) solid var(--paper-line-strong); border-radius: var(--radius-lg); }
+.hub-inst-projects .hub-inst-row:last-child { border-bottom: 0; }
 .hub-inst-pill { padding: 1px 8px; border-radius: 10px; font-size: 11.5px; color: var(--ink-dim); border: var(--line-w) solid var(--paper-line-strong); white-space: nowrap; }
 .hub-inst-more > summary { cursor: pointer; font-size: 13.5px; color: var(--ink-dim); }
 .hub-inst-group { margin-top: 12px; }

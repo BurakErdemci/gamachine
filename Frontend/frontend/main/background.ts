@@ -455,7 +455,10 @@ const installDeps = (): InstallDeps => ({
   findHub: () => findUnityHub(process.platform, process.env, os.homedir(), fs.existsSync),
 })
 
-handleSecure('hub-install-catalog', (_event, arg: any) => loadCatalog(installDeps(), typeof arg === 'string' ? arg : undefined))
+// A bare version string, or { requested, projects } when the user's projects need more versions (loadCatalog checks both).
+handleSecure('hub-install-catalog', (_event, arg: any) => typeof arg === 'string' || arg == null
+  ? loadCatalog(installDeps(), typeof arg === 'string' ? arg : undefined)
+  : loadCatalog(installDeps(), typeof arg.requested === 'string' ? arg.requested : undefined, arg.projects))
 
 handleSecure('hub-install-plan', (_event, arg: any) =>
   planInstall({ version: arg?.version, modules: arg?.modules }, installDeps()))

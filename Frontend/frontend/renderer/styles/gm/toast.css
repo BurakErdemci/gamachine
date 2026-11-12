@@ -28,6 +28,13 @@
   text-transform: var(--label-case); letter-spacing: var(--label-track); font-stretch: var(--label-stretch);
 }
 .gm-toast-msg { font-size: var(--fs-small); line-height: 1.45; overflow-wrap: anywhere; }
+/* The toast's one action: a text button in the status accent, under the message. */
+.gm-toast-act {
+  align-self: flex-start; margin-top: 6px; padding: 3px 9px;
+  border: var(--line-w) solid var(--tone); border-radius: var(--radius-md);
+  color: var(--toast-text); font-size: var(--fs-small); font-weight: 600;
+}
+.gm-toast-act:hover, .gm-toast-act:focus-visible { background: color-mix(in srgb, var(--tone) 18%, transparent); }
 .gm-toast-x {
   display: grid; place-items: center; width: 24px; height: 24px; margin: -2px -2px 0 0;
   border-radius: var(--radius-md); color: var(--toast-text); opacity: .7;

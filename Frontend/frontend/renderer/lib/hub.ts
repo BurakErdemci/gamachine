@@ -5,6 +5,7 @@
  * `window.ipc`; reads answer empty and actions answer an error without throwing.
  */
 import type { Cleanup, HubErrorCode } from '../../main/helpers/unity-create';
+import type { ShowToast } from '../components/ui/Toast';
 import type { TKey, TValues } from './i18n';
 
 export interface HubEditor { version: string; path: string }
@@ -126,22 +127,40 @@ export async function launchProject(path: string, version?: string): Promise<{ o
 // asking main for another editor.
 const pendingLaunches = new Map<string, Promise<boolean>>();
 
-/** Launches and toasts the outcome; every Launch Unity button goes through here. Resolves whether Unity is (being) opened. */
+/** A missing editor's toast stays this long: it carries the install action and must be readable. */
+export const MISSING_EDITOR_TOAST_MS = 20_000;
+
+/**
+ * Launches and toasts the outcome; every Launch Unity button goes through here. Resolves whether Unity is (being) opened.
+ * A refusal takes the "starting" toast down, so only the reason stays. Given `onInstall` (opens the install flow at a
+ * version), a missing editor's toast offers it.
+ */
 export function launchWithToast(
   path: string, version: string | undefined,
-  showToast: (message: string, type: 'success' | 'error' | 'info') => void,
+  showToast: ShowToast,
   t: (key: TKey, values?: TValues) => string,
+  onInstall?: (version: string) => void,
 ): Promise<boolean> {
   const key = path.replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase();
   const pending = pendingLaunches.get(key);
   if (pending) return pending;
   const run = (async () => {
     try {
-      showToast(t('hub.launching'), 'info');
+      const hideStarting = showToast(t('hub.launching'), 'info');
       const res = await launchProject(path, version);
-      if (res.opened) showToast(res.alreadyOpen ? t('hub.alreadyOpen') : t('hub.launched'), res.alreadyOpen ? 'info' : 'success');
-      else showToast(t('hub.launchFailed', { error: hubFailureText(res, t) }), 'error');
-      return res.opened;
+      if (res.opened) {
+        showToast(res.alreadyOpen ? t('hub.alreadyOpen') : t('hub.launched'), res.alreadyOpen ? 'info' : 'success');
+        return true;
+      }
+      if (typeof hideStarting === 'function') hideStarting();
+      const message = t('hub.launchFailed', { error: hubFailureText(res, t) });
+      const missing = res.code === 'editorMissing' ? String(res.params?.version ?? version ?? '') : '';
+      if (!missing) showToast(message, 'error');
+      else {
+        showToast(message, 'error', MISSING_EDITOR_TOAST_MS, onInstall
+          ? { action: { label: t('hub.installVersion', { version: missing }), onClick: () => onInstall(missing) } } : undefined);
+      }
+      return false;
     } finally {
       pendingLaunches.delete(key);
     }
@@ -320,9 +339,14 @@ const isEulas = (v: unknown): v is InstallEula[] =>
 const isCli = (c: any): c is CliState =>
   c?.available === true || (c?.available === false && (c.reason === 'noHub' || c.reason === 'openHubOnce'));
 
-/** null = no desktop bridge, or an answer that does not have the contract's shape. */
-export async function loadInstallCatalog(requested?: string): Promise<CatalogResult | null> {
-  const res = await call('hub-install-catalog', requested);
+/**
+ * null = no desktop bridge, or an answer that does not have the contract's shape. `projects` are the editor versions
+ * the user's projects use: main looks up the ones outside its newest-release lists, so the flow can always offer them.
+ */
+export async function loadInstallCatalog(requested?: string, projects: string[] = []): Promise<CatalogResult | null> {
+  const extra = [...new Set(projects.filter(v => v && v !== requested))];
+  // Without extra versions the request keeps its old shape: a bare version string or nothing.
+  const res = await call('hub-install-catalog', extra.length ? { requested, projects: extra } : requested);
   if (!res || !isCli(res.cli)) return null;
   if (res.ok === true && Array.isArray(res.releases)) {
     return {
@@ -365,6 +389,12 @@ export async function cancelInstall(): Promise<{ cancelled: boolean; reason?: 'i
   const res = await call('hub-install-cancel');
   return { cancelled: res?.cancelled === true, ...(res?.reason === 'installing' || res?.reason === 'idle' ? { reason: res.reason } : {}) };
 }
+
+// A version another screen asked the install flow to open at (the top bar's "Install Unity X" on a launch that
+// found the editor missing). That screen closes the workspace; the mini Hub mounts and takes the request once.
+let installRequest = '';
+export const requestInstallVersion = (version: string) => { installRequest = version; };
+export const takeInstallRequest = (): string => { const v = installRequest; installRequest = ''; return v; };
 
 /** The existing open-unity-hub channel: Hub fetches its install tool on its first launch. */
 export async function openUnityHub(): Promise<boolean> {
