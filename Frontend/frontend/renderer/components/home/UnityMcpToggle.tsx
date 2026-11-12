@@ -199,6 +199,8 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
   }, [loadingSince]);
   const showLaunch = !!onLaunchUnity && editorOpen === false && shown !== 'connected' && !launched && loadingSince === null;
   const state = STATE[shown];
+  // The supervisor gave up restarting our own server: the port is free, so "Blocked" (port taken) is the wrong word.
+  const gaveUp = status === 'blocked' && reasonCode === 'supervisor_gave_up';
   const waiting = shown === 'starting' || shown === 'running';
   const hint = loadingSince !== null ? 'unity.hintLoading' : state.hint ?? (state.visual === 'on' && projectMismatch ? 'unity.hintProjectMismatch'
     : waiting && dialog ? 'unity.dialogBlocking'
@@ -219,8 +221,7 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
   const compileFailed = shown === 'running' && reasonCode === 'bridge_compile_failed';
   const sebep = status === 'blocked' ? reason : compileFailed ? reasonLines.join('\n') : null;
   const showReason = status === 'blocked' || compileFailed;
-  // The supervisor gave up restarting our own server: the port is free, so the foreign-server title is wrong.
-  const title: Anahtar = status === 'blocked' && reasonCode === 'supervisor_gave_up' ? 'home.unityGaveUp' : state.title;
+  const title: Anahtar = gaveUp ? 'home.unityGaveUp' : state.title;
 
   // The reason opens by itself when the block arrives (the old strip showed it without a click,
   // and the user must act on it); "Why?" then closes and reopens it, as in the mockup.
@@ -271,7 +272,7 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
       <span className="unity-read min-w-0">
         <span className="unity-text" id={stateId} aria-live="polite">
           <span className="unity-k" lang="en">{t('unity.kicker')}</span>{' '}
-          <span className="unity-word">{t(state.word)}</span>
+          <span className="unity-word">{t(gaveUp ? 'unity.wordGaveUp' : state.word)}</span>
         </span>
         {state.visual === 'on' && projectName && (
           <span className="unity-path min-w-0 max-w-[220px] truncate" title={projectName}>{projectName}</span>
@@ -308,9 +309,9 @@ export const UnityMcpToggle: React.FC<UnityMcpToggleProps> = ({
             // In the DOM while a reason exists, shown by CSS when open / hovered / focused:
             // it follows the status, not a timer.
             <span className="unity-why" id={whyId} role="alert">
-              <b>{t(compileFailed ? 'unity.compileWhyTitle' : 'unity.whyTitle')}</b>{' '}
+              <b>{t(compileFailed ? 'unity.compileWhyTitle' : gaveUp ? 'unity.gaveUpWhyTitle' : 'unity.whyTitle')}</b>{' '}
               {/* No nowrap: the reason carries a process name and PID, so it is long. */}
-              {status === 'blocked' ? sebep || t(title) : <span className="unity-compile-lines">{sebep}</span>}
+              {status === 'blocked' ? (gaveUp ? t(title) : sebep || t(title)) : <span className="unity-compile-lines">{sebep}</span>}
             </span>
           )}
           {error && <span className="unity-err" role="alert">{error}</span>}

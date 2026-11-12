@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useMemo, useRef, type SetStateAction 
 import axios from 'axios';
 import { AIConfig, AvailableModels, ProviderReady, UserData } from '../../components/home/types';
 import { apiHataMesaji } from '../../lib/apiError';
-import { aktifDil, cevir } from '../../lib/i18n';
+import { aktifDil, cevir, kayitliDil } from '../../lib/i18n';
 import { backendWorkspacePath } from '../../lib/backendWorkspacePath';
 import { shortModelId } from '../../lib/modelText';
 
@@ -41,6 +41,12 @@ export const UNITY_MCP_DURUMLARI = [
 ] as const;
 
 export type UnityMCPStatus = typeof UNITY_MCP_DURUMLARI[number];
+
+/**
+ * A "Connect" button only connects: `toggleUnityMcp` turns MCP OFF from every status but off/blocked, so a
+ * click while the link is starting or running must not reach it (the Hierarchy panel's button did, 12 Nov 2026).
+ */
+export const unityConnectable = (status: UnityMCPStatus): boolean => status === 'off' || status === 'blocked';
 
 /** `GET /mcp/unity/status` `dialog`: a native Unity dialog of the active project holding the connection. */
 export interface UnityMCPDialog {
@@ -312,7 +318,7 @@ export const useAIConfig = (API: string, user: UserData | null, showToast: (msg:
       if (turningOn && workspacePath && mcpWorkspace === null) {
         showToast(cevir('workspace.outsideDockerMount'), 'warning');
       }
-      await axios.post(`${API}/mcp/unity/toggle`, { enabled: turningOn, workspace_path: mcpWorkspace, language: aktifDil() });
+      await axios.post(`${API}/mcp/unity/toggle`, { enabled: turningOn, workspace_path: mcpWorkspace, language: kayitliDil() ?? aktifDil() });
       if (!guncelMi()) return false;
       setUnityMcpReasonCode(null);
       setUnityMcpReasonLines([]);

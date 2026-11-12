@@ -108,7 +108,8 @@ class MCPToggleRequest(BaseModel):
 
 
 @router.post("/unity/toggle")
-async def toggle_unity_mcp(req: MCPToggleRequest, background_tasks: BackgroundTasks, x_session_token: str = Header(alias="X-Session-Token", default="")):
+async def toggle_unity_mcp(req: MCPToggleRequest, background_tasks: BackgroundTasks, x_session_token: str = Header(alias="X-Session-Token", default=""),
+                           x_ui_lang: str | None = Header(default=None, alias="X-UI-Lang")):
     """
     Unity MCP sunucusunu başlatır veya durdurur.
     Toggle ON için Unity Editor'ün açık olması ZORUNLUDUR.
@@ -119,7 +120,7 @@ async def toggle_unity_mcp(req: MCPToggleRequest, background_tasks: BackgroundTa
     async with unity_mcp_manager.mcp_lock:
         unity_mcp_manager.reset_supervision()
         if req.enabled:
-            return await start_mcp_for(req.workspace_path, background_tasks, req.language)
+            return await start_mcp_for(req.workspace_path, background_tasks, req.language or x_ui_lang)
         return stop_mcp(req.workspace_path)
 
 

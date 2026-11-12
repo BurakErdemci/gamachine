@@ -2145,6 +2145,9 @@ export const tr = {
   'unity.loadingRefused': 'Unity {name} projesini hâlâ açıyor. Bir projenin ilk açılışı birkaç dakika sürebilir; açıldığında Unity bağlantısını yeniden aç.',
   'hub.install.forProjects': 'Projelerinin kullandığı sürümler',
   'hub.install.usedBy': '{names} kullanıyor',
+  // Unity: the supervisor gave up restarting our own server (not a taken port)
+  'unity.wordGaveUp': 'Durdu',
+  'unity.gaveUpWhyTitle': 'Sunucu durdu.',
 } as const;
 
 /** Exported for the same reason `tr` is. */
@@ -4255,6 +4258,9 @@ export const en: Record<keyof typeof tr, string> = {
   'unity.loadingRefused': "Unity is still opening {name}. A project's first open can take several minutes; turn the Unity connection on again once it is open.",
   'hub.install.forProjects': 'Versions your projects use',
   'hub.install.usedBy': 'Used by {names}',
+  // Unity: the supervisor gave up restarting our own server (not a taken port)
+  'unity.wordGaveUp': 'Stopped',
+  'unity.gaveUpWhyTitle': 'The server stopped.',
 };
 
 export const translations: Record<Lang, Record<string, string>> = { tr, en };
@@ -4295,15 +4301,23 @@ export function aktifDilAyarla(l: Lang | null): void {
   aktifDilDegeri = l;
 }
 
-export function aktifDil(): Lang {
-  if (aktifDilDegeri) return aktifDilDegeri;
+/**
+ * The language the user chose, from storage; null when none is stored. Unlike `aktifDil` it ignores the
+ * announced value: `home.tsx` announces 'en' for its first render, before it has read the stored choice.
+ */
+export function kayitliDil(): Lang | null {
   try {
     const kayitli = localStorage.getItem('app-lang');
     if (kayitli === 'tr' || kayitli === 'en') return kayitli;
   } catch {
-    /* Storage may be unavailable during SSR; English is the default. */
+    /* Storage may be unavailable during SSR. */
   }
-  return 'en';
+  return null;
+}
+
+export function aktifDil(): Lang {
+  if (aktifDilDegeri) return aktifDilDegeri;
+  return kayitliDil() ?? 'en';
 }
 
 /** React dışı bağlamlarda `t()`nin karşılığı. */
