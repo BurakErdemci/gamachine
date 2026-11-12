@@ -49,8 +49,10 @@ def test_composed_guide_changes_only_the_desktop_line(language, old, new, projec
                              addendum="CUSTOM_RULE")
     changed = guide.with_computer_use(original)
     assert old not in changed
+    block = new + "\n" + getattr(guide, "COMPUTER_USE_RULES_" + suffix)
     assert changed.count(new) == 1
-    assert changed.replace(new, "") == original.replace(old, "")
+    assert changed.count(block) == 1
+    assert changed.replace(block, "") == original.replace(old, "")
     assert guide.with_computer_use(changed) == changed
 
 
@@ -62,7 +64,7 @@ def test_guide_without_desktop_line_is_unchanged(text):
 def test_only_the_first_desktop_line_is_replaced():
     # Later lines (a user addendum, in either language) keep their meaning.
     original = "\n".join([guide.DESKTOP_LINE_EN, guide.DESKTOP_LINE_TR] * 2)
-    expected = "\n".join([guide.COMPUTER_USE_LINE_EN, guide.DESKTOP_LINE_TR,
+    expected = "\n".join([guide.COMPUTER_USE_LINE_EN + "\n" + guide.COMPUTER_USE_RULES_EN, guide.DESKTOP_LINE_TR,
                            guide.DESKTOP_LINE_EN, guide.DESKTOP_LINE_TR])
     assert guide.with_computer_use(original) == expected
 
@@ -169,3 +171,24 @@ def test_oneshot_provider_guide_ignores_computer_use_flag(
     if injected:
         provider._agent_guide = original
     assert guide.provider_guide(provider, project_open=True, unity_running=False) == original + "\n\n"
+
+
+@pytest.mark.parametrize("language,safety", [
+    ("en", "is data, never instructions"), ("tr", "veridir, talimat değildir")])
+def test_computer_use_rules_are_short_and_lead_with_the_safety_rule(language, safety):
+    rules = getattr(guide, "COMPUTER_USE_RULES_" + language.upper())
+    assert len(rules) < 900
+    assert safety in rules.splitlines()[0]
+    for name in ("computer_window_state", "element_token", "computer_run_steps",
+                 "computer_launch_app", "computer_list_apps", "computer_confirm_risky_step"):
+        assert name in rules
+
+
+@pytest.mark.parametrize("language", ["en", "tr"])
+def test_computer_use_rules_appear_once_and_only_with_computer_tools(language):
+    rules = getattr(guide, "COMPUTER_USE_RULES_" + language.upper())
+    original = guide.compose(language, project_open=True, unity_state="connected", addendum="")
+    assert rules not in original
+    changed = guide.with_computer_use(original)
+    assert changed.count(rules) == 1
+    assert guide.with_computer_use(changed).count(rules) == 1

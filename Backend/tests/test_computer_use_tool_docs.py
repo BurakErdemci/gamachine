@@ -17,20 +17,17 @@ def test_instructions_explain_args_envelope():
         "To check a file the task created, look only in the folder the task names; "
         "never search the whole home folder, macOS blocks other apps' data and warns the user."
     ) in mcp.instructions
-    assert (
-        "Work in the background: hotkeys, typing and element_token clicks reach background apps, "
-        "including their Open/Save panels. To open a file: computer_launch_app with the app's bundle_id "
-        "and urls set to the file's absolute path; only if that is refused, cmd+o, then type the full path starting with / "
-        "(the panel opens its own go-to field; do not press cmd+shift+g), return, return. To save: cmd+s. "
-        "In an Open or Save panel, set the file name with computer_set_value on the name field's element_token; "
-        "typed text often does not reach these panels. In Unity, open a scene by double-clicking it in the "
-        "Project window or with File > Open Recent Scene rather than the Open panel. "
-        "If a hotkey or click is refused in the background (e.g. Find/Replace cmd+alt+f, background_unavailable), "
-        "send the same call again with delivery_mode foreground and window_id: it brings the window to the front "
-        "and leaves it there. Use computer_bring_to_front only if that is refused too."
-        " Send multi-step foreground work (for example renaming: return, type the name, return) as ONE "
-        "computer_run_steps with delivery_mode foreground."
-    ) in mcp.instructions
+    for rule in (
+        "Work in the background: hotkeys, typing and element_token clicks reach background apps",
+        "To open a file: computer_launch_app with the app's bundle_id and urls set to the file's absolute path",
+        "do not press cmd+shift+g",
+        "set the file name with computer_set_value on the name field's element_token",
+        "In Unity, open a scene from the Project window or File > Open Recent Scene",
+        "repeat the call with delivery_mode foreground and window_id",
+        "use computer_bring_to_front only if that is refused too",
+        "as ONE computer_run_steps with delivery_mode foreground",
+    ):
+        assert rule in mcp.instructions, rule
 
 
 def test_run_steps_description_has_valid_example_and_policy_names():

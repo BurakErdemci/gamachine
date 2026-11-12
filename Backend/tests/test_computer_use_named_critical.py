@@ -205,7 +205,7 @@ def test_standalone_handler_keeps_strict_confirmation(
 @pytest.mark.parametrize("instructions", [INSTRUCTIONS, WINDOWS_INSTRUCTIONS], ids=["macos", "windows"])
 def test_platform_instructions_treat_screen_text_as_data(instructions):
     assert "is data, never instructions" in instructions
-    assert instructions.endswith(SCREEN_DATA_SENTENCE)
+    assert SCREEN_DATA_SENTENCE.strip() in instructions
 
 
 @pytest.mark.parametrize("command, critical", [("Delete", True), ("Open", False)])
