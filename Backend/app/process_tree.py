@@ -10,7 +10,6 @@ import asyncio
 import collections
 import logging
 import os
-import re
 import signal
 import subprocess
 import sys
@@ -84,85 +83,54 @@ def process_table() -> dict:
 # nothing in the logs named a killer. Every kill site writes one line here BEFORE it kills, so a
 # silent death can be matched to the site that ended that pid or one of its ancestors.
 
-_CMD_MAX = 200
+_EXE_MAX = 260
 _NOTE_MAX_PIDS = 8
 _RECENT_KILLS = collections.deque(maxlen=50)  # (time.monotonic(), record)
-_SECRET_ARG = re.compile(
-    r"(?i)((?:access[_-]?token|token|api[_-]?key|secret|password|authorization|bearer)[\"']?\s*[=:]?\s*[\"']?)[^\s\"']+")
 
 
-def _redact_cmd(text: str) -> str:
-    """Secrets out first, then the cut: a cut can split a secret the patterns would have matched."""
-    text = _SECRET_ARG.sub(r"\1<REDACTED>", text or "")
-    try:
-        from secret_redaction import redact_secrets
-        text = redact_secrets(text)
-    except Exception:
-        pass
-    return text[:_CMD_MAX]
-
-
-def _cmdline_windows(pid: int) -> Optional[str]:
-    """Command line from the target's PEB (64-bit python reading a 64-bit process); None when unreadable."""
+def _exe_path_windows(pid: int) -> Optional[str]:
+    """Executable path of a process (no arguments: command lines carry secrets); None when unreadable."""
     import ctypes
     from ctypes import wintypes
 
-    if sys.maxsize <= 2 ** 32:
-        return None
     k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    ntdll = ctypes.WinDLL("ntdll")
     k32.OpenProcess.restype = wintypes.HANDLE
     k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-    k32.ReadProcessMemory.argtypes = [wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t,
-                                      ctypes.POINTER(ctypes.c_size_t)]
+    k32.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+                                               ctypes.POINTER(wintypes.DWORD)]
     k32.CloseHandle.argtypes = [wintypes.HANDLE]
-    handle = k32.OpenProcess(0x0410, False, pid)  # QUERY_INFORMATION | VM_READ
+    handle = k32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
     if not handle:
         return None
     try:
-        def read(address, size):
-            buffer = ctypes.create_string_buffer(size)
-            got = ctypes.c_size_t()
-            if not k32.ReadProcessMemory(handle, ctypes.c_void_p(address), buffer, size, ctypes.byref(got)):
-                raise OSError("ReadProcessMemory failed")
-            return buffer.raw[:got.value]
-
-        info = (ctypes.c_size_t * 6)()
-        ntdll.NtQueryInformationProcess.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p,
-                                                    wintypes.ULONG, ctypes.c_void_p]
-        if ntdll.NtQueryInformationProcess(handle, 0, ctypes.byref(info), ctypes.sizeof(info), None) != 0:
+        buffer = ctypes.create_unicode_buffer(_EXE_MAX * 2)
+        size = wintypes.DWORD(len(buffer))
+        if not k32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
             return None
-        params = int.from_bytes(read(info[1] + 0x20, 8), "little")  # PEB.ProcessParameters
-        header = read(params + 0x70, 16)  # RTL_USER_PROCESS_PARAMETERS.CommandLine (UNICODE_STRING)
-        length = int.from_bytes(header[:2], "little")
-        buffer = int.from_bytes(header[8:16], "little")
-        if not length or not buffer:
-            return None
-        return read(buffer, min(length, _CMD_MAX * 4)).decode("utf-16-le", "replace")
+        return buffer.value[:_EXE_MAX]
     except Exception:
         return None
     finally:
         k32.CloseHandle(handle)
 
 
-def _describe_pid(pid: int, names: dict) -> dict:
+def _describe_pid(pid: int, names: dict, parents: dict) -> dict:
     image = names.get(pid)
-    command = None
+    exe = None
     try:
         if sys.platform == "win32":
-            command = _cmdline_windows(pid)
+            exe = _exe_path_windows(pid)
         else:
             from spawn_env import build_spawn_env
 
-            out = subprocess.run(["ps", "-o", "comm=,args=", "-p", str(pid)], capture_output=True, text=True,
+            out = subprocess.run(["ps", "-o", "comm=", "-p", str(pid)], capture_output=True, text=True,
                                  timeout=KILL_WAIT_S, env=build_spawn_env()).stdout.strip()
             if out:
-                head, _, rest = out.partition(" ")
-                image = image or os.path.basename(head)
-                command = rest.strip()
+                exe = out[:_EXE_MAX]
+                image = image or os.path.basename(out)
     except Exception:
         pass
-    return {"pid": pid, "image": image, "cmd": _redact_cmd(command) if command else None}
+    return {"pid": pid, "image": image, "exe": exe, "ppid": parents.get(pid)}
 
 
 def _closure(parents: dict, roots) -> set:
@@ -180,7 +148,7 @@ def _closure(parents: dict, roots) -> set:
 
 def note_kill(site: str, pids) -> None:
     """Writes one kill_accounting diag line (and keeps it in memory for the exit context) BEFORE the
-    caller kills `pids`: site, each pid's image and command line, and whether the Unity MCP server
+    caller kills `pids`: site, each pid's image, executable path and parent pid (never arguments), and whether the Unity MCP server
     process (the uvx child we started, or anything under it) is among the targets or their
     descendants. Never raises."""
     try:
@@ -201,7 +169,7 @@ def note_kill(site: str, pids) -> None:
             pass
         mcp_tree = _closure(parents, [mcp_pid]) if mcp_pid else set()
         hit = sorted(_closure(parents, pids) & mcp_tree) if mcp_tree else []
-        record = {"site": site, "targets": [_describe_pid(p, names) for p in pids[:_NOTE_MAX_PIDS]],
+        record = {"site": site, "targets": [_describe_pid(p, names, parents) for p in pids[:_NOTE_MAX_PIDS]],
                   "target_count": len(pids), "mcp_pid": mcp_pid, "mcp_in_targets": bool(hit),
                   "mcp_hit_pids": hit[:_NOTE_MAX_PIDS]}
         _RECENT_KILLS.append((time.monotonic(), record))
