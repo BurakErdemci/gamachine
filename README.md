@@ -141,6 +141,10 @@ logs in to Unity for you.
 <sub>Works best with Claude Code, which is what we build and test Gamachine with. Kimi Code
 has not been exercised end to end, and Ollama has only partial Unity control.</sub>
 
+<p align="center"><img src="docs/media/readme/new-chat-en.webp" alt="A new chat: the model menu opens and a model is picked, the Approval mode page switches to Safe auto, then a request is typed and sent and the answer starts streaming" width="86%"/></p>
+
+<sub>A new chat in about fifteen seconds: pick the model, pick how much the AI may do on its own, type the request.</sub>
+
 <br/>
 
 <a id="themes"></a>
@@ -174,6 +178,10 @@ an English or Turkish interface, a Guide screen and a six-step starter tour.
 <td width="50%" valign="top"><img src="docs/media/readme/i-image.svg" width="44" align="left" alt=""/><b>Images and @</b><br/>Agents can put an image in the chat with <code>show_image</code>; typing <code>@</code> lists your other chats so the agent can leave one a note.</td>
 </tr>
 </table>
+
+<p align="center"><img src="docs/media/readme/agent-browser.webp" alt="The agent opens a pack's page on kenney.nl in the Browser tab, clicks Download through the donation dialog, the download row says Done, and the answer arrives in the chat" width="86%"/></p>
+
+<sub>The agent browser at work: the agent opens the page, gets through the donation dialog, downloads the pack, and reports back while you watch the tab.</sub>
 
 Full list: [CHANGELOG.md](CHANGELOG.md). Known limits: [release notes](RELEASE_NOTES.md).
 

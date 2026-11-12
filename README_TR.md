@@ -142,6 +142,10 @@ asla senin yerine giriş yapmaz.
 <sub>En iyi Claude Code ile çalışır; Gamachine'i onunla geliştirip test ediyoruz. Kimi Code
 uçtan uca denenmedi, Ollama'nın Unity kontrolü kısmi.</sub>
 
+<p align="center"><img src="docs/media/readme/new-chat-tr.webp" alt="Yeni bir sohbet: model menüsü açılıyor ve bir model seçiliyor, Onay modu sayfasında Güvenli otomatik seçiliyor, sonra bir istek yazılıp gönderiliyor ve cevap akmaya başlıyor" width="86%"/></p>
+
+<sub>Yeni bir sohbet on beş saniyede: modeli seç, yapay zekânın kendi başına ne kadar iş yapacağını seç, isteğini yaz.</sub>
+
 <br/>
 
 <a id="gorunum"></a>
@@ -175,6 +179,10 @@ Türkçe ya da İngilizce arayüz, bir Rehber ekranı ve altı adımlık başlan
 <td width="50%" valign="top"><img src="docs/media/readme/i-image.svg" width="44" align="left" alt=""/><b>Görsel ve @</b><br/>Ajan <code>show_image</code> ile sohbete görsel koyabilir; <code>@</code> yazınca diğer sohbetlerin listelenir, ajan birine not bırakabilir.</td>
 </tr>
 </table>
+
+<p align="center"><img src="docs/media/readme/agent-browser.webp" alt="Ajan, kenney.nl'deki bir paketin sayfasını Tarayıcı sekmesinde açıyor, bağış penceresinin içinden İndir'e tıklıyor, indirme satırında Done yazıyor ve cevap sohbete düşüyor" width="86%"/></p>
+
+<sub>Ajan tarayıcısı iş başında: ajan sayfayı açıyor, bağış penceresini geçiyor, paketi indiriyor ve sen sekmeyi izlerken sonucu bildiriyor.</sub>
 
 Tam liste: [CHANGELOG.md](CHANGELOG.md). Bilinen sınırlar: [sürüm notları](RELEASE_NOTES.md) (İngilizce).
 
