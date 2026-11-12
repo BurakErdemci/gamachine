@@ -1,33 +1,53 @@
 """Published tool guidance and refusals describe the policy's actual format."""
 import asyncio
 import json
+from types import SimpleNamespace
 
 import pytest
 
-from computer_use import policy, server
+from computer_use import platform, policy, server
+from computer_use.platform import macos
+from computer_use.platform.windows import WindowsPlatform
 
 
-def test_instructions_explain_args_envelope():
-    mcp = server.create_server()
-    assert (
-        'Every tool takes exactly one parameter named args; put all arguments inside it, '
-        'e.g. {"args": {"pid": 123, "window_id": 45}}.'
-    ) in mcp.instructions
-    assert (
-        "To check a file the task created, look only in the folder the task names; "
-        "never search the whole home folder, macOS blocks other apps' data and warns the user."
-    ) in mcp.instructions
-    for rule in (
-        "Work in the background: hotkeys, typing and element_token clicks reach background apps",
-        "To open a file: computer_launch_app with the app's bundle_id and urls set to the file's absolute path",
+COMMON_RULES = (
+    'Every tool takes one parameter, args: {"args": {"pid": 123, "window_id": 45}}.',
+    "Read a window with computer_window_state before acting.",
+    "Prefer element_token over x,y.",
+    "Batch known steps with computer_run_steps.",
+    "Call computer_confirm_risky_step before deleting, purchasing, sending/publishing, overwriting or downloading",
+    "To check a file the task created, look only in the task's folder",
+    "reach background apps and their Open/Save panels",
+    "set the file name with computer_set_value on the name field's element_token",
+    "In Unity open a scene from the Project window or File > Open Recent Scene",
+    "repeat it with delivery_mode foreground and window_id",
+    "use computer_bring_to_front only if that is refused too",
+    "as ONE computer_run_steps with delivery_mode foreground",
+)
+PLATFORM_RULES = {
+    "win32": (
+        "Terminals, Settings, File Explorer, Task Manager and Gamachine are off limits.",
+        "never the whole user folder",
+        "Open a file: ctrl+o, type the full path starting with the drive letter, enter. Save: ctrl+s.",
+        "'aumid:' + bundle_id + '!App'",
+    ),
+    "darwin": (
+        "Terminals, System Settings and Gamachine are off limits.",
+        "never the whole home folder (macOS blocks other apps' data and warns the user)",
+        "computer_launch_app with the app's bundle_id and urls set to the file's absolute path",
         "do not press cmd+shift+g",
-        "set the file name with computer_set_value on the name field's element_token",
-        "In Unity, open a scene from the Project window or File > Open Recent Scene",
-        "repeat the call with delivery_mode foreground and window_id",
-        "use computer_bring_to_front only if that is refused too",
-        "as ONE computer_run_steps with delivery_mode foreground",
-    ):
-        assert rule in mcp.instructions, rule
+        "Save: cmd+s.",
+    ),
+}
+
+
+@pytest.mark.parametrize("name", ["win32", "darwin"])
+def test_instructions_keep_every_rule_on_both_platforms(monkeypatch, name):
+    instance = WindowsPlatform(SimpleNamespace(set_dpi_awareness=lambda: None)) if name == "win32"         else macos.MacPlatform()
+    monkeypatch.setattr(platform, "current", lambda: instance)
+    instructions = server.create_server().instructions
+    for rule in COMMON_RULES + PLATFORM_RULES[name]:
+        assert rule in instructions, rule
 
 
 def test_run_steps_description_has_valid_example_and_policy_names():

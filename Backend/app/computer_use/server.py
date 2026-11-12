@@ -64,6 +64,7 @@ def _tool_guidance(name):
     if name == "computer_launch_app":
         text += (" Launches an installed app. bundle_id must be " + current.launch_format
                  + ", taken from computer_list_apps (running apps show it).")
+        text += getattr(current, "store_launch_recipe", "")
         if hasattr(current, "installed_app_ids"):
             text += " A plain name like Blender is refused with a did-you-mean id; pass that id."
     if spec.allowed & {"x", "from_x", "x1"}:
@@ -76,20 +77,19 @@ def _tool_guidance(name):
 
 async def _add_launch_ids(result):
     """Show each running app's launchable id next to its row where the platform derives one from the pid."""
-    app_id_for = getattr(platform.current(), "app_id_for", None)
-    if app_id_for is None or result.is_error:
+    launch_id_for = getattr(platform.current(), "launch_id_for", None)
+    if launch_id_for is None or result.is_error:
         return result
     try:
         def tag_payload(payload):
             rows = []
             for row in payload["apps"]:
-                pid = row.get("pid") if isinstance(row, dict) else None
-                app_id = app_id_for(pid) if type(pid) is int and pid > 0 else None
+                app_id = launch_id_for(row.get("pid"), row.get("bundle_id")) if isinstance(row, dict) else None
                 rows.append({**row, "launch_id": app_id} if app_id else row)
             return {**payload, "apps": rows}
 
         def tag_line(match):
-            app_id = app_id_for(int(match.group(2)))
+            app_id = launch_id_for(int(match.group(2)))
             return match.group(0) + (" id=" + app_id if app_id else "")
 
         structured = result.structured_content
