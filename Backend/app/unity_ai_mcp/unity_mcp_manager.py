@@ -40,6 +40,12 @@ _HEALTH_FAILS_TO_RESTART = 9
 _SUPERVISOR_HEALTH_TIMEOUT_S = 5.0
 _RESTART_CAP = 3
 _RESTART_WINDOW_S = 600
+# After _RESTART_CAP restarts in the window the supervisor pauses instead of giving up for good (12 Nov 2026:
+# four silent server deaths in 6 minutes left Unity disconnected until a manual toggle). The pause doubles on
+# every further round; a server that stays healthy this long starts the count over.
+_COOLDOWN_START_S = 60
+_COOLDOWN_MAX_S = 600
+_HEALTHY_RESET_S = 300
 _STARTUP_GRACE_S = 120  # uvx may be installing; health failures do not count yet
 _GAVE_UP_MESSAGES = {
     "tr": "Unity bağlantı sunucusu tekrar tekrar kapandı; Unity MCP'yi kapatıp açın.",
@@ -351,6 +357,9 @@ class UnityMCPManager:
         self._reset_health_memory()
         self._restart_times: list[float] = []
         self._gave_up = False
+        self._retry_at = float("inf")  # monotonic time the cooldown ends (only while _gave_up)
+        self._cooldown_s = 0  # length of the last cooldown; 0 = none served since the last reset
+        self._retry_due = False  # a served cooldown allows one restart beyond the cap
         self._started_at = float("-inf")
         # Set while the supervisor stops a dead server to restart it: stop_server then leaves
         # autoconnect.json alone, or Unity reads autoStart=false and never resumes (4 Nov 2026).
@@ -931,6 +940,9 @@ class UnityMCPManager:
         self._restart_times.clear()
         self._health_fails = 0
         self._gave_up = False
+        self._retry_at = float("inf")
+        self._cooldown_s = 0
+        self._retry_due = False
 
     @staticmethod
     def _log_tail(lines: int = 20) -> str:
@@ -957,8 +969,16 @@ class UnityMCPManager:
         """
         if unity_mcp_disabled():
             return
-        if not self.enabled or self._starting or self._gave_up:
+        if not self.enabled or self._starting:
             return
+        if self._gave_up:
+            if time.monotonic() < self._retry_at:
+                return
+            # Cooldown served: this pass may restart once more even though the window still holds the cap.
+            self._gave_up = False
+            self._retry_due = True
+            self._retry_at = float("inf")
+            unity_diag("supervisor_cooldown_over", cooldown_s=self._cooldown_s)
         process = self.process
         exit_code = process.poll() if process is not None else None
         self._note_exit(process, "supervise_once")
@@ -966,6 +986,11 @@ class UnityMCPManager:
             if await self.check_health(timeout=_SUPERVISOR_HEALTH_TIMEOUT_S):
                 self._health_fails = 0
                 self._last_health_ok = time.monotonic()
+                if time.monotonic() - self._started_at >= _HEALTHY_RESET_S and (self._restart_times or self._cooldown_s):
+                    self._restart_times.clear()
+                    self._cooldown_s = 0
+                    self._retry_due = False
+                    unity_diag("supervisor_healthy_reset", uptime_s=round(time.monotonic() - self._started_at, 1))
                 return
             if time.monotonic() - self._started_at < _STARTUP_GRACE_S:
                 return
@@ -1000,14 +1025,17 @@ class UnityMCPManager:
                     return
             now = time.monotonic()
             self._restart_times = [t for t in self._restart_times if now - t < _RESTART_WINDOW_S]
-            if len(self._restart_times) >= _RESTART_CAP:
+            if len(self._restart_times) >= _RESTART_CAP and not self._retry_due:
                 self._gave_up = True
+                self._cooldown_s = min(self._cooldown_s * 2, _COOLDOWN_MAX_S) if self._cooldown_s else _COOLDOWN_START_S
+                self._retry_at = now + self._cooldown_s
                 self.last_error = _GAVE_UP_MESSAGES["en" if self.language == "en" else "tr"]
-                unity_diag("supervisor_gave_up", cause=reason, restart_cap=_RESTART_CAP)
+                unity_diag("supervisor_gave_up", cause=reason, restart_cap=_RESTART_CAP, retry_in_s=self._cooldown_s)
                 logger.error(f"[UnityMCP] Server died again ({reason}); {_RESTART_CAP} restarts within "
-                             f"{_RESTART_WINDOW_S // 60} min used up, not restarting.")
+                             f"{_RESTART_WINDOW_S // 60} min used up, retrying in {self._cooldown_s} s.")
                 return
             self._restart_times.append(now)
+            self._retry_due = False
             unity_diag("supervisor_restart_decision", cause=reason, health_failures=self._health_fails,
                        threshold=_HEALTH_FAILS_TO_RESTART, exit_code=exit_code,
                        restart_n=len(self._restart_times), restart_cap=_RESTART_CAP)
