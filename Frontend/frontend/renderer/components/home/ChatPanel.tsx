@@ -465,7 +465,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
               >
                 <div className="msg-who">
                   <span className="model-dot" aria-hidden="true" />
-                  <span className="who-name" data-testid="message-agent">
+                  <span className="who-name" data-testid="message-agent" lang="en">
                     {agent ? (agent.model ? `${agent.name} · ${agent.model}` : agent.name) : 'AI'}
                   </span>
                   {clockOf(msg.timestamp) && <time>{clockOf(msg.timestamp)}</time>}
