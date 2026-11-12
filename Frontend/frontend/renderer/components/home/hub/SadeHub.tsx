@@ -3,7 +3,7 @@ import React from 'react';
 import { useLang } from '../../../lib/i18n';
 import {
   CancelButton, Elapsed, EditorsEmpty, FolderButton, FolderNote, LogTail, NameInput, NameNote, Panel, Tabs,
-  TemplateChoices, Target, VersionSelect, onSubmit, phaseKey, useResult, type HubLayoutProps,
+  TemplateChoices, Target, VersionSelect, createGate, onSubmit, phaseKey, useResult, type HubLayoutProps,
 } from './parts';
 import { InstallFlow, type InstallWords } from './InstallFlow';
 import { estimate } from './useHub';
@@ -81,7 +81,7 @@ export const SadeHub = ({ h, recent, onGetUnity }: HubLayoutProps) => {
             </div>
             <footer className="sd-foot">
               <span className="hub-hint">{t('hub.createHint')}</span>
-              <button type="submit" className="btn btn-primary" disabled={h.templates === null} data-testid="hub-create">{t('hub.create')}</button>
+              <button type="submit" className="btn btn-primary" disabled={h.templates === null} {...createGate(h)} data-testid="hub-create">{t('hub.create')}</button>
             </footer>
           </form>
         )}

@@ -233,6 +233,14 @@ export const Panel = ({ h, className = 'hub-panel', children }: { h: Hub; classN
 /** Submits the form through the hook; the button stays enabled so a press shows what is missing. */
 export const onSubmit = (h: Hub) => (e: React.FormEvent) => { e.preventDefault(); void h.create(); };
 
+/**
+ * Create stays off until a folder is chosen. It is marked, not `disabled`, so a press still reaches
+ * the submit handler and FolderNote names what is missing (a disabled button swallows the press).
+ */
+export const createGate = (h: Hub) => (h.parent ? {} : {
+  'aria-disabled': true as const, 'data-blocked': true as const, style: { opacity: 0.5, cursor: 'default' } as React.CSSProperties,
+});
+
 /** Shown after a press on Create while no parent folder is chosen. */
 export const FolderNote = ({ h }: { h: Hub }) => {
   const { t } = useLang();

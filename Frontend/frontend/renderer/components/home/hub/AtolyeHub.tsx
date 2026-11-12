@@ -3,7 +3,7 @@ import React from 'react';
 import { useLang } from '../../../lib/i18n';
 import {
   CancelButton, Elapsed, EditorsEmpty, FolderButton, FolderNote, LogTail, NameInput, NameNote, Panel, Tabs,
-  TemplateChoices, Target, VersionSelect, onSubmit, phaseKey, useResult, type HubLayoutProps,
+  TemplateChoices, Target, VersionSelect, createGate, onSubmit, phaseKey, useResult, type HubLayoutProps,
 } from './parts';
 import { InstallFlow, type InstallWords } from './InstallFlow';
 import { estimate } from './useHub';
@@ -89,7 +89,7 @@ export const AtolyeHub = ({ h, recent, onGetUnity }: HubLayoutProps) => {
               </div>
               <footer className="at-foot">
                 <span className="at-foot-t"><Target h={h} /><span className="hub-hint">{t('hub.createHint')}</span></span>
-                <button type="submit" className="btn btn-primary at-go" disabled={h.templates === null} data-testid="hub-create">{t('hub.createShop')}</button>
+                <button type="submit" className="btn btn-primary at-go" disabled={h.templates === null} {...createGate(h)} data-testid="hub-create">{t('hub.createShop')}</button>
               </footer>
             </div>
           </form>

@@ -4,7 +4,7 @@ import { useLang } from '../../../lib/i18n';
 import { templateName } from '../../../lib/hub';
 import {
   CancelButton, Elapsed, EditorsEmpty, FolderButton, FolderNote, LogTail, NameCount, NameInput, NameNote, Panel, Tabs,
-  TemplateChoices, TemplateGlyph, Target, VersionSelect, onSubmit, phaseKey, useResult, type HubLayoutProps,
+  TemplateChoices, TemplateGlyph, Target, VersionSelect, createGate, onSubmit, phaseKey, useResult, type HubLayoutProps,
 } from './parts';
 import { InstallFlow, type InstallWords } from './InstallFlow';
 import { estimate } from './useHub';
@@ -81,7 +81,7 @@ export const ArenaHub = ({ h, recent, onGetUnity }: HubLayoutProps) => {
               <label className="ar-lab" htmlFor="hub-version">{t('hub.fieldVersion')}</label>
               <VersionSelect h={h} className="hub-select ar-select" />
               <Target h={h} />
-              <button type="submit" className="btn btn-primary ar-start" disabled={h.templates === null} data-testid="hub-create">
+              <button type="submit" className="btn btn-primary ar-start" disabled={h.templates === null} {...createGate(h)} data-testid="hub-create">
                 {t('hub.createQuest')}
                 <Ic16 />
               </button>

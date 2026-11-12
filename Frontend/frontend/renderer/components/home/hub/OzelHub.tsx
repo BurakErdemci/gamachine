@@ -5,7 +5,7 @@ import { joinTarget, templateName } from '../../../lib/hub';
 import { MascotHead } from '../BrandLogo';
 import {
   CancelButton, Elapsed, EditorsEmpty, FolderButton, FolderNote, LogTail, NameInput, NameNote, Panel, Tabs,
-  TemplateChoices, TemplateGlyph, VersionSelect, onSubmit, phaseKey, useResult, type HubLayoutProps,
+  TemplateChoices, TemplateGlyph, VersionSelect, createGate, onSubmit, phaseKey, useResult, type HubLayoutProps,
 } from './parts';
 import { InstallFlow, type InstallWords } from './InstallFlow';
 import { estimate } from './useHub';
@@ -96,7 +96,7 @@ export const OzelHub = ({ h, recent, onGetUnity }: HubLayoutProps) => {
                 </span>
               </div>
               <FolderNote h={h} />
-              <button type="submit" className="btn btn-primary oz-go" disabled={h.templates === null} data-testid="hub-create">{t('hub.create')}</button>
+              <button type="submit" className="btn btn-primary oz-go" disabled={h.templates === null} {...createGate(h)} data-testid="hub-create">{t('hub.create')}</button>
               <p className="hub-hint">{t('hub.createHint')}</p>
             </div>
           </form>

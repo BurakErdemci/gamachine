@@ -4,7 +4,7 @@ import { useLang } from '../../../lib/i18n';
 import { templateName } from '../../../lib/hub';
 import {
   CancelButton, Elapsed, EditorsEmpty, FolderButton, FolderNote, LogTail, NameInput, NameNote, Panel, Tabs,
-  TemplateChoices, Target, VersionSelect, onSubmit, phaseKey, useResult, type HubLayoutProps,
+  TemplateChoices, Target, VersionSelect, createGate, onSubmit, phaseKey, useResult, type HubLayoutProps,
 } from './parts';
 import { InstallFlow, type InstallWords } from './InstallFlow';
 
@@ -81,7 +81,7 @@ export const PaftaHub = ({ h, recent, onGetUnity }: HubLayoutProps) => {
               <div className="pf-cell pf-c-ver"><label className="pf-k" htmlFor="hub-version">{t('hub.fieldVersion')}</label><VersionSelect h={h} className="hub-select pf-in" /></div>
               <div className="pf-cell pf-c-tpl"><span className="pf-k">{t('hub.fieldTemplate')}</span><b>{h.template ? templateName(h.template) : '—'}</b></div>
               <div className="pf-cell pf-c-target"><Target h={h} /><span className="hub-hint">{t('hub.createHint')}</span></div>
-              <button type="submit" className="pf-cell pf-c-go" disabled={h.templates === null} data-testid="hub-create"><span className="pf-stampbtn">{t('hub.createNote')}</span></button>
+              <button type="submit" className="pf-cell pf-c-go" disabled={h.templates === null} {...createGate(h)} data-testid="hub-create"><span className="pf-stampbtn">{t('hub.createNote')}</span></button>
             </div>
           </form>
         )}
