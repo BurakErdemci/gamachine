@@ -137,89 +137,119 @@ def quota_message(info: dict, model: str, language: str, now: Optional[datetime]
     return f"{quota}{reset} {hint}"
 
 
-# How agy's own quota failure text begins (see _QUOTA_PATTERN).
-_REPLAY_OPENERS = ("individual quota", "quota ", "resource_exhausted", "agy_error")
-
-
-def _quota_replay(text: str) -> bool:
-    """agy's quota failure, not the model's words about a quota: the quota
-    wording together with agy's markers (AGY_ERROR or a reset time)."""
-    return bool(quota_info(text)) and ("AGY_ERROR" in text or bool(_RESET_PATTERN.search(text)))
-
-
-def _may_open_replay(text: str) -> bool:
-    head = text.lstrip().lower()
-    return any(opener.startswith(head) or head.startswith(opener) for opener in _REPLAY_OPENERS)
-
-
-def strip_quota_replay(text: str) -> tuple:
-    """(kept, dropped) for a text that opens like agy's quota failure: the
-    failure up to its last quota line is dropped, what follows is kept."""
-    if not (_may_open_replay(text) and _quota_replay(text)):
-        return text, ""
-    lines = text.splitlines(keepends=True)
-    last = max((index for index, line in enumerate(lines)
-                if quota_info(line) or "AGY_ERROR" in line or _RESET_PATTERN.search(line)),
-               default=len(lines) - 1)
-    return "".join(lines[last + 1:]).lstrip("\r\n"), "".join(lines[:last + 1])
+def _squeeze(text: str) -> tuple:
+    """`text` with every whitespace run as one space, and the index in
+    `text` each kept character came from."""
+    chars, origin = [], []
+    for index, char in enumerate(text):
+        if char.isspace():
+            if chars and chars[-1] == " ":
+                continue
+            char = " "
+        chars.append(char)
+        origin.append(index)
+    return "".join(chars), origin
 
 
 class _ReplayFilter:
-    """Keeps agy's quota failure, replayed as answer text in a resumed chat
+    """Removes agy's quota failure, replayed as answer text in a resumed chat
     (owner, 12 Nov 2026: the old quota line came back under a later
-    successful answer), out of the streamed and the stored answer.
+    successful answer), from the streamed and the stored answer.
 
-    A step whose text opens like the failure is held back until the step
-    ends and judged as a whole, so a replay split across text deltas is
-    caught too; any other text streams at once."""
+    Only an exact replay of a failure text this conversation received (see
+    _QUOTA_FAILURES) is removed, whitespace and line endings aside; the text
+    around it stays as it came. Pattern rules dropped real answers that
+    discussed a quota (audit 170ccc19), so there are none. With no recorded
+    text the filter passes everything through and holds nothing."""
 
-    def __init__(self, enabled: bool):
-        self.enabled = enabled
+    def __init__(self, texts=()):
+        self.texts = [flat for flat in (_squeeze(text)[0].strip() for text in texts) if flat]
+        self.longest = max(map(len, self.texts), default=0)
         self.step = None
-        self.held = None  # the step's text held back; None while it streams
-        self.dropped = []
+        self.held = ""  # the step's tail that may still become a replay
+        self.skip_space = False  # the whitespace right after a removed replay
+        self.removed = False
+        self.answer_steps = {}  # step -> its raw text, for record_quota_failure
 
     def feed(self, step, delta: str) -> str:
         """The text to stream now for a text delta of `step`."""
-        if not self.enabled:
+        self.answer_steps[step] = self.answer_steps.get(step, "") + delta
+        if not self.texts:
             return delta
         out = ""
         if step != self.step:
             out = self.end()
-            self.step, self.held = step, ""
-        if self.held is not None:
-            self.held += delta
-            if _may_open_replay(self.held):
-                return out
-            delta, self.held = self.held, None
-        if _quota_replay(delta):
-            self._drop(delta)
-            self.held = ""  # the rest of the step is judged afresh
-            return out
-        return out + delta
+            self.step = step
+        shown, self.held = self._split(self.held + delta, final=False)
+        return out + shown
 
     def end(self) -> str:
-        """The step is over: the held text that may still stream."""
-        held, self.step, self.held = self.held or "", None, None
-        kept, dropped = strip_quota_replay(held)
-        if dropped:
-            self._drop(dropped)
-        return kept
-
-    def _drop(self, text: str) -> None:
-        # Never shown, kept for the error line's reset time and for the log.
-        logger.warning("[agy] quota text in the answer stream: %s", text[:500])
-        self.dropped.append(text)
+        """The step is over: what it held back did not become a replay."""
+        held, self.held, self.step, self.skip_space = self.held, "", None, False
+        return held
 
     def clean(self, response: str) -> str:
-        """result.response glues the turn's blocks: drop the same failure text."""
-        if not self.enabled:
+        """result.response glues the turn's blocks: drop the same replay."""
+        if not self.texts:
             return response
-        kept = response
-        for dropped in self.dropped:
-            kept = kept.replace(dropped, "")
-        kept = strip_quota_replay(kept)[0]
-        return kept.lstrip("\r\n") if kept != response else response
+        self.skip_space = False
+        return self._split(response, final=True)[0]
+
+    def _split(self, text: str, *, final: bool) -> tuple:
+        """(text to show, tail held back): every replay removed and, unless
+        `final`, the tail that is still the start of one held back."""
+        shown = []
+        while text:
+            if self.skip_space:
+                if not text.strip():
+                    break
+                text, self.skip_space = text.lstrip(), False
+            flat, origin = _squeeze(text)
+            hits = [(flat.find(needle), -len(needle)) for needle in self.texts if needle in flat]
+            if hits:
+                at, minus_length = min(hits)
+                start, stop = origin[at], origin[at - minus_length - 1] + 1
+                shown.append(text[:start])
+                logger.warning("[agy] replayed quota text removed from the answer: %s",
+                               text[start:stop][:500])
+                self.removed = self.skip_space = True
+                text = text[stop:]
+                continue
+            if not final:
+                for at in range(max(0, len(flat) - self.longest), len(flat)):
+                    if any(needle.startswith(flat[at:]) for needle in self.texts):
+                        shown.append(text[:origin[at]])
+                        return "".join(shown), text[origin[at]:]
+            shown.append(text)
+            break
+        return "".join(shown), ""
+
+
+# The quota failure text agy sent each conversation, keyed like _RESUME_IDS:
+# a resumed chat may replay it as answer text. A record serves at most
+# _REPLAY_TURNS turns and ends at the first successful turn without a replay,
+# so it cannot keep eating later answers. A text shorter than
+# _REPLAY_MIN_CHARS is not recorded: removing it could cut a real sentence.
+_QUOTA_FAILURES: Dict[tuple, dict] = {}
+_REPLAY_TURNS = 2
+_REPLAY_MIN_CHARS = 20
+
+
+def record_quota_failure(key: tuple, texts) -> None:
+    texts = [text for text in dict.fromkeys(text.strip() for text in texts if text)
+             if len(_squeeze(text)[0]) >= _REPLAY_MIN_CHARS]
+    if texts:
+        _QUOTA_FAILURES[key] = {"texts": texts, "turns": _REPLAY_TURNS}
+
+
+def take_quota_replay(key: tuple) -> Optional[dict]:
+    """The record a starting turn filters with; this turn counts against it."""
+    record = _QUOTA_FAILURES.get(key)
+    if record is not None:
+        record["turns"] -= 1
+        if record["turns"] <= 0:
+            _QUOTA_FAILURES.pop(key, None)
+    return record
 
 
 def _git(cwd: str, *args: str) -> Optional[str]:
@@ -265,16 +295,17 @@ def workspace_state(cwd: str) -> Optional[dict]:
 
 
 def changed_files(cwd: str, before: Optional[dict]) -> Optional[list]:
-    """Uncommitted paths the turn changed: those whose git status, mtime or
-    size differ from `before` (workspace_state at turn start). Edits and
-    deletions that predate the turn are not listed. None when either state
-    is unknown: no list beats a guessed one."""
+    """Paths the turn changed: those whose git status, mtime or size differ
+    from `before` (workspace_state at turn start), including dirty paths the
+    turn reverted, committed or deleted. Edits and deletions that predate the
+    turn are not listed. None when either state is unknown: no list beats a
+    guessed one."""
     if before is None:
         return None
     after = workspace_state(cwd)
     if after is None:
         return None
-    return [path for path, entry in after.items() if before.get(path) != entry]
+    return [path for path in {**before, **after} if before.get(path) != after.get(path)]
 
 
 def turn_summary(*, tools: dict, failed: int, files: Optional[list], language: str) -> str:
@@ -295,8 +326,8 @@ def turn_summary(*, tools: dict, failed: int, files: Optional[list], language: s
         more = len(files) - _CHANGED_FILES_SHOWN
         if more > 0:
             shown += "\n" + _say(language, f"- … ve {more} dosya daha", f"- … and {more} more files")
-        lines.append(_say(language, "Bu turda değişen, commit edilmemiş dosyalar:",
-                          "Files this turn changed that are not committed:") + "\n" + shown)
+        lines.append(_say(language, "Bu turda çalışma klasöründe değişen dosyalar:",
+                          "Files this turn changed in the workspace:") + "\n" + shown)
     elif files is not None and steps:
         lines.append(_say(language, "Çalışma klasöründe commit edilmemiş yeni bir değişiklik yok.",
                           "It left no new uncommitted changes in the workspace."))
@@ -916,6 +947,7 @@ class AgyStreamSession(SaglayiciSahipligi):
         self._retire_gate()
         if not preserve_resume and self.conversation_id >= 0:
             _RESUME_IDS.pop((self.conversation_id, self.cwd), None)
+            _QUOTA_FAILURES.pop((self.conversation_id, self.cwd), None)
         await oturumu_kapat(self)
         await self._stop_process(force=True)
         with _gate_lock():
@@ -1156,7 +1188,9 @@ class AgyStreamSession(SaglayiciSahipligi):
         turn_started = False
         workspace_before = None
         # Side turns keep their 83a7c6b6 behaviour: no filter, no summary.
-        replay = _ReplayFilter(enabled=not side)
+        replay = _ReplayFilter()
+        replay_record = None
+        replay_key = (self.conversation_id, os.path.abspath(cwd or self.cwd))
         idle_limit = None if side else BaseCLIProvider._AGY_IDLE_LIMIT
 
         def text_event(text):
@@ -1197,6 +1231,10 @@ class AgyStreamSession(SaglayiciSahipligi):
                 started = loop.time()
                 turn_started = True
                 workspace = os.path.abspath(cwd or self.cwd)
+                if not side and self.conversation_id >= 0:
+                    replay_record = take_quota_replay(replay_key)
+                    if replay_record is not None:
+                        replay = _ReplayFilter(replay_record["texts"])
                 snapshot = None
                 if not side:
                     # A kept child's stderr may still hold an earlier turn's
@@ -1350,6 +1388,10 @@ class AgyStreamSession(SaglayiciSahipligi):
             if not stored_answer.strip():
                 # The failure text the stream held back stays out of here too.
                 stored_answer = replay.clean(result.get("response") or "")
+            if (replay_record is not None and not replay.removed
+                    and _QUOTA_FAILURES.get(replay_key) is replay_record):
+                # A successful turn with no replay: agy is past the failure.
+                _QUOTA_FAILURES.pop(replay_key, None)
             yield _redact_event({"type": "response", "content": stored_answer})
             yield _redact_event({"type": "done", "iterations": 1,
                                  "session_id": self.session_id})
@@ -1377,16 +1419,21 @@ class AgyStreamSession(SaglayiciSahipligi):
                 yield _redact_event({"type": "error",
                                      "message": str(exc) + (f"\n{tail}" if tail else "")})
                 return
-            if held := replay.end():
-                yield text_event(held)
             limit = ("idle" if isinstance(exc, _AgyIdleLimit)
                      else "total" if isinstance(exc, asyncio.TimeoutError) else None)
-            # The failure itself must say quota: quota text dropped from the
-            # answer stream may be a replay of an earlier turn's failure, so
-            # it comes last and only lends a reset time the failure lacks.
-            raw = "\n".join(part for part in (str(exc), tail, *replay.dropped) if part)
-            quota = (None if limit or not quota_info(f"{exc}\n{tail}")
-                     else quota_info(raw))
+            # Only this turn's failure and stderr decide quota (F1); a replay
+            # removed from the answer is an earlier failure with a stale reset.
+            raw = "\n".join(part for part in (str(exc), tail) if part)
+            quota = None if limit else quota_info(raw)
+            # Held text is the start of the recorded failure: on another quota
+            # failure it is that failure's replay, otherwise it streams.
+            if (held := replay.end()) and not quota:
+                yield text_event(held)
+            if quota and self.conversation_id >= 0:
+                extra = _dedupe_tail(str(exc), tail)
+                record_quota_failure(replay_key, [
+                    str(exc), extra if quota_info(extra) else "",
+                    *(text for text in replay.answer_steps.values() if quota_info(text))])
             if limit or quota:
                 files = None
                 if turn_started and (limit or tool_counts):
@@ -1471,9 +1518,10 @@ async def close_session(conversation_id: int) -> None:
     session = _SESSIONS.get(conversation_id)
     if session is not None:
         await session.close()
-    for key in list(_RESUME_IDS):
-        if key[0] == conversation_id:
-            _RESUME_IDS.pop(key, None)
+    for store in (_RESUME_IDS, _QUOTA_FAILURES):
+        for key in list(store):
+            if key[0] == conversation_id:
+                store.pop(key, None)
 
 
 async def close_all_sessions() -> None:
@@ -1485,3 +1533,4 @@ async def close_all_sessions() -> None:
             continue
         await close_session(conversation_id)
     _RESUME_IDS.clear()
+    _QUOTA_FAILURES.clear()

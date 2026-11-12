@@ -14,6 +14,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 import unittest
 from datetime import datetime
@@ -45,10 +46,24 @@ def failed_result(error, num_turns=1):
     return result
 
 
+def answer(index, text):
+    return step(index, step_type="agent_response", text_delta=text)
+
+
+def success(response, num_turns=1):
+    result = copy.deepcopy(TURNS[0][-1])
+    result["result"].update(response=response, num_turns=num_turns)
+    return result
+
+
 class _Harness(base.TestAgyStreamSession):
     """The stream-session fixture without re-running its tests here."""
 
     stderr_by_spawn = None
+
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        getattr(agy_session, "_QUOTA_FAILURES", {}).clear()
 
     async def spawn(self, *argv, **kwargs):
         process = await super().spawn(*argv, **kwargs)
@@ -242,10 +257,11 @@ class TestTimeLimit(_Harness):
 
 class TestQuota(_Harness):
     async def run_quota_turn(self, language):
+        # The owner's three copies: the result error and twice in stderr.
+        # Quota text streamed as answer text before the failure would show
+        # (nothing is recorded yet; see TestReplayOfRecordedFailure).
         self.stderr_by_spawn = [(QUOTA_TEXT + "\n" + QUOTA_TEXT + "\n").encode()]
-        self.plans = [{"turns": [[TURNS[0][0], step(1, step_type="agent_response",
-                                                      text_delta=QUOTA_TEXT),
-                                  failed_result(QUOTA_TEXT)]]}]
+        self.plans = [{"turns": [[TURNS[0][0], failed_result(QUOTA_TEXT)]]}]
         with patch.object(agy_session, "datetime", create=True) as clock:
             clock.now.return_value = datetime(2026, 11, 12, 20, 0)
             return await asyncio.wait_for(
@@ -253,9 +269,11 @@ class TestQuota(_Harness):
 
     async def test_one_clean_line_with_reset_and_hint(self):
         events = await self.run_quota_turn("en")
-        self.assertEqual([e["type"] for e in events], ["error"], events)
-        message = events[0]["message"]
-        self.assertEqual(events[0]["code"], "agy_quota")
+        errors = [e for e in events if e["type"] == "error"]
+        self.assertEqual(len(errors), 1, events)
+        self.assertNotIn("quota", json.dumps(events[:-1]).lower())
+        message = errors[0]["message"]
+        self.assertEqual(errors[0]["code"], "agy_quota")
         self.assertNotIn("AGY_ERROR", message)
         self.assertNotIn("{", message)
         self.assertNotIn("RESOURCE_EXHAUSTED", message)
@@ -266,7 +284,7 @@ class TestQuota(_Harness):
         self.assertIn("another model", message)
 
     async def test_quota_line_is_localized(self):
-        message = (await self.run_quota_turn("tr"))[0]["message"]
+        message = (await self.run_quota_turn("tr"))[-1]["message"]
         self.assertIn("bireysel Antigravity kotası doldu", message)
         self.assertIn("4 gün 23 sa sonra sıfırlanıyor (17.11 19:46 civarı)", message)
         self.assertIn("başka bir model", message)
@@ -294,9 +312,11 @@ class TestQuota(_Harness):
                                                       text_delta=QUOTA_TEXT),
                                   failed_result("ENOSPC: workspace disk is full")]]}]
         events = await asyncio.wait_for(self.collect(language="en"), 5)
-        self.assertEqual([e["type"] for e in events], ["error"], events)
-        self.assertNotIn("code", events[0])
-        self.assertIn("ENOSPC", events[0]["message"])
+        # No quota failure was recorded: the answer text streams as it came.
+        self.assertEqual([e["type"] for e in events], ["text", "error"], events)
+        self.assertEqual(events[0]["content"], QUOTA_TEXT)
+        self.assertNotIn("code", events[1])
+        self.assertIn("ENOSPC", events[1]["message"])
 
     async def test_side_turn_errors_are_as_before(self):
         # Side turns keep their 83a7c6b6 error: the raw failure, no quota code,
@@ -341,8 +361,11 @@ class TestNoStaleQuotaLine(_Harness):
         tool_only["result"]["response"] = QUOTA_TEXT + "\nWrote BossBot.cs.\n"
         answer_only = copy.deepcopy(TURNS[1][-1])
         answer_only["result"]["response"] = QUOTA_TEXT + "\nFixed.\n"
-        self.plans = [{"turns": [[TURNS[0][0], replayed, tool(2, "write_to_file"), tool_only],
+        self.plans = [{"turns": [[TURNS[0][0], failed_result(QUOTA_TEXT)]]},
+                      {"turns": [[TURNS[0][0], replayed, tool(2, "write_to_file"), tool_only],
                                  [answer_only]]}]
+        failed = await asyncio.wait_for(self.collect(), 5)
+        self.assertEqual(failed[-1]["code"], "agy_quota")
         session = agy_session.get_session(11)
         for expected in ("Wrote BossBot.cs.\n", "Fixed.\n"):
             events = await asyncio.wait_for(self.collect(session), 5)
@@ -357,11 +380,14 @@ class TestNoStaleQuotaLine(_Harness):
                      'ched. Resets in 1h. AGY_ERROR: {"short_error":"limit"}']
         success = copy.deepcopy(TURNS[0][-1])
         success["result"]["response"] = "".join(fragments) + "Fresh answer."
-        self.plans = [{"turns": [[TURNS[0][0],
+        self.plans = [{"turns": [[TURNS[0][0], failed_result("".join(fragments))]]},
+                      {"turns": [[TURNS[0][0],
                                   step(1, step_type="agent_response", text_delta=fragments[0]),
                                   step(1, step_type="agent_response", text_delta=fragments[1]),
                                   step(2, step_type="agent_response", text_delta="Fresh answer."),
                                   success]]}]
+        failed = await asyncio.wait_for(self.collect(), 5)
+        self.assertEqual(failed[-1]["code"], "agy_quota")
         events = await asyncio.wait_for(self.collect(), 5)
         self.assertEqual(events[-1]["type"], "done")
         streamed = "".join(e["content"] for e in events if e["type"] == "text")
@@ -386,6 +412,152 @@ class TestNoStaleQuotaLine(_Harness):
         self.assertEqual(streamed, "".join(deltas))
         self.assertEqual(next(e["content"] for e in events if e["type"] == "response"),
                          "".join(deltas))
+
+
+class TestReplayOfRecordedFailure(_Harness):
+    """Audit 170ccc19: pattern rules dropped real answers. Only an exact
+    replay of a quota failure this conversation received is removed."""
+
+    def text_of(self, events):
+        streamed = "".join(e["content"] for e in events if e["type"] == "text")
+        stored = next(e["content"] for e in events if e["type"] == "response")
+        return streamed, stored
+
+    async def turn(self, *events, response=None):
+        """One successful turn on conversation 11 with these child events."""
+        self.plans.append({"turns": [[TURNS[0][0], *events, success(
+            "".join(e["step_update"]["text_delta"] for e in events
+                    if e["step_update"].get("step_type") == "agent_response")
+            if response is None else response)]]})
+        done = await asyncio.wait_for(self.collect(agy_session.get_session(11)), 5)
+        self.assertEqual(done[-1]["type"], "done", done)
+        # A turn per process, so the next turn's plan is a fresh spawn.
+        await agy_session.get_session(11).close(preserve_resume=True)
+        return done
+
+    async def fail_with_quota(self, failure=QUOTA_TEXT):
+        self.plans.append({"turns": [[TURNS[0][0], failed_result(failure)]]})
+        failed = await asyncio.wait_for(
+            self.collect(agy_session.get_session(11), language="en"), 5)
+        self.assertEqual(failed[-1].get("code"), "agy_quota", failed)
+
+    async def test_answer_about_quota_with_a_reset_time_is_kept(self):
+        # Blind audit test_A: the whole answer streamed '' and stored ''.
+        text = ("RESOURCE_EXHAUSTED (code 429) means the API quota is gone; "
+                "it resets in 1h. Back off and retry.")
+        events = await self.turn(answer(1, text))
+        self.assertEqual(self.text_of(events), (text, text))
+
+    async def test_quota_text_streams_unchanged_when_no_failure_was_recorded(self):
+        streamed_turn = await self.turn(answer(1, QUOTA_TEXT[:30]), answer(1, QUOTA_TEXT[30:]))
+        self.assertEqual(self.text_of(streamed_turn), (QUOTA_TEXT, QUOTA_TEXT))
+        response_only = await self.turn(tool(1, "view_file"), response=QUOTA_TEXT)
+        self.assertEqual(self.text_of(response_only), ("", QUOTA_TEXT))
+
+    async def test_real_text_before_a_replay_in_one_delta_is_kept(self):
+        # Blind audit C2: "Sure, here is the fix." was lost with the replay.
+        await self.fail_with_quota()
+        events = await self.turn(answer(1, "Sure, here is the fix.\n" + QUOTA_TEXT))
+        expected = "Sure, here is the fix.\n"
+        self.assertEqual(self.text_of(events), (expected, expected))
+        self.assertNotIn("quota", json.dumps(events).lower())
+
+    async def test_real_text_after_a_replay_on_the_same_line_is_kept(self):
+        # Codex audit replay_answer_loss: streamed '' and stored ''.
+        await self.fail_with_quota()
+        events = await self.turn(answer(1, QUOTA_TEXT + "Fixed the scene."))
+        self.assertEqual(self.text_of(events), ("Fixed the scene.", "Fixed the scene."))
+        tool_only = await self.turn(tool(1, "write_to_file"),
+                                    response=QUOTA_TEXT + "Fixed the scene.")
+        self.assertEqual(self.text_of(tool_only), ("", "Fixed the scene."))
+
+    async def test_replay_split_at_every_boundary_keeps_the_text_around_it(self):
+        # Codex replay_after_answer, blind replay_fuzz: 155 of 155 splits lost text.
+        await self.fail_with_quota()
+        whole = "Done.\n" + QUOTA_TEXT + "\nFixed."
+        events = []
+        for cut in range(1, len(whole)):
+            events += [answer(cut, whole[:cut]), answer(cut, whole[cut:])]
+        result = await self.turn(*events, response=whole)
+        expected = "Done.\nFixed." * (len(whole) - 1)
+        self.assertEqual(self.text_of(result), (expected, expected))
+
+    async def test_a_different_quota_text_is_not_removed(self):
+        await self.fail_with_quota()
+        text = "Individual quota reached for the image API. Resets in 2h. Use the other key."
+        events = await self.turn(answer(1, text))
+        self.assertEqual(self.text_of(events), (text, text))
+
+    async def test_record_ends_after_a_turn_without_the_replay(self):
+        await self.fail_with_quota()
+        await self.turn(answer(1, "All good."))
+        events = await self.turn(answer(1, QUOTA_TEXT))
+        self.assertEqual(self.text_of(events), (QUOTA_TEXT, QUOTA_TEXT))
+
+    async def test_record_ends_after_two_turns(self):
+        await self.fail_with_quota()
+        for _ in range(2):
+            replayed = await self.turn(answer(1, QUOTA_TEXT), answer(2, "Next."))
+            self.assertEqual(self.text_of(replayed), ("Next.", "Next."))
+        third = await self.turn(answer(1, QUOTA_TEXT), answer(2, "Next."))
+        self.assertEqual(self.text_of(third), (QUOTA_TEXT + "Next.",) * 2)
+
+
+class TestSnapshotAndFiles(_Harness):
+    async def test_prompt_waits_for_a_slow_snapshot_only_up_to_the_bound(self):
+        # Blind audit T1: with no bound a slow `git status` held the prompt.
+        release = threading.Event()
+        self.addCleanup(release.set)
+        self.plans = [{"turns": [TURNS[0]]}]
+        with patch.object(agy_session, "_SNAPSHOT_WAIT_S", 0.2), \
+                patch.object(agy_session, "workspace_state",
+                             side_effect=lambda cwd: release.wait(10) and {}):
+            started = time.monotonic()
+            task = asyncio.create_task(self.collect())
+            while not self.processes:
+                await asyncio.sleep(0.01)
+            await asyncio.wait_for(self.processes[0].written.wait(), 3)
+            waited = time.monotonic() - started
+            events = await asyncio.wait_for(task, 3)
+        release.set()
+        self.assertLess(waited, 2.0)
+        self.assertEqual(events[-1]["type"], "done")
+
+    async def test_files_the_turn_reverted_committed_or_deleted_are_listed(self):
+        # Blind audit R2 and Codex deleted_dirty_file: only paths still dirty
+        # at the end were compared, so these read as "no new changes".
+        repo = make_repo(self)
+
+        def git(*args):
+            subprocess.run(["git", "-C", repo, *args], check=True, capture_output=True)
+
+        git("config", "user.email", "test@example.invalid")
+        git("config", "user.name", "test")
+        for name in ("reverted.cs", "committed.cs"):
+            write(os.path.join(repo, name), "v1")
+        git("add", ".")
+        git("commit", "-qm", "base")
+        for name in ("reverted.cs", "committed.cs", "untracked.cs"):
+            write(os.path.join(repo, name), "user edit")
+
+        def turn_writes():
+            git("checkout", "--", "reverted.cs")
+            git("commit", "-qm", "turn", "committed.cs")
+            os.remove(os.path.join(repo, "untracked.cs"))
+
+        self.plans = [{"turns": [[TURNS[0][0], tool(1, "run_command")]]}]
+        with patch.object(BaseCLIProvider, "_AGY_IDLE_LIMIT", 0.3, create=True):
+            task = asyncio.create_task(self.collect(cwd=repo, language="en"))
+            while not self.processes:
+                await asyncio.sleep(0)
+            await self.processes[-1].written.wait()
+            turn_writes()
+            events = await asyncio.wait_for(task, 5)
+        error = events[-1]
+        self.assertEqual(error["code"], "agy_turn_limit")
+        self.assertEqual(sorted(error.get("changed_files", [])),
+                         ["committed.cs", "reverted.cs", "untracked.cs"])
+        self.assertNotIn("no new uncommitted changes", error["message"])
 
 
 if __name__ == "__main__":
