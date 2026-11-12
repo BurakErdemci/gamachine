@@ -8,6 +8,7 @@ import json
 import secrets
 import hashlib
 import fnmatch
+import math
 import importlib.util
 import re
 import shutil
@@ -1275,7 +1276,10 @@ class UnityMCPManager:
             # which disables the toggle. The renderer shows `reason` for "blocked".
             return {"status": UnityMCPStatus.BLOCKED, "pid": self.process.pid if self.process else None,
                     "port": self.mcp_port, "instances": [], "reason": self.last_error,
-                    "reason_code": "supervisor_gave_up"}
+                    "reason_code": "supervisor_gave_up",
+                    # round(inf) raises: keep the status endpoint alive even if the two fields drift apart.
+                    "retry_in_s": (max(0, round(self._retry_at - time.monotonic()))
+                                   if math.isfinite(self._retry_at) else None)}
         if not self.is_running():
             occupant = self.port_occupant()
             if occupant.identity == ServerIdentity.FOREIGN:
