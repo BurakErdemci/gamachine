@@ -280,6 +280,8 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"[Startup] Yan sohbet temizliği atlandı: {e}")
     side_sweeper = asyncio.create_task(_side_sweep_loop())
+    from providers.agy_session import idle_stop_loop as _agy_idle_stop_loop
+    agy_idle_stopper = asyncio.create_task(_agy_idle_stop_loop())
     from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
     mcp_supervisor = None if no_unity_mcp else asyncio.create_task(unity_mcp_manager.supervise_loop())
 
@@ -347,6 +349,13 @@ async def lifespan(app: FastAPI):
         logger.info("[Shutdown] Unity MCP sunucusu durduruldu.")
     except Exception as e:
         logger.warning(f"[Shutdown] Unity MCP durdurulamadı: {e}")
+
+    # Before the agy sessions close, so no sweep races close_all_sessions.
+    agy_idle_stopper.cancel()
+    try:
+        await agy_idle_stopper
+    except BaseException:
+        pass
 
     # Canlı Claude/Codex SDK session'larını kapat (subprocess sızdırma önlemi)
     try:

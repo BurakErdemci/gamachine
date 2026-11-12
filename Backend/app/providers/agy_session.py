@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import process_tree
 from collections.abc import Hashable, Mapping
 from datetime import datetime, timedelta
@@ -33,6 +34,10 @@ _QUEUED_EVENT = {"type": "status", "code": "agy_queued",
                  "detail": "Sırada — başka bir agy sohbetinin turu bitince başlayacak"}
 _STARTED_EVENT = {"type": "status", "code": "agy_started", "detail": "Çalışıyor…"}
 logger = logging.getLogger(__name__)
+
+# A kept child with no turn for this long has its process tree stopped by
+# stop_idle_children; the next message respawns it with the same resume id.
+_AGY_IDLE_STOP_S = 900
 
 # A read-only side question on agy (Burak, 27 Sep 2026) runs only while the
 # turn lock is free, never queues, and gives way to any other agy turn.
@@ -750,6 +755,7 @@ class AgyStreamSession(SaglayiciSahipligi):
         self._stop_lock = asyncio.Lock()
         self._closed_event = asyncio.Event()
         self._side_preempted = False  # set by _preempt_side_turn
+        self._last_used = time.monotonic()  # end of the last turn, for stop_idle_children
         self._sahiplik_kur()
 
     def kapandi_isaretle(self) -> None:
@@ -1165,6 +1171,7 @@ class AgyStreamSession(SaglayiciSahipligi):
         refused unless the turn lock is free, run with the state file on
         SIDE_MODE, stopped after SIDE_TURN_TIMEOUT_S or when another agy turn
         starts; `language` picks the text of those stop messages."""
+        self._last_used = time.monotonic()
         agent_guide = agent_guide or getattr(self, "agent_guide", "")
         if agent_guide and not side:
             import agent_guide as guides
@@ -1240,6 +1247,7 @@ class AgyStreamSession(SaglayiciSahipligi):
                     yield _redact_event(_STARTED_EVENT)
                 started = loop.time()
                 turn_started = True
+                self._last_used = time.monotonic()
                 workspace = os.path.abspath(cwd or self.cwd)
                 if not side and self.conversation_id >= 0:
                     replay_record = take_quota_replay(replay_key)
@@ -1482,6 +1490,7 @@ class AgyStreamSession(SaglayiciSahipligi):
                 if not preserve_live_process and not completed and not self._kapandi:
                     await self._close_safely(preserve_resume=True)
             finally:
+                self._last_used = time.monotonic()
                 done = _SIDE_DONE if side_started else None
                 try:
                     if side_started:
@@ -1519,6 +1528,48 @@ def peek_session(conversation_id: int) -> Optional[AgyStreamSession]:
     if conversation_id < 0:
         return None
     return _SESSIONS.get(conversation_id)
+
+
+async def stop_idle_children(now: Optional[float] = None) -> list:
+    """Stop the process tree of every kept child idle for _AGY_IDLE_STOP_S.
+
+    The sessions stay registered with their resume ids, so the next turn's
+    _start spawns a new child that resumes the conversation. Runs only while
+    no agy turn holds the global lock, and holds it so none starts mid-stop."""
+    lock = BaseCLIProvider._AGY_LOCK
+    if _turn_lock_busy(lock):
+        return []
+    # The lock is free, so this takes Lock.acquire's fast path and never waits.
+    await lock.acquire()
+    stopped = []
+    try:
+        now = time.monotonic() if now is None else now
+        for conversation_id, session in list(_SESSIONS.items()):
+            idle = now - session._last_used
+            if (conversation_id < 0 or session._kapandi or not session.is_live
+                    or idle < _AGY_IDLE_STOP_S):
+                continue
+            pid = getattr(session._active_process, "pid", None)
+            try:
+                await session._stop_process(force=True)
+            except Exception:
+                logger.exception("[agy] idle stop failed conv=%s pid=%s", conversation_id, pid)
+                continue
+            stopped.append(conversation_id)
+            logger.info("[agy] idle child stopped conv=%s pid=%s idle=%.0f min",
+                        conversation_id, pid, idle / 60)
+    finally:
+        lock.release()
+    return stopped
+
+
+async def idle_stop_loop(interval: float = 60) -> None:
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await stop_idle_children()
+        except Exception:
+            logger.exception("[agy] idle stop sweep failed")
 
 
 async def close_session(conversation_id: int) -> None:
