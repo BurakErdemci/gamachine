@@ -524,6 +524,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                         workspacePath={workspacePath}
                         onExportToUnity={handleExportToUnity}
                         onOpenFile={openFile}
+                        streaming={loading && msgIdx === messages.length - 1}
                       />
                     </div>
                   )}

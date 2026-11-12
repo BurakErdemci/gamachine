@@ -98,7 +98,7 @@ export const SideChatPanel: React.FC<SideChatPanelProps> = ({
           </div>
         ) : (
           <div key={m.id} data-testid="side-answer" className="px-3 py-2 rounded-lg bg-[color:var(--paper-sunk)] border border-[color:var(--paper-line)] text-[12px] text-[color:var(--ink-dim)] break-words">
-            {m.content && <MarkdownRenderer content={m.content} />}
+            {m.content && <MarkdownRenderer content={m.content} streaming={!m.finished && !m.failed} />}
             {!m.content && !(m.activity && !m.finished && !m.failed) && (
               <span className="text-[color:var(--ink-faint)] animate-pulse">{t('side.thinking')}</span>
             )}

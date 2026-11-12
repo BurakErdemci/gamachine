@@ -7,6 +7,7 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { linkTuru, chatUrlTransform, yerelYolaCevir } from "../../lib/chatLink";
 import { useLang } from "../../lib/i18n";
 import { findMentions, mentionLabel } from "../../lib/chatMentions";
+import { holdBackPartialMarkdown } from "../../lib/streamingMarkdown";
 import { ChatFileImage } from "./ChatFileImage";
 
 /**
@@ -133,6 +134,7 @@ const MarkdownRendererInner = ({
   onExportToUnity,
   onOpenFile,
   mentionTitles,
+  streaming,
 }: {
   content: string;
   workspacePath?: string | null;
@@ -143,6 +145,8 @@ const MarkdownRendererInner = ({
   onOpenFile?: (path: string) => void;
   /** Given only for the user's own bubbles: their `@<id>` mentions become chips. */
   mentionTitles?: ReadonlyMap<number, string>;
+  /** The text is still arriving: an unfinished link on its last line is shown as its label only. */
+  streaming?: boolean;
 }) => {
   const { t } = useLang();
   const [copiedBlock, setCopiedBlock] = useState<string | null>(null);
@@ -280,7 +284,7 @@ const MarkdownRendererInner = ({
       // the live props from `live`.
       components={components}
     >
-      {content}
+      {streaming ? holdBackPartialMarkdown(content) : content}
     </ReactMarkdown>
   );
 };
