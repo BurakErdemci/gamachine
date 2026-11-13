@@ -123,8 +123,18 @@ def test_kill_accounting_line_carries_no_command_line_arguments(mgr, process_tab
     monkeypatch.setattr(process_tree, "_cmdline_windows", lambda pid: SECRET_CMDLINES, raising=False)
     monkeypatch.setattr(process_tree, "_exe_path_windows", lambda pid: "C:/tools/uvx.exe", raising=False)
 
+    ps_calls = []
+
     def fake_ps(argv, **kwargs):
-        return subprocess.CompletedProcess(argv, 0, stdout="uvx " + SECRET_CMDLINES, stderr="")
+        ps_calls.append(list(argv))
+        wanted = [a for i, a in enumerate(argv) if i and argv[i - 1] == "-o"]
+        if any(k in w for w in wanted for k in ("args", "command", "cmd")):
+            out = "uvx " + SECRET_CMDLINES
+        elif any(w.startswith("comm") for w in wanted):
+            out = "/usr/local/bin/uvx"
+        else:
+            out = "uvx " + SECRET_CMDLINES
+        return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
 
     monkeypatch.setattr(process_tree.subprocess, "run", fake_ps)
     process_tree.note_kill("argv-site", [MCP_PID, 7000])
@@ -135,6 +145,8 @@ def test_kill_accounting_line_carries_no_command_line_arguments(mgr, process_tab
         assert fragment not in raw
     target = diag_records("kill_accounting")[-1]["targets"][0]
     assert set(target) == {"pid", "image", "exe", "ppid"} and target["ppid"] == 100
+    asked = [a for call in ps_calls for i, a in enumerate(call) if i and call[i - 1] == "-o"]
+    assert not any(k in a for a in asked for k in ("args", "command", "cmd"))
 
 
 def sites_so_far():
