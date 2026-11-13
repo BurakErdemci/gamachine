@@ -163,6 +163,17 @@ def _exe_path_windows(pid: int) -> Optional[str]:
         k32.CloseHandle(handle)
 
 
+def _image_path_posix(pid: int) -> Optional[str]:
+    try:
+        from spawn_env import build_spawn_env
+
+        out = subprocess.run(["ps", "-o", "comm=", "-p", str(pid)], capture_output=True, text=True,
+                             timeout=KILL_WAIT_S, env=build_spawn_env()).stdout.strip()
+        return out[:_EXE_MAX] if out else None
+    except Exception:
+        return None
+
+
 def _describe_pid(pid: int, names: dict, parents: dict) -> dict:
     image = names.get(pid)
     exe = None
@@ -170,13 +181,9 @@ def _describe_pid(pid: int, names: dict, parents: dict) -> dict:
         if sys.platform == "win32":
             exe = _exe_path_windows(pid)
         else:
-            from spawn_env import build_spawn_env
-
-            out = subprocess.run(["ps", "-o", "comm=", "-p", str(pid)], capture_output=True, text=True,
-                                 timeout=KILL_WAIT_S, env=build_spawn_env()).stdout.strip()
-            if out:
-                exe = out[:_EXE_MAX]
-                image = image or os.path.basename(out)
+            exe = _image_path_posix(pid)
+            if exe:
+                image = image or os.path.basename(exe)
     except Exception:
         pass
     return {"pid": pid, "image": image, "exe": exe, "ppid": parents.get(pid)}

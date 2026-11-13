@@ -27,6 +27,7 @@ from email.message import Message
 import httpx
 import pytest
 
+import process_tree
 from unity_ai_mcp import mcp_port_guard
 from unity_ai_mcp import unity_mcp_manager as manager_module
 
@@ -141,6 +142,9 @@ class UnityBoundary:
         monkeypatch.setattr(mcp_port_guard, "foreign_port_owner_infos", lambda port=MCP_PORT: list(self.foreign_owners))
         monkeypatch.setattr(mcp_port_guard, "collect_owned_listeners", lambda port=MCP_PORT, ancestor_pid=None: set())
         monkeypatch.setattr(mcp_port_guard, "terminate_port_listeners", self._terminate_port_listeners)
+        # Kill accounting reads the POSIX process table through `ps`; the fake OS keeps no such table.
+        monkeypatch.setattr(process_tree, "_parent_map_posix", lambda: {})
+        monkeypatch.setattr(process_tree, "_image_path_posix", lambda pid: None)
 
     def manager(self):
         return self.adopt(manager_module.UnityMCPManager())
