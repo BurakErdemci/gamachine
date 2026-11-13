@@ -367,6 +367,35 @@ class TestHasRunningShellWork(unittest.TestCase):
     def test_a_failed_posix_table_read_is_unknown(self):
         self.assertIsNone(self.posix_table(1, "  100     1 agy\n"))
 
+    def posix_check(self, rows, root=100):
+        with patch.object(process_tree.sys, "platform", "darwin"), \
+                patch.object(process_tree.sys, "executable",
+                             "/Applications/Gamachine.app/Contents/Resources/backend/backend"):
+            return self.check(rows, root)
+
+    def test_posix_measured_idle_tree_is_not_work(self):
+        rows = [(100, 1, "agy"), (101, 100, "backend"), (102, 100, "backend"), (103, 100, "backend")]
+        self.assertIs(self.posix_check(rows), False)
+
+    def test_posix_measured_busy_tree_with_a_direct_sleep_is_work(self):
+        rows = [(100, 1, "agy"), (101, 100, "backend"), (102, 100, "backend"), (103, 100, "backend"),
+                (104, 100, "sleep")]
+        self.assertIs(self.posix_check(rows), True)
+
+    def test_posix_a_user_mcp_server_child_fails_safe_as_work(self):
+        rows = [(100, 1, "agy"), (101, 100, "backend"), (102, 100, "node")]
+        self.assertIs(self.posix_check(rows), True)
+
+    def test_posix_a_shell_child_with_a_sleep_grandchild_is_work(self):
+        rows = [(100, 1, "agy"), (101, 100, "backend"), (102, 100, "zsh"), (103, 102, "sleep")]
+        self.assertIs(self.posix_check(rows), True)
+
+    def test_posix_agy_with_no_children_is_not_work(self):
+        self.assertIs(self.posix_check([(100, 1, "agy"), (200, 1, "launchd")]), False)
+
+    def test_posix_an_empty_table_is_unknown(self):
+        self.assertIsNone(self.posix_check([]))
+
     def test_a_shell_that_is_only_a_grandchild_is_not_work(self):
         rows = [(100, 1, "agy.exe"), (101, 100, "cmd.exe"), (102, 101, "powershell.exe"),
                 (103, 102, "ping.exe")]

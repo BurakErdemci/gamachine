@@ -112,13 +112,18 @@ _SHELL_IMAGES = {"powershell.exe", "pwsh.exe", "bash.exe", "sh.exe", "zsh.exe", 
 
 
 def has_running_shell_work(root_pid: Optional[int]) -> Optional[bool]:
-    """True when a direct shell child of `root_pid` has a live descendant other than conhost.exe
-    (work the agent left running); False when there is none; None when unknown."""
+    """Windows: True when a direct shell child of `root_pid` has a live descendant other than conhost.exe.
+    macOS/Linux: True when any direct child is not a backend helper. False when there is none; None when unknown."""
     if not root_pid:
         return None
     parents, images = process_table_with_names()
     if not parents:
         return None
+    if sys.platform != "win32":
+        # Measured 13 Nov 2026 on macOS: `sleep` ran as a direct child of agy with no shell; agy's helpers
+        # are the backend's computer-mcp-server / browser-mcp-server / mcp-server children.
+        helper = os.path.basename(sys.executable).lower()
+        return any(images.get(pid) != helper for pid, ppid in parents.items() if ppid == root_pid)
     for shell, ppid in parents.items():
         if ppid != root_pid or images.get(shell) not in _SHELL_IMAGES:
             continue
