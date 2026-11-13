@@ -1,6 +1,7 @@
 """Fix round: Store-app launch ids, standalone instruction budget and installer-free suggestions."""
 import asyncio
 import json
+import sys
 
 import pytest
 from mcp.types import CallToolResult, TextContent
@@ -86,6 +87,7 @@ def test_suggestions_skip_hard_denied_exes(win, tmp_path):
     assert win.installed_app_ids("cmd tool", winreg=registry) == []
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows registry resolver: ids need a drive-letter path")
 def test_suggestions_skip_installers_uninstallers_and_package_caches(win, tmp_path):
     registry = installed_tools(tmp_path, [
         ("a", "Tool", "t\\tool.exe"),

@@ -135,6 +135,7 @@ def install_fake_registry(monkeypatch, tmp_path):
     return "win:" + str(exe).casefold()
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows registry resolver: ids need a drive-letter path")
 def test_resolver_finds_installed_desktop_app_from_registry(win, monkeypatch, tmp_path):
     expected = install_fake_registry(monkeypatch, tmp_path)
     for query in ("Blender", "blender.exe", " BLENDER "):
@@ -144,6 +145,7 @@ def test_resolver_finds_installed_desktop_app_from_registry(win, monkeypatch, tm
     assert win.valid_app_id(expected)
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows registry resolver: ids need a drive-letter path")
 def test_resolver_returns_at_most_five_and_skips_missing_files(win, tmp_path):
     keys = {}
     for i in range(8):
@@ -155,6 +157,7 @@ def test_resolver_returns_at_most_five_and_skips_missing_files(win, tmp_path):
     assert len(win.installed_app_ids("tool", winreg=FakeWinreg(keys))) == 5
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows registry resolver: ids need a drive-letter path")
 def test_bad_name_refusal_lists_formats_and_matching_id(win, monkeypatch, tmp_path):
     expected = install_fake_registry(monkeypatch, tmp_path)
     refusal = policy.validate_call("computer_launch_app", {"bundle_id": "Blender"})
