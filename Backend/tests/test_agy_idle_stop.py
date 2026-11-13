@@ -364,6 +364,9 @@ class TestHasRunningShellWork(unittest.TestCase):
         out = "  100     1 /usr/local/bin/agy\n  102   100 -zsh\n  103   102 /bin/sleep\n"
         self.assertIs(self.posix_table(0, out), True)
 
+    def test_a_failed_posix_table_read_is_unknown(self):
+        self.assertIsNone(self.posix_table(1, "  100     1 agy\n"))
+
     def test_a_shell_that_is_only_a_grandchild_is_not_work(self):
         rows = [(100, 1, "agy.exe"), (101, 100, "cmd.exe"), (102, 101, "powershell.exe"),
                 (103, 102, "ping.exe")]

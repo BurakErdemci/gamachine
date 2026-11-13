@@ -87,8 +87,11 @@ def process_table_with_names() -> tuple:
             return parents, {pid: os.path.basename(name).lower() for pid, name in names.items()}
         from spawn_env import build_spawn_env
 
-        out = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,comm="], capture_output=True,
-                             text=True, timeout=KILL_WAIT_S, env=build_spawn_env()).stdout
+        done = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,comm="], capture_output=True,
+                              text=True, timeout=KILL_WAIT_S, env=build_spawn_env())
+        if done.returncode != 0:
+            return {}, {}  # a partial table could hide the busy shell
+        out = done.stdout
         parents, images = {}, {}
         for line in out.splitlines():
             parts = line.split(None, 2)
