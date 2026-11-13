@@ -397,6 +397,11 @@ class TestHasRunningShellWork(unittest.TestCase):
     def test_posix_an_empty_table_is_unknown(self):
         self.assertIsNone(self.posix_check([]))
 
+    def test_linux_a_direct_sleep_child_is_work(self):
+        rows = [(100, 1, "agy"), (101, 100, "backend"), (104, 100, "sleep")]
+        with patch.object(process_tree.sys, "executable", "/opt/gamachine/backend"):
+            self.assertIs(self.check(rows, platform="linux"), True)
+
     def test_a_shell_that_is_only_a_grandchild_is_not_work(self):
         rows = [(100, 1, "agy.exe"), (101, 100, "cmd.exe"), (102, 101, "powershell.exe"),
                 (103, 102, "ping.exe")]
