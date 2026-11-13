@@ -94,7 +94,7 @@ def process_table_with_names() -> tuple:
             parts = line.split(None, 2)
             if len(parts) == 3 and parts[0].isdigit() and parts[1].isdigit():
                 parents[int(parts[0])] = int(parts[1])
-                images[int(parts[0])] = os.path.basename(parts[2].strip()).lower()
+                images[int(parts[0])] = os.path.basename(parts[2].strip()).lower().lstrip("-")  # login shell: -zsh
         return parents, images
     except Exception as exc:
         logger.debug("[process-tree] process table with names unreadable: %s", exc)
@@ -104,8 +104,8 @@ def process_table_with_names() -> tuple:
 # Measured 13 Nov 2026: a background `ping` the agent started ran as PING.EXE <- cmd.exe <- backend.exe
 # <- cmd.exe <- powershell.exe <- agy.EXE; agy's own helpers (conhost, backend.exe, cmd.exe -> node.exe)
 # never sit under a shell. cmd.exe is deliberately not listed: agy's MCP wrappers are cmd.exe -> node.exe.
-_SHELL_IMAGES = {"powershell.exe", "pwsh.exe", "bash.exe", "sh.exe", "powershell", "pwsh", "bash",
-                 "sh", "zsh", "fish", "dash"}
+_SHELL_IMAGES = {"powershell.exe", "pwsh.exe", "bash.exe", "sh.exe", "zsh.exe", "fish.exe", "dash.exe",
+                 "powershell", "pwsh", "bash", "sh", "zsh", "fish", "dash"}
 
 
 def has_running_shell_work(root_pid: Optional[int]) -> Optional[bool]:

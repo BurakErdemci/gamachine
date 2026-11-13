@@ -5,6 +5,7 @@ processes (~3 GB) alive for hours. The fake child below stands in for agy.
 """
 import asyncio
 import inspect
+import subprocess
 import time
 import unittest
 from unittest.mock import patch
@@ -346,6 +347,22 @@ class TestHasRunningShellWork(unittest.TestCase):
 
     def test_a_missing_root_pid_is_unknown(self):
         self.assertIsNone(self.check([(100, 1, "agy.exe")], root=None))
+
+    def test_every_listed_shell_running_a_command_is_work(self):
+        for shell in ("pwsh.exe", "bash.exe", "zsh.exe", "bash", "zsh", "sh", "fish", "dash"):
+            with self.subTest(shell=shell):
+                rows = [(100, 1, "agy"), (102, 100, shell), (103, 102, "sleep")]
+                self.assertIs(self.check(rows), True)
+
+    def posix_table(self, returncode, stdout):
+        done = subprocess.CompletedProcess([], returncode, stdout=stdout, stderr="")
+        with patch.object(process_tree.sys, "platform", "darwin"):
+            with patch.object(process_tree.subprocess, "run", return_value=done):
+                return process_tree.has_running_shell_work(100)
+
+    def test_a_posix_login_shell_running_a_command_is_work(self):
+        out = "  100     1 /usr/local/bin/agy\n  102   100 -zsh\n  103   102 /bin/sleep\n"
+        self.assertIs(self.posix_table(0, out), True)
 
     def test_a_shell_that_is_only_a_grandchild_is_not_work(self):
         rows = [(100, 1, "agy.exe"), (101, 100, "cmd.exe"), (102, 101, "powershell.exe"),
