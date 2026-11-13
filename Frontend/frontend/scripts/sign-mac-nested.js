@@ -49,7 +49,8 @@ function deepestFirst(files) {
 }
 
 // The same lookup electron-builder's MacPackager.sign() makes: `identity: null` opts
-// out, CSC_LINK is imported into a temporary keychain, CSC_NAME or mac.identity
+// out, CSC_LINK (if set) is imported into a temporary keychain and CSC_KEYCHAIN
+// (how CI passes it, see release.yml) is searched instead, CSC_NAME or mac.identity
 // narrows the search, CSC_IDENTITY_AUTO_DISCOVERY=false disables it. Its result is
 // then held to the name prefix, because findIdentity('Developer ID Application')
 // also returns any certificate missing from its Apple prefix list: measured 29 Oct

@@ -126,8 +126,9 @@ mac:
   extendInfo:
     NSMicrophoneUsageDescription: "Gamachine uses the microphone only to dictate text into the chat box. Audio is transcribed on this computer and never uploaded."
   # Signing (owner decision 29 Oct 2026: Developer ID + notarization; docs/building.md).
-  # The identity is not written here: electron-builder takes it from CSC_LINK +
-  # CSC_KEY_PASSWORD (CI) or finds a "Developer ID Application" in the keychain.
+  # The identity is not written here: electron-builder finds a "Developer ID
+  # Application" in CSC_KEYCHAIN (CI imports CSC_LINK there, see release.yml) or
+  # in the user's keychains.
   # Without one, scripts/sign-mac-nested.js ad-hoc signs the app as com.gamachine.app
   # and sets identity to null, so electron-builder skips signing and notarization
   # and the build succeeds exactly as before. Force a local unsigned build on a Mac
