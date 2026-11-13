@@ -2,6 +2,11 @@ export function isMacPlatform(): boolean {
   return typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '');
 }
 
+// Guarded like isMacPlatform: pages are prerendered in Node, where Node 20 has no `navigator`.
+export function isWindowsPlatform(): boolean {
+  return typeof navigator !== 'undefined' && /Win/.test(navigator.platform || navigator.userAgent || '');
+}
+
 const MAC_KEYS: Record<string, string> = {
   'Ctrl Shift `': '⌘⇧`',
   'Ctrl N': '⌘N',

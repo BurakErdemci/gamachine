@@ -4,7 +4,7 @@ import axios from 'axios';
 
 import { useLang, type Lang } from '../../lib/i18n';
 import { displayName } from '../../lib/displayName';
-import { isMacPlatform } from '../../lib/platformKeys';
+import { isMacPlatform, isWindowsPlatform } from '../../lib/platformKeys';
 import { canonicalPath } from '../../hooks/home/useFileSystem';
 import { backendWorkspacePath } from '../../lib/backendWorkspacePath';
 import { useRecentWorkspaces, type RecentWorkspace } from '../../hooks/home/useRecentWorkspaces';
@@ -99,7 +99,7 @@ export const WorkspaceScreen = ({
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const rootRef = useRef<HTMLElement>(null);
   const mac = useMemo(isMacPlatform, []);
-  const bin = t(/Win/.test(navigator.platform || navigator.userAgent || '') ? 'welcome.binWin' : 'welcome.binOther');
+  const bin = t(isWindowsPlatform() ? 'welcome.binWin' : 'welcome.binOther');
   const name = displayName(userName);
   const first = load === 'ok' && items.length === 0;
   // A created project is listed at once; openCreated saves it again through selectWorkspace, which is harmless.

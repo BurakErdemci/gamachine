@@ -7,6 +7,7 @@
 import type { Cleanup, HubErrorCode } from '../../main/helpers/unity-create';
 import type { ShowToast } from '../components/ui/Toast';
 import type { TKey, TValues } from './i18n';
+import { isWindowsPlatform } from './platformKeys';
 
 export interface HubEditor { version: string; path: string }
 export interface HubTemplate { id: string; label: '2d' | '3d' | 'hdrp' | 'other'; file: string }
@@ -36,7 +37,7 @@ export function hubFailureText(result: HubFailureDetails & { error?: string }, t
   const cancelled = result.code === 'cancelled' || isCancelled(result.error ?? '');
   if (cancelled) {
     if (result.cleanup === 'removed') {
-      const bin = t(/Win/.test(navigator.platform || navigator.userAgent || '') ? 'welcome.binWin' : 'welcome.binOther');
+      const bin = t(isWindowsPlatform() ? 'welcome.binWin' : 'welcome.binOther');
       return t('hub.cancelledRemoved', { bin });
     }
     if (result.cleanup === 'removeFailed') return t('hub.cancelledRemoveFailed', { path: result.path ?? '' });
