@@ -322,8 +322,10 @@ def _table(rows):
 
 
 class TestHasRunningShellWork(unittest.TestCase):
-    def check(self, rows, root=100):
-        with patch.object(process_tree, "process_table_with_names", return_value=_table(rows)):
+    def check(self, rows, root=100, platform="win32"):
+        # The rule differs per OS, so each test names the OS whose tree it describes.
+        with patch.object(process_tree.sys, "platform", platform), \
+                patch.object(process_tree, "process_table_with_names", return_value=_table(rows)):
             return process_tree.has_running_shell_work(root)
 
     def test_the_measured_background_ping_chain_is_work(self):
@@ -368,10 +370,9 @@ class TestHasRunningShellWork(unittest.TestCase):
         self.assertIsNone(self.posix_table(1, "  100     1 agy\n"))
 
     def posix_check(self, rows, root=100):
-        with patch.object(process_tree.sys, "platform", "darwin"), \
-                patch.object(process_tree.sys, "executable",
-                             "/Applications/Gamachine.app/Contents/Resources/backend/backend"):
-            return self.check(rows, root)
+        with patch.object(process_tree.sys, "executable",
+                          "/Applications/Gamachine.app/Contents/Resources/Backend/backend"):
+            return self.check(rows, root, platform="darwin")
 
     def test_posix_measured_idle_tree_is_not_work(self):
         rows = [(100, 1, "agy"), (101, 100, "backend"), (102, 100, "backend"), (103, 100, "backend")]
