@@ -35,7 +35,7 @@ def _doctor_copilot(monkeypatch, home, env=None):
         monkeypatch.setenv(k, v)
     installed = {"claude": False, "codex": False, "agy": False, "cursor": False,
                  "copilot": True, "opencode": False, "kimi": False}
-    with patch("providers.oneshot_cli.installed_clis", return_value=installed):
+    with patch("routes.config_routes.installed_clis", return_value=installed):
         return asyncio.run(_route("/cli-doctor")(refresh=False, x_session_token="t"))["copilot"]["loggedIn"]
 
 
