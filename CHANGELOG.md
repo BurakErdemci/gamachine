@@ -7,7 +7,7 @@ Bu dosya kullanıcıya görünen değişiklikleri taşır. Tam geçmiş için `g
 > kullanıcının indirme anında gördüğü sayfa. Eski girdiler olduğu gibi bırakıldı —
 > geçmişi yarım çevirmek, tek dilde bırakmaktan da iki dilde bırakmaktan da kötü.
 
-## v4.0.0 — DATE-TBD
+## v4.0.0 — 13 November 2026
 
 Gamachine 4 changes what the app is for. In v3 an agent wrote code and touched the
 Unity Editor while you watched and checked the result yourself. In v4 the agent can
