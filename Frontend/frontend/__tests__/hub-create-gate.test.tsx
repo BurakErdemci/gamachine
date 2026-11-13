@@ -14,6 +14,7 @@ import axios from 'axios'
 import { WorkspaceScreen } from '@/components/home/WorkspaceScreen'
 import { LangContext, ceviriUygula, translations } from '@/lib/i18n'
 import { resetHubStore } from '@/lib/hub'
+import { AppearanceContext, DEFAULTS, THEMES, type Theme } from '@/lib/appearance'
 
 const en = translations.en
 const ipc = async (channel: string, arg: any) => {
@@ -31,16 +32,16 @@ beforeEach(() => {
 })
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
-const open = () => {
+const open = (theme: Theme = DEFAULTS.theme) => {
   const value = { lang: 'en' as const, setLang: () => {}, t: (k: any, v?: any) => ceviriUygula('en', k, v) }
-  render(<LangContext.Provider value={value}><WorkspaceScreen api="http://backend" user={{ id: 7, name: 'B', sessionToken: 't' }} userName="B"
-    onOpenFolder={vi.fn(async () => null)} onSelectWorkspace={vi.fn(async () => true)} onLogout={vi.fn()} showToast={vi.fn()} /></LangContext.Provider>)
+  render(<AppearanceContext.Provider value={{ appearance: { ...DEFAULTS, theme }, setAppearance: () => {} }}><LangContext.Provider value={value}><WorkspaceScreen api="http://backend" user={{ id: 7, name: 'B', sessionToken: 't' }} userName="B"
+    onOpenFolder={vi.fn(async () => null)} onSelectWorkspace={vi.fn(async () => true)} onLogout={vi.fn()} showToast={vi.fn()} /></LangContext.Provider></AppearanceContext.Provider>)
   fireEvent.click(screen.getByTestId('hub-tab-new'))
 }
 
 describe('hub create button', () => {
-  it('is disabled without a folder, enabled once one is chosen', async () => {
-    open()
+  it.each(THEMES.map(t => [t]))('%s: is disabled without a folder, enabled once one is chosen', async (theme) => {
+    open(theme as Theme)
     const button = await screen.findByTestId('hub-create')
     await waitFor(() => expect(screen.getByRole('radio', { name: /^3D/ }).getAttribute('aria-checked')).toBe('true'))
     expect(button.getAttribute('aria-disabled')).toBe('true')
