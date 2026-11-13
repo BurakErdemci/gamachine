@@ -78,6 +78,52 @@ def process_table() -> dict:
     return _parent_map_windows() if sys.platform == "win32" else _parent_map_posix()
 
 
+def process_table_with_names() -> tuple:
+    """(pid -> ppid, pid -> lowercased image basename) of every process; ({}, {}) when unreadable."""
+    try:
+        if sys.platform == "win32":
+            names: dict = {}
+            parents = _parent_map_windows(names)
+            return parents, {pid: os.path.basename(name).lower() for pid, name in names.items()}
+        from spawn_env import build_spawn_env
+
+        out = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,comm="], capture_output=True,
+                             text=True, timeout=KILL_WAIT_S, env=build_spawn_env()).stdout
+        parents, images = {}, {}
+        for line in out.splitlines():
+            parts = line.split(None, 2)
+            if len(parts) == 3 and parts[0].isdigit() and parts[1].isdigit():
+                parents[int(parts[0])] = int(parts[1])
+                images[int(parts[0])] = os.path.basename(parts[2].strip()).lower()
+        return parents, images
+    except Exception as exc:
+        logger.debug("[process-tree] process table with names unreadable: %s", exc)
+        return {}, {}
+
+
+# Measured 13 Nov 2026: a background `ping` the agent started ran as PING.EXE <- cmd.exe <- backend.exe
+# <- cmd.exe <- powershell.exe <- agy.EXE; agy's own helpers (conhost, backend.exe, cmd.exe -> node.exe)
+# never sit under a shell. cmd.exe is deliberately not listed: agy's MCP wrappers are cmd.exe -> node.exe.
+_SHELL_IMAGES = {"powershell.exe", "pwsh.exe", "bash.exe", "sh.exe", "powershell", "pwsh", "bash",
+                 "sh", "zsh", "fish", "dash"}
+
+
+def has_running_shell_work(root_pid: Optional[int]) -> Optional[bool]:
+    """True when a direct shell child of `root_pid` has a live descendant other than conhost.exe
+    (work the agent left running); False when there is none; None when unknown."""
+    if not root_pid:
+        return None
+    parents, images = process_table_with_names()
+    if not parents:
+        return None
+    for shell, ppid in parents.items():
+        if ppid != root_pid or images.get(shell) not in _SHELL_IMAGES:
+            continue
+        if any(images.get(pid) != "conhost.exe" for pid in _closure(parents, [shell]) - {shell}):
+            return True
+    return False
+
+
 # --- Kill accounting -------------------------------------------------------
 # Measured 12 Nov 2026: the Unity MCP server died with exit code 1 (what `taskkill /F` gives) and
 # nothing in the logs named a killer. Every kill site writes one line here BEFORE it kills, so a

@@ -1551,6 +1551,14 @@ async def stop_idle_children(now: Optional[float] = None) -> list:
             process = session._active_process
             pid = getattr(process, "pid", None)
             try:
+                work = await asyncio.to_thread(process_tree.has_running_shell_work, pid)
+            except Exception:
+                work = None
+            if work is not False:
+                logger.info("[agy] idle stop skipped conv=%s pid=%s: %s", conversation_id, pid,
+                            "background work" if work else "process table unreadable")
+                continue
+            try:
                 await session._stop_process(force=True)
             except Exception:
                 logger.exception("[agy] idle stop failed conv=%s pid=%s", conversation_id, pid)

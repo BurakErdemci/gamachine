@@ -6,8 +6,10 @@ processes (~3 GB) alive for hours. The fake child below stands in for agy.
 import asyncio
 import inspect
 import time
+import unittest
 from unittest.mock import patch
 
+import process_tree
 from providers import agy_session
 from providers.cli_base import BaseCLIProvider
 from tests.test_agy_stream_session import SESSION_ID
@@ -29,6 +31,12 @@ class _Harness(base.TestAgyStreamSession):
         patcher = patch.object(agy_session.process_tree, "end_tree", side_effect=end_tree)
         patcher.start()
         self.addCleanup(patcher.stop)
+        # Fake pids may be real processes on the test machine.
+        self.shell_work = False
+        work = patch.object(agy_session.process_tree, "has_running_shell_work",
+                            side_effect=lambda pid: self.shell_work)
+        work.start()
+        self.addCleanup(work.stop)
 
     async def live_session(self, conversation_id=11):
         session = agy_session.get_session(conversation_id)
@@ -269,3 +277,83 @@ class TestIdleStopLoop(_Harness):
             with self.assertRaises(asyncio.CancelledError):
                 await task
         self.assertFalse(BaseCLIProvider._AGY_LOCK.locked())
+
+
+class TestBackgroundWorkGuard(_Harness):
+    async def assert_kept(self, session):
+        stopped = await agy_session.stop_idle_children(now=session._last_used + 901)
+        self.assertEqual(stopped, [])
+        self.assertEqual(self.ended, [])
+        self.assertTrue(session.is_live)
+        self.assertIs(agy_session.peek_session(11), session)
+        self.assertEqual(agy_session._RESUME_IDS[(11, session.cwd)], SESSION_ID)
+        self.assertFalse(BaseCLIProvider._AGY_LOCK.locked())
+
+    async def test_background_work_keeps_the_child(self):
+        session = await self.live_session()
+        self.shell_work = True
+        await self.assert_kept(session)
+
+    async def test_unknown_process_table_keeps_the_child(self):
+        session = await self.live_session()
+        self.shell_work = None
+        await self.assert_kept(session)
+
+    async def test_a_failing_check_keeps_the_child(self):
+        session = await self.live_session()
+        with patch.object(agy_session.process_tree, "has_running_shell_work",
+                          side_effect=OSError("boom")):
+            await self.assert_kept(session)
+
+    async def test_the_child_is_stopped_once_the_work_has_ended(self):
+        session = await self.live_session()
+        self.shell_work = True
+        await self.assert_kept(session)
+        self.shell_work = False
+        stopped = await agy_session.stop_idle_children(now=session._last_used + 901)
+        self.assertEqual(stopped, [11])
+        self.assertFalse(session.is_live)
+
+
+def _table(rows):
+    """rows: (pid, ppid, image) -> the (parents, images) pair process_table_with_names returns."""
+    return ({pid: ppid for pid, ppid, _ in rows}, {pid: image for pid, _, image in rows})
+
+
+class TestHasRunningShellWork(unittest.TestCase):
+    def check(self, rows, root=100):
+        with patch.object(process_tree, "process_table_with_names", return_value=_table(rows)):
+            return process_tree.has_running_shell_work(root)
+
+    def test_the_measured_background_ping_chain_is_work(self):
+        rows = [(100, 1, "agy.exe"), (101, 100, "conhost.exe"), (102, 100, "powershell.exe"),
+                (103, 102, "cmd.exe"), (104, 103, "backend.exe"), (105, 104, "cmd.exe"),
+                (106, 105, "ping.exe")]
+        self.assertIs(self.check(rows), True)
+
+    def test_agys_own_helper_tree_is_not_work(self):
+        rows = [(100, 1, "agy.exe"), (101, 100, "conhost.exe"), (102, 100, "backend.exe"),
+                (103, 100, "backend.exe"), (104, 100, "cmd.exe"), (105, 104, "node.exe"),
+                (106, 100, "node.exe"), (107, 106, "cmd.exe"), (108, 107, "node.exe")]
+        self.assertIs(self.check(rows), False)
+
+    def test_a_shell_with_only_a_conhost_child_is_not_work(self):
+        rows = [(100, 1, "agy.exe"), (102, 100, "powershell.exe"), (103, 102, "conhost.exe")]
+        self.assertIs(self.check(rows), False)
+
+    def test_an_empty_table_is_unknown(self):
+        self.assertIsNone(self.check([]))
+
+    def test_a_missing_root_pid_is_unknown(self):
+        self.assertIsNone(self.check([(100, 1, "agy.exe")], root=None))
+
+    def test_a_shell_that_is_only_a_grandchild_is_not_work(self):
+        rows = [(100, 1, "agy.exe"), (101, 100, "cmd.exe"), (102, 101, "powershell.exe"),
+                (103, 102, "ping.exe")]
+        self.assertIs(self.check(rows), False)
+
+    def test_the_real_table_reads_and_contains_this_process(self):
+        parents, images = process_tree.process_table_with_names()
+        self.assertIn(__import__("os").getpid(), parents)
+        self.assertEqual(set(parents), set(images))
+        self.assertTrue(all(name == name.lower() for name in images.values()))
