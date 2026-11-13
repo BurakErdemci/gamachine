@@ -624,6 +624,7 @@ def test_an_idle_server_is_stopped_after_the_limit_and_its_timer_ends(server_fac
     server.touch()
 
     assert _gone(proc)
+    assert _wait_until(lambda: server.pid is None, timeout=5.0)
     assert time.monotonic() - used_at >= IDLE
     assert server.pid is None and not server.is_ready()
     timer.join(2)
