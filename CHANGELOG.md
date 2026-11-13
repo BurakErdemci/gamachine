@@ -303,6 +303,9 @@ exists and opens the release page, so the move to 4.0.0 is a manual download.
 - Antigravity: a turn that hits its time limit or the model's quota now says so and
   lists the files it changed, and a quota message from an earlier turn is no longer
   repeated as part of the next answer.
+- Antigravity: a chat left idle for 15 minutes closes its agy processes (several
+  hundred MB per chat) and continues the same conversation on the next message. A
+  command the agent left running in the background keeps the chat open.
 - Computer use: every tool now carries its own instructions and running apps carry a
   launch id, so agents that never see the server's general instructions (Antigravity,
   API-key models) can still find and open apps. Agents are told to check the app
