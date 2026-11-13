@@ -402,6 +402,16 @@ class TestHasRunningShellWork(unittest.TestCase):
         with patch.object(process_tree.sys, "executable", "/opt/gamachine/backend"):
             self.assertIs(self.check(rows, platform="linux"), True)
 
+    def test_macos_full_path_ps_rows_are_matched_by_name(self):
+        # Measured 13 Nov 2026: macOS `ps -o comm=` prints the full executable path for these processes.
+        backend = "/Applications/Gamachine.app/Contents/Resources/Backend/backend"
+        idle = (f"  100     1 /Users/x/.local/bin/agy\n  101   100 {backend}\n"
+                f"  102   100 {backend}\n  103   100 {backend}\n")
+        busy = idle + "  104   100 sleep\n"
+        with patch.object(process_tree.sys, "executable", backend):
+            self.assertIs(self.posix_table(0, idle), False)
+            self.assertIs(self.posix_table(0, busy), True)
+
     def test_a_shell_that_is_only_a_grandchild_is_not_work(self):
         rows = [(100, 1, "agy.exe"), (101, 100, "cmd.exe"), (102, 101, "powershell.exe"),
                 (103, 102, "ping.exe")]
