@@ -224,8 +224,8 @@ describe('kopyala YALANCI başarı göstermiyor (denetim bulgusu)', () => {
     panoKur('ok')
     render(<ErrorBoundary><Patlayan /></ErrorBoundary>)
     fireEvent.click(screen.getByText('Ayrıntıyı kopyala'))
-    await new Promise(r => setTimeout(r, 0))
-    expect(screen.getByText('Kopyalandı')).toBeTruthy()
+    // findByText waits for the re-render; one timer tick was not always enough on CI.
+    expect(await screen.findByText('Kopyalandı')).toBeTruthy()
   })
 })
 
