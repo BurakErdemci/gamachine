@@ -59,12 +59,12 @@ export const LESSER: GuideTopic[] = [
   {
     id: "video-url", group: "lesser", since_version: "baseline", available_when: "always",
     title: T("Videodan anlat", "Explain with a video"),
-    summary: T("Bir video linki yapıştır; karelerine ve konuşmasına bakayım.", "Paste a video link; I look at its frames and speech."),
+    summary: T("Bir video linki yapıştır ya da dosya ekle; karelerine ve varsa altyazısına bakayım.", "Paste a video link or add a file; I look at its frames and, when it has them, its captions."),
     keywords: T("youtube link url video yapıştır", "youtube link url video paste"),
     steps: [
       { anchor: "composer-input", side: "above", align: "start", prepare: ["screen:chat"],
         title: T("Video linki yapıştır", "Paste a video link"),
-        text: T("YouTube, Vimeo, Loom ya da X'ten bir linki mesaja yapıştırırsan videodan kareler ve konuşmanın metnini çıkarıp ona bakarım. Bilgisayarındaki video için \"Ekle ve sohbet\" menüsünden Video'yu seç.", "Paste a YouTube, Vimeo, Loom or X link into the message and I pull frames and the spoken text from it. For a video on your computer, pick Video in the \"Add & chat\" menu."),
+        text: T("YouTube, Vimeo, Loom ya da X'ten bir linki mesaja yapıştırırsan videodan kareler ve varsa altyazısını çıkarıp ona bakarım. Bilgisayarındaki videoyu mesaj kutusuna sürükleyebilir ya da \"Ekle ve sohbet\" menüsünden Video'yu seçebilirsin.", "Paste a YouTube, Vimeo, Loom or X link into the message and I pull frames and, when there are captions, their text. For a video on your computer, drop it onto the message box or pick Video in the \"Add & chat\" menu."),
       },
     ],
   },
