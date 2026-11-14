@@ -1,16 +1,20 @@
 import React, { useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { AnimatedChatInput, type ComposerPickers } from '../renderer/components/ui/animated-ai-chat'
+import { AnimatedChatInput, ComposerDraftContext, type ComposerDraft, type ComposerPickers } from '../renderer/components/ui/animated-ai-chat'
+import { LangContext, ceviriUygula, tr, en, type Lang } from '../renderer/lib/i18n'
 
 afterEach(() => {
   cleanup()
   delete (window as any).ipc
 })
 
-function Host({ onSendMessage, pickersRef }: { onSendMessage: (...args: any[]) => void; pickersRef?: React.Ref<ComposerPickers> }) {
+function Host({ onSendMessage, pickersRef, chatId, queue }: {
+  onSendMessage: (...args: any[]) => void; pickersRef?: React.Ref<ComposerPickers>; chatId?: number | null; queue?: any
+}) {
   const [value, setValue] = useState('')
-  return <AnimatedChatInput value={value} setValue={setValue} onSendMessage={onSendMessage} isLoading={false} pickersRef={pickersRef} />
+  return <AnimatedChatInput value={value} setValue={setValue} onSendMessage={onSendMessage} isLoading={false}
+    pickersRef={pickersRef} currentChatId={chatId} queue={queue} />
 }
 
 function dropFiles(box: HTMLElement, files: File[]) {
@@ -104,5 +108,112 @@ describe('dropping files on the composer', () => {
     expect(container.querySelector('[data-video-cap-note]')).not.toBeNull()
     fireEvent.keyDown(box, { key: 'Enter' })
     expect(sentVideos(onSendMessage)).toHaveLength(5)
+  })
+})
+
+const NOTE = '[data-video-cap-note]'
+const vids = (n: number, tag = 'd') => Array.from({ length: n }, (_, i) => ({ name: `${tag}${i}.mp4`, data: '', type: 'video' as const, path: `C:/${tag}/${i}.mp4` }))
+
+describe('the video limit note and the other ways videos get in', () => {
+  it('recognises mkv and avi by extension when the type is empty', () => {
+    for (const name of ['a.mkv', 'b.AVI']) {
+      cleanup()
+      const { onSendMessage, box } = setup(f => 'C:/v/' + f.name)
+      fireEvent.change(box, { target: { value: 'look' } })
+      dropFile(box, new File(['x'], name, { type: '' }))
+      fireEvent.keyDown(box, { key: 'Enter' })
+      expect(sentVideos(onSendMessage)).toEqual([{ kind: 'path', path: 'C:/v/' + name, name }])
+    }
+  })
+
+  it('says the limit in Turkish and in English', () => {
+    for (const lang of ['tr', 'en'] as Lang[]) {
+      cleanup()
+      ;(window as any).ipc = { pathForFile: (f: File) => 'C:/v/' + f.name }
+      const { container } = render(
+        <LangContext.Provider value={{ lang, setLang: () => {}, t: (k, v) => ceviriUygula(lang, k, v) }}>
+          <Host onSendMessage={vi.fn()} />
+        </LangContext.Provider>)
+      dropFiles(screen.getByRole('textbox'), clips(6))
+      expect(container.querySelector(NOTE)!.textContent).toBe(lang === 'tr' ? tr['composer.videoLimit'] : en['composer.videoLimit'])
+    }
+    expect(tr['composer.videoLimit']).toBe('En fazla 5 video eklenebilir; fazlası eklenmedi.')
+    expect(en['composer.videoLimit']).toBe('You can attach up to 5 videos; the rest were not added.')
+  })
+
+  it('drops the note once a video is removed, and on send', () => {
+    const { onSendMessage, container, box } = setup(f => 'C:/v/' + f.name)
+    fireEvent.change(box, { target: { value: 'look' } })
+    dropFiles(box, clips(6))
+    expect(container.querySelector(NOTE)).not.toBeNull()
+    fireEvent.click(container.querySelector('.composer-att button')!)
+    expect(container.querySelectorAll('.composer-att')).toHaveLength(4)
+    expect(container.querySelector(NOTE)).toBeNull()
+    dropFiles(box, clips(2))
+    expect(container.querySelector(NOTE)).not.toBeNull()
+    fireEvent.keyDown(box, { key: 'Enter' })
+    expect(onSendMessage).toHaveBeenCalledTimes(1)
+    expect(container.querySelector(NOTE)).toBeNull()
+  })
+
+  it('does not stop text from being sent while the note shows', () => {
+    const { onSendMessage, container, box } = setup(f => 'C:/v/' + f.name)
+    fireEvent.change(box, { target: { value: 'still goes' } })
+    dropFiles(box, clips(7))
+    expect(container.querySelector(NOTE)).not.toBeNull()
+    fireEvent.keyDown(box, { key: 'Enter' })
+    expect(onSendMessage.mock.calls[0][0]).toBe('still goes')
+  })
+
+  it('cuts videos taken back from the queue to 5 and says so', () => {
+    const item = { id: 1, draft: 'queued', videos: [1, 2, 3, 4, 5].map(i => ({ kind: 'path', path: `C:/q/${i}.mp4`, name: `q${i}.mp4` })) }
+    const queue = { items: [item], paused: false, onEdit: vi.fn(() => item), onDelete: vi.fn(), onSendNow: vi.fn(), onResume: vi.fn() }
+    ;(window as any).ipc = { pathForFile: (f: File) => 'C:/v/' + f.name }
+    const onSendMessage = vi.fn()
+    const { container } = render(<Host onSendMessage={onSendMessage} queue={queue} />)
+    const box = screen.getByRole('textbox')
+    dropFiles(box, clips(3))
+    expect(container.querySelector(NOTE)).toBeNull()
+    fireEvent.click(container.querySelector('[data-queue-edit]')!)
+    expect(container.querySelectorAll('.composer-att')).toHaveLength(5)
+    expect(container.querySelector(NOTE)).not.toBeNull()
+    fireEvent.keyDown(box, { key: 'Enter' })
+    expect(sentVideos(onSendMessage)).toHaveLength(5)
+  })
+
+  it('cuts an over-limit stored draft to 5 on mount and on a chat switch, and a send carries 5', () => {
+    ;(window as any).ipc = { pathForFile: () => '' }
+    const drafts = new Map<string, ComposerDraft>([
+      ['1', { text: 'one', attachments: [...vids(8, 'a'), { name: 'n.txt', data: '', type: 'file' }] }],
+      ['2', { text: 'two', attachments: vids(7, 'b') }],
+    ])
+    const onSendMessage = vi.fn()
+    const App = ({ id }: { id: number }) => (
+      <ComposerDraftContext.Provider value={drafts}><Host onSendMessage={onSendMessage} chatId={id} /></ComposerDraftContext.Provider>)
+    const { container, rerender } = render(<App id={1} />)
+    expect(container.querySelectorAll('.composer-att')).toHaveLength(6)
+    expect(container.querySelector(NOTE)).not.toBeNull()
+    rerender(<App id={2} />)
+    expect(container.querySelectorAll('.composer-att')).toHaveLength(5)
+    expect(container.querySelector(NOTE)).not.toBeNull()
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter' })
+    expect(sentVideos(onSendMessage)).toHaveLength(5)
+  })
+
+  it('adds nothing from a pick that finishes after the chat changed', async () => {
+    let finish!: (v: any) => void
+    const invoke = vi.fn(() => new Promise(r => { finish = r }))
+    ;(window as any).ipc = { pathForFile: () => '', invoke }
+    const pickers = React.createRef<ComposerPickers>()
+    const drafts = new Map<string, ComposerDraft>()
+    const App = ({ id }: { id: number }) => (
+      <ComposerDraftContext.Provider value={drafts}><Host onSendMessage={vi.fn()} chatId={id} pickersRef={pickers} /></ComposerDraftContext.Provider>)
+    const { container, rerender } = render(<App id={1} />)
+    act(() => { pickers.current!.pickVideo() })
+    rerender(<App id={2} />)
+    await act(async () => { finish([{ path: 'C:/late.mp4', name: 'late.mp4' }]) })
+    expect(container.querySelectorAll('.composer-att')).toHaveLength(0)
+    rerender(<App id={1} />)
+    expect(container.querySelectorAll('.composer-att')).toHaveLength(0)
   })
 })

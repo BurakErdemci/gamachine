@@ -96,6 +96,13 @@ export interface ComposerDraft { text: string; attachments: ComposerAttachment[]
 /** Mirrors ChatRequest.videos max_length in Backend/app/schemas.py; a longer send fails with HTTP 422. */
 const MAX_VIDEOS = 5;
 
+/** Keeps at most MAX_VIDEOS video attachments (first ones win); other attachments pass through untouched. */
+function capVideos(list: ComposerAttachment[]): { list: ComposerAttachment[]; cut: boolean } {
+    let seen = 0;
+    const kept = list.filter(a => a.type !== 'video' || ++seen <= MAX_VIDEOS);
+    return { list: kept, cut: kept.length < list.length };
+}
+
 export const ComposerDraftContext = createContext<Map<string, ComposerDraft> | null>(null);
 
 export interface ComposerPickers {
@@ -162,7 +169,10 @@ export function AnimatedChatInput({
     // With a draft store the box starts from its chat's own draft: the shared `value` may hold text
     // set from another chat (a mention, a skill, dictation).
     const [internalValue, setInternalValue] = useState(() => drafts ? drafts.get(draftKey)?.text ?? '' : value);
-    const [attachments, setAttachments] = useState<ComposerAttachment[]>(() => drafts?.get(draftKey)?.attachments ?? []);
+    // A stored draft may hold more videos than a send accepts; it is cut on the way in.
+    const initialDraft = useRef<{ list: ComposerAttachment[]; cut: boolean } | null>(null);
+    if (!initialDraft.current) initialDraft.current = capVideos(drafts?.get(draftKey)?.attachments ?? []);
+    const [attachments, setAttachments] = useState<ComposerAttachment[]>(() => initialDraft.current!.list);
     const { t, lang } = useLang();
     const chips = useBrowserChips(currentChatId);
     const [activeSuggestion, setActiveSuggestion] = useState<number>(-1);
@@ -422,7 +432,13 @@ export function AnimatedChatInput({
     // Videos held right now; bumped synchronously so a multi-file drop or pick counts each file.
     const videoCountRef = useRef(0);
     videoCountRef.current = attachments.filter(a => a.type === 'video').length;
-    const [videoCapNotice, setVideoCapNotice] = useState(false);
+    // Set when videos were dropped for the limit; the note leaves as soon as the count falls below it.
+    const [videoCapNotice, setVideoCapNotice] = useState(() => initialDraft.current!.cut);
+    useEffect(() => {
+        if (videoCountRef.current < MAX_VIDEOS) setVideoCapNotice(false);
+    }, [attachments]);
+    const draftKeyRef = useRef(draftKey);
+    draftKeyRef.current = draftKey;
 
     /** Adds path videos up to MAX_VIDEOS; anything beyond is dropped with a visible note. */
     const addVideos = (items: { name: string; path: string }[]) => {
@@ -469,7 +485,10 @@ export function AnimatedChatInput({
     const pickVideoFile = async () => {
         const ipc = (window as any).ipc;
         if (!ipc) return;
+        const startedIn = draftKeyRef.current;
         const picked = await ipc.invoke('open-video-dialog');  // [{path, name}] | null
+        // The dialog is modal-less on the renderer side: the user may have switched chat meanwhile.
+        if (draftKeyRef.current !== startedIn) return;
         if (picked && picked.length) {
             addVideos(picked.map((v: any) => ({ name: v.name, path: v.path })));
         }
@@ -548,7 +567,9 @@ export function AnimatedChatInput({
         if (!drafts || loadedKey.current === draftKey) return;
         loadedKey.current = draftKey;
         setInternalValue(drafts.get(draftKey)?.text ?? '');
-        setAttachments(drafts.get(draftKey)?.attachments ?? []);
+        const restored = capVideos(drafts.get(draftKey)?.attachments ?? []);
+        setAttachments(restored.list);
+        setVideoCapNotice(restored.cut);
     }, [drafts, draftKey]);
     // Text set from outside (a welcome card, a reset) never passes through onChange, so the box
     // is sized here once React has written it; without this a card's prompt stayed one line high.
@@ -776,7 +797,8 @@ export function AnimatedChatInput({
                 .filter(a => a.type === 'video')
                 .map((a: any) => a.url ? { kind: 'url', url: a.url, name: a.name }
                                        : (a.path ? { kind: 'path', path: a.path, name: a.name } : null))
-                .filter(Boolean);
+                .filter(Boolean)
+                .slice(0, MAX_VIDEOS);
             const fileAttachments = attachments.filter(a => a.type === 'file');
 
             if (fileAttachments.length > 0) {
@@ -794,7 +816,6 @@ export function AnimatedChatInput({
             setInternalValue("");
             setValue("");
             setAttachments([]);
-            setVideoCapNotice(false);
             adjustHeight(true);
         }
     };
@@ -811,7 +832,11 @@ export function AnimatedChatInput({
                 name: v.name || v.url || v.path || 'video', data: '', type: 'video' as const, path: v.path, url: v.url,
             })),
         ];
-        if (restored.length > 0) setAttachments(prev => [...prev, ...restored]);
+        if (restored.length > 0) {
+            const merged = capVideos([...attachments, ...restored]);
+            setAttachments(merged.list);
+            if (merged.cut) setVideoCapNotice(true);
+        }
         scheduleDeferred(() => { textareaRef.current?.focus(); adjustHeight(); });
     };
     const hasDraft = Boolean(internalValue.trim()) || attachments.length > 0 || chips.length > 0;
