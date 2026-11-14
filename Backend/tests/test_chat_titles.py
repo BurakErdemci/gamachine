@@ -170,7 +170,8 @@ def test_copilot_candidate_is_luna_but_it_is_not_run():
 
 def test_agy_title_model_is_one_gamachine_knows():
     from providers.cli_base import BaseCLIProvider
-    assert ct.AGY_TITLE_MODEL in BaseCLIProvider._AGY_MODEL_MAP
+    # The title slug is a raw agy slug (with a separate --effort low), not an app id.
+    assert ct.AGY_TITLE_MODEL == BaseCLIProvider._resolve_agy_model("gemini-3.8-flash", "low")
 
 
 # ── Trigger ─────────────────────────────────────────────────────────────────

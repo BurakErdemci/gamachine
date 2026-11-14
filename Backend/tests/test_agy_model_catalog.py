@@ -11,6 +11,7 @@ from providers.agy_provider import AgyProvider
 from providers.cli_base import BaseCLIProvider
 from providers.effort_caps import get_effort_caps
 from tests.test_agy_cli_selection import AGY_SLUGS
+from tests import test_agy_stream_session as stream_base
 
 
 CLAUDE_MODELS = {
@@ -21,16 +22,20 @@ REPLACEMENTS = {
     "agy-claude-sonnet-4-6": "agy-claude-sonnet-5-5",
     "agy-claude-opus-4-6": "agy-claude-opus-5-5",
     "gemini-3.5-flash": "gemini-3.8-flash",
-    "gemini-3.5-flash-medium": "gemini-3.8-flash-medium",
-    "gemini-3.5-flash-low": "gemini-3.8-flash-low",
+    "gemini-3.5-flash-medium": "gemini-3.8-flash",
+    "gemini-3.5-flash-low": "gemini-3.8-flash",
     "gemini-3.7-flash": "gemini-3.8-flash",
-    "gemini-3.7-flash-medium": "gemini-3.8-flash-medium",
-    "gemini-3.7-flash-low": "gemini-3.8-flash-low",
+    "gemini-3.7-flash-medium": "gemini-3.8-flash",
+    "gemini-3.7-flash-low": "gemini-3.8-flash",
     "gemini-3.6-flash": "gemini-3.8-flash",
-    "gemini-3.6-flash-medium": "gemini-3.8-flash-medium",
-    "gemini-3.6-flash-low": "gemini-3.8-flash-low",
+    "gemini-3.6-flash-medium": "gemini-3.8-flash",
+    "gemini-3.6-flash-low": "gemini-3.8-flash",
     "gemini-3.1-pro-preview": "gemini-4-argon",
-    "gemini-3.1-pro-low": "gemini-4-argon-low",
+    "gemini-3.1-pro-low": "gemini-4-argon",
+    "gemini-4-argon-medium": "gemini-4-argon",
+    "gemini-4-argon-low": "gemini-4-argon",
+    "gemini-3.8-flash-medium": "gemini-3.8-flash",
+    "gemini-3.8-flash-low": "gemini-3.8-flash",
 }
 
 
@@ -127,12 +132,10 @@ def test_claude_caps_and_unselected_effort(model):
     ("gemini-3.8-flash", ["auto", "low", "medium", "high"]),
     ("gemini-4-orchestrator-argon", ["auto"]),
     ("gemini-4-orchestrator-carbon", ["auto"]),
-    # Saved tiered IDs and gpt-oss keep a fixed level.
-    ("gemini-4-argon-medium", ["auto"]), ("gemini-4-carbon-low", ["auto"]),
-    ("gemini-4-hydrogen-xhigh", ["auto"]), ("gemini-3.8-flash-low", ["auto"]),
+    # gpt-oss keeps a fixed level.
     ("agy-gpt-oss-120b", ["auto"]),
 ])
-def test_gemini_base_ids_expose_effort_and_tiered_ids_stay_auto_only(model, levels):
+def test_gemini_base_ids_expose_effort_and_fixed_models_stay_auto_only(model, levels):
     assert get_effort_caps("subscription", model)["levels"] == levels
     provider = AgyProvider(binary_name=model)
     with patch.object(AgyProvider, "_agy_binary", return_value="fake-agy"):
@@ -229,7 +232,8 @@ def test_one_shot_passes_effort_and_closes(monkeypatch):
 @pytest.mark.parametrize("model,levels,slugs,spawn_count", [
     ("agy-claude-opus-5-5", ["low", "medium", "high", "auto", None, "unknown"],
      ["claude-opus-5-5-low", "claude-opus-5-5-medium", "claude-opus-5-5-high"], 3),
-    ("gemini-3.8-flash-medium", ["low", "high"], ["gemini-3.8-flash-medium"], 1),
+    # A saved tiered id migrates to its base id, so the effort picks the slug again.
+    ("gemini-3.8-flash-medium", ["low", "high"], ["gemini-3.8-flash-low", "gemini-3.8-flash-high"], 2),
 ])
 def test_session_restarts_only_when_the_effective_slug_changes(monkeypatch, model, levels, slugs, spawn_count):
     from providers import agy_provider, agy_session
@@ -282,3 +286,28 @@ def test_session_restarts_only_when_the_effective_slug_changes(monkeypatch, mode
 
     asyncio.run(run())
     assert all(process.returncode is not None for process in processes)
+
+
+class TestGeminiEffortReachesArgv(stream_base.TestAgyStreamSession):
+    """The runner's effort level becomes the slug's tier suffix in the spawned argv."""
+
+    async def run_runner(self, effort):
+        from agentic.agent_runner import AgentRunner
+
+        runner = AgentRunner(provider_type="subscription", api_key="", model_name="gemini-4-carbon",
+                             workspace_path=".", conversation_id=11, effort_level=effort,
+                             thinking_level=effort)
+        return [event async for event in runner._run_agy_session("hello")]
+
+    async def test_each_level_selects_its_own_slug(self):
+        for level in ("low", "medium", "high"):
+            self.spawns.clear()
+            await self.run_runner(level)
+            argv = self.spawns[-1][0]
+            self.assertEqual(argv[argv.index("--model") + 1], f"gemini-4-carbon-{level}")
+            await self.asyncTearDown()
+            await self.asyncSetUp()
+
+
+for _name in [n for n in dir(stream_base.TestAgyStreamSession) if n.startswith("test_")]:
+    setattr(TestGeminiEffortReachesArgv, _name, None)

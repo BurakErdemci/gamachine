@@ -22,6 +22,8 @@ from __future__ import annotations
 import re
 from typing import Optional
 
+from providers.cli_base import BaseCLIProvider
+
 CANON_ORDER = ["auto", "off", "minimal", "low", "medium", "high", "xhigh", "max"]
 
 # Every level get_effort_caps can return, in UI order: CANON_ORDER plus `none`
@@ -117,10 +119,8 @@ def get_effort_caps(provider_type: str, model_name: str) -> dict:
             return _caps(["auto"], "Cursor CLI reasoning seçimi upstream bug nedeniyle çalışmıyor.")
         if m.startswith("kimi-"):
             return _caps(["auto"], "Kimi K3 düşünmesi her zaman açık — ayrı effort seviyesi yok.")
-        if m == "gemini-4-hydrogen":
-            return _caps(["auto", "low", "medium", "high", "xhigh"])
-        if m in ("gemini-4-carbon", "gemini-4-argon", "gemini-3.8-flash"):
-            return _caps(["auto", "low", "medium", "high"])
+        if m in BaseCLIProvider._AGY_EFFORT_LEVELS:
+            return _caps(["auto", *BaseCLIProvider._AGY_EFFORT_LEVELS[m]])
         if m.startswith("gemini-4-orchestrator-"):
             return _caps(["auto"], "Orchestrator planlama ve yürütme modelini kendisi seçer.")
         return _caps(["auto"], "Bu modelin düşünme seviyesi sabittir.")

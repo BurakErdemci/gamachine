@@ -30,20 +30,11 @@ AGY_SLUGS = {
 }
 APP_SLUGS = {
     "gemini-4-argon": "gemini-4-argon-high",
-    "gemini-4-argon-medium": "gemini-4-argon-medium",
-    "gemini-4-argon-low": "gemini-4-argon-low",
     "gemini-4-carbon": "gemini-4-carbon-high",
-    "gemini-4-carbon-medium": "gemini-4-carbon-medium",
-    "gemini-4-carbon-low": "gemini-4-carbon-low",
     "gemini-4-hydrogen": "gemini-4-hydrogen-high",
-    "gemini-4-hydrogen-xhigh": "gemini-4-hydrogen-xhigh",
-    "gemini-4-hydrogen-medium": "gemini-4-hydrogen-medium",
-    "gemini-4-hydrogen-low": "gemini-4-hydrogen-low",
     "gemini-4-orchestrator-argon": "gemini-pro-orchestrator-g1-pro",
     "gemini-4-orchestrator-carbon": "Orchestrator (Carbon)",
     "gemini-3.8-flash": "gemini-3.8-flash-high",
-    "gemini-3.8-flash-medium": "gemini-3.8-flash-medium",
-    "gemini-3.8-flash-low": "gemini-3.8-flash-low",
     "agy-claude-opus-5-5": "claude-opus-5-5-high",
     "agy-claude-sonnet-5-5": "claude-sonnet-5-5-high",
     "agy-gpt-oss-120b": "gpt-oss-120b-medium",
@@ -59,14 +50,8 @@ def test_every_picker_id_and_effort_selects_a_listed_slug(monkeypatch, effort):
     router = config_routes.create_config_router(Mock())
     models = asyncio.run(router.list_models(None))["subscription"]
     picker_ids = {m["id"] for m in models if m["id"].startswith(("gemini-", "agy-"))}
-    # Gemini tiers are picked with the effort picker; the tiered IDs are saved-only.
-    saved_only = {
-        "gemini-4-argon-medium", "gemini-4-argon-low",
-        "gemini-4-carbon-medium", "gemini-4-carbon-low",
-        "gemini-4-hydrogen-xhigh", "gemini-4-hydrogen-medium", "gemini-4-hydrogen-low",
-        "gemini-3.8-flash-medium", "gemini-3.8-flash-low",
-    }
-    assert picker_ids == set(APP_SLUGS) - saved_only
+    # Gemini tiers are picked with the effort picker; the map holds only picker ids.
+    assert picker_ids == set(APP_SLUGS)
     for model in APP_SLUGS:
         expected = APP_SLUGS[model]
         if model.startswith("agy-claude-"):
@@ -261,8 +246,7 @@ def test_gemini_base_id_effort_picks_the_tier_suffix(model, levels):
 
 
 @pytest.mark.parametrize("model", [
-    "gemini-4-argon-low", "gemini-4-carbon-medium", "gemini-4-hydrogen-xhigh",
-    "gemini-3.8-flash-low", "gemini-4-orchestrator-argon", "gemini-4-orchestrator-carbon", "agy-gpt-oss-120b",
+    "gemini-4-orchestrator-argon", "gemini-4-orchestrator-carbon", "agy-gpt-oss-120b",
 ])
 @pytest.mark.parametrize("level", ["low", "high", "xhigh", "auto", None])
 def test_fixed_slug_ids_ignore_the_effort_level(model, level):

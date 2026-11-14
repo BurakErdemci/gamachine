@@ -161,18 +161,11 @@ class BaseCLIProvider(AIProvider):
     # Model ID -> agy CLI slug (agy 1.5.9, 14 Nov 2026).
     _AGY_MODEL_MAP = {
         # Base ids take their tier from the effort picker (_AGY_EFFORT_LEVELS);
-        # the tiered ids are kept for configs saved before 4.0.1.
+        # saved tiered ids migrate to the base id on read (AGY_MODEL_REPLACEMENTS).
         # Carbon slugs come from the agy changelog (not on the measured account).
         "gemini-4-carbon":               "gemini-4-carbon-high",
-        "gemini-4-carbon-medium":        "gemini-4-carbon-medium",
-        "gemini-4-carbon-low":           "gemini-4-carbon-low",
         "gemini-4-argon":                "gemini-4-argon-high",
-        "gemini-4-argon-medium":         "gemini-4-argon-medium",
-        "gemini-4-argon-low":            "gemini-4-argon-low",
         "gemini-4-hydrogen":             "gemini-4-hydrogen-high",
-        "gemini-4-hydrogen-xhigh":       "gemini-4-hydrogen-xhigh",
-        "gemini-4-hydrogen-medium":      "gemini-4-hydrogen-medium",
-        "gemini-4-hydrogen-low":         "gemini-4-hydrogen-low",
         "gemini-4-orchestrator-argon":   "gemini-pro-orchestrator-g1-pro",
         # Its slug is served per account and was not on the measured one; agy
         # also takes a display name for --model (measured with
@@ -180,16 +173,13 @@ class BaseCLIProvider(AIProvider):
         "gemini-4-orchestrator-carbon":  "Orchestrator (Carbon)",
         # 3.8 needs agy >=1.1.25; installed 1.1.27 (measured 2026-09-05).
         "gemini-3.8-flash":              "gemini-3.8-flash-high",
-        "gemini-3.8-flash-medium":       "gemini-3.8-flash-medium",
-        "gemini-3.8-flash-low":          "gemini-3.8-flash-low",
         # Claude defaults to High; the effort picker can select Low or Medium.
         "agy-claude-sonnet-5-5":         "claude-sonnet-5-5-high",
         "agy-claude-opus-5-5":           "claude-opus-5-5-high",
         "agy-gpt-oss-120b":              "gpt-oss-120b-medium",
     }
 
-    # Base ids whose effort level picks the slug's tier suffix; the tiered ids
-    # (gemini-4-argon-medium, ...) stay saved-only with a fixed slug.
+    # Base ids whose effort level picks the slug's tier suffix.
     _AGY_EFFORT_LEVELS = {
         "gemini-4-carbon": ("low", "medium", "high"),
         "gemini-4-argon": ("low", "medium", "high"),
