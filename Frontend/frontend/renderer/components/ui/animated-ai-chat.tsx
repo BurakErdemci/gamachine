@@ -417,7 +417,13 @@ export function AnimatedChatInput({
     };
 
     const processFile = (file: File) => {
-        if (file.type.startsWith('image/')) {
+        const isVideo = file.type.startsWith('video/')
+            || /\.(mp4|mov|mkv|webm|avi|m4v)$/i.test(file.name);
+        const videoPath = isVideo ? (window as any).ipc?.pathForFile?.(file) : '';
+        if (videoPath) {
+            // Same shape as pickVideoFile: the path is sent, never the bytes.
+            setAttachments(prev => [...prev, { name: file.name, data: '', type: 'video' as const, path: videoPath }]);
+        } else if (file.type.startsWith('image/')) {
             const reader = new FileReader();
             reader.onload = (e) => {
                 const base64Data = e.target?.result as string;

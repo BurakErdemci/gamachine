@@ -33,6 +33,14 @@ const handler = {
     if (!path) return Promise.resolve({ error: 'not-a-folder' })
     return ipcRenderer.invoke('register-dropped-folder', path)
   },
+  pathForFile(file: File): string {
+    // Electron 34 removed File.path; webUtils is the only way to the real path.
+    try {
+      return webUtils.getPathForFile(file) || ''
+    } catch {
+      return ''
+    }
+  },
 }
 
 contextBridge.exposeInMainWorld('ipc', handler)
