@@ -80,7 +80,7 @@ _QUOTA_PATTERN = re.compile(
 # Unknown model as agy 1.5.9 reports it (measured 14 Nov 2026): the account
 # or agy version lacks a slug Gamachine sends, so this is never a typo.
 _MODEL_UNAVAILABLE_PATTERN = re.compile(
-    r"invalid model selection.*?is not recognized as a known model", re.IGNORECASE | re.DOTALL)
+    r"invalid model selection[^\n]*is not recognized as a known model", re.IGNORECASE)
 _AVAILABLE_MODELS_PATTERN = re.compile(
     r"available models:[ \t]*\r?\n((?:[ \t]+\S[^\n]*(?:\n|$))+)", re.IGNORECASE)
 _RESET_PATTERN = re.compile(r"resets?\s+in\s+((?:\d+\s*[dhms]\s*)+)", re.IGNORECASE)
@@ -1461,16 +1461,18 @@ class AgyStreamSession(SaglayiciSahipligi):
                                      "message": side_stop_message(side_code, language)})
                 return
             tail = self._stderr_tail.decode("utf-8", errors="replace").strip()
-            if side:
-                yield _redact_event({"type": "error",
-                                     "message": str(exc) + (f"\n{tail}" if tail else "")})
-                return
             limit = ("idle" if isinstance(exc, _AgyIdleLimit)
                      else "total" if isinstance(exc, asyncio.TimeoutError) else None)
             # Only this turn's failure and stderr decide quota (F1); a replay
             # removed from the answer is an earlier failure with a stale reset.
             raw = "\n".join(part for part in (str(exc), tail) if part)
             quota = None if limit else quota_info(raw)
+            model_unavailable = (not limit and not quota
+                                 and bool(_MODEL_UNAVAILABLE_PATTERN.search(raw)))
+            if side and not model_unavailable:
+                yield _redact_event({"type": "error",
+                                     "message": str(exc) + (f"\n{tail}" if tail else "")})
+                return
             # Held text is the start of the recorded failure: on another quota
             # failure it is that failure's replay, otherwise it streams.
             if (held := replay.end()) and not quota:
@@ -1507,7 +1509,7 @@ class AgyStreamSession(SaglayiciSahipligi):
                     event["changed_files"] = files
                 yield _redact_event(event)
                 return
-            if _MODEL_UNAVAILABLE_PATTERN.search(raw):
+            if model_unavailable:
                 logger.warning("[agy] model unavailable conv=%s model=%s raw=%s",
                                self.conversation_id, model, raw[:4000])
                 yield _redact_event({

@@ -69,6 +69,47 @@ class TestModelUnavailable(_Harness):
         self.assertEqual(len(errors), 1, json.dumps(events))
         self.assertEqual(errors[0]["code"], "agy_quota")
 
+    async def test_a_side_turn_gets_the_same_coded_error(self):
+        self.stderr_by_spawn = [f"error: {UNKNOWN_MODEL_TEXT}\n".encode()]
+        self.plans = [{"turns": [[failed_result(UNKNOWN_MODEL_TEXT, num_turns=0)]], "crash": True}]
+        events = await asyncio.wait_for(self.collect(
+            agy_session.get_session(-5), side=True, model="gemini-4-carbon", language="tr"), 5)
+        errors = [e for e in events if e["type"] == "error"]
+        self.assertEqual(len(errors), 1, events)
+        self.assertEqual(errors[0]["code"], "agy_model_unavailable")
+        self.assertIn("**gemini-4-carbon** modeli Antigravity hesabında kullanılamıyor",
+                      errors[0]["message"])
+        self.assertIn("Hesabının kullanabildiği modeller: " + ", ".join(AVAILABLE) + ".",
+                      errors[0]["message"])
+        self.assertNotIn("invalid model selection", errors[0]["message"])
+
+    async def test_a_side_turn_keeps_the_plain_error_for_other_failures(self):
+        self.plans = [{"turns": [[failed_result("something broke", num_turns=0)]], "crash": True}]
+        events = await asyncio.wait_for(self.collect(
+            agy_session.get_session(-5), side=True, model="gemini-4-carbon", language="en"), 5)
+        errors = [e for e in events if e["type"] == "error"]
+        self.assertEqual(len(errors), 1, events)
+        self.assertNotIn("code", errors[0])
+
+    async def test_the_two_phrases_on_different_lines_do_not_classify(self):
+        text = ('invalid model selection (--model "gemini-4-carbon-high"): rejected\n'
+                "later: gemini-4-carbon-high is not recognized as a known model\n"
+                "Available models:\n  Gemini 4 Argon (High)")
+        events = await self.run_turn(text, "en")
+        errors = [e for e in events if e["type"] == "error"]
+        self.assertEqual(len(errors), 1, events)
+        self.assertNotIn("code", errors[0])
+        self.assertIn("invalid model selection", errors[0]["message"])
+
+    async def test_duplicate_names_in_the_list_are_kept_once_in_order(self):
+        text = UNKNOWN_MODEL_TEXT + "\n  Gemini 4 Argon (Medium)\n  GPT-OSS 120B (Medium)"
+        self.assertEqual(agy_session.model_unavailable_models(text), AVAILABLE)
+        events = await self.run_turn(text, "en")
+        error = [e for e in events if e["type"] == "error"][0]
+        self.assertEqual(error["code"], "agy_model_unavailable")
+        self.assertIn("Models your account can use: " + ", ".join(AVAILABLE) + ".",
+                      error["message"])
+
 
 if __name__ == "__main__":
     unittest.main()
