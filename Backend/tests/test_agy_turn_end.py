@@ -319,8 +319,8 @@ class TestQuota(_Harness):
         self.assertIn("ENOSPC", events[1]["message"])
 
     async def test_side_turn_errors_are_as_before(self):
-        # Side turns keep their 83a7c6b6 error: the raw failure, no quota code,
-        # no main-chat hint, no step summary, no git status.
+        # Side turns get the coded quota message (raw agy text showed before
+        # 4.0.1), still without a step summary or git status.
         self.plans = [{"turns": [[TURNS[0][0], tool(1, "view_file"),
                                   failed_result("Individual quota reached. Resets in 1h.")]]}]
         with patch.object(agy_session, "workspace_state", create=True,
@@ -329,8 +329,9 @@ class TestQuota(_Harness):
                              side_effect=AssertionError("git status on a side turn")):
             events = await asyncio.wait_for(self.collect(
                 agy_session.get_session(-5), side=True, language="en"), 5)
-        self.assertEqual(events[-1], {"type": "error",
-                                      "message": "Individual quota reached. Resets in 1h."})
+        self.assertEqual(events[-1]["code"], "agy_quota")
+        self.assertNotIn("Individual quota reached", events[-1]["message"])
+        self.assertNotIn("changed_files", events[-1])
 
 
 class TestNoStaleQuotaLine(_Harness):

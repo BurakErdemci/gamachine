@@ -1469,6 +1469,12 @@ class AgyStreamSession(SaglayiciSahipligi):
             quota = None if limit else quota_info(raw)
             model_unavailable = (not limit and not quota
                                  and bool(_MODEL_UNAVAILABLE_PATTERN.search(raw)))
+            if side and quota:
+                # A side question shares the account's quota; the main turn's
+                # replay bookkeeping is not touched from here.
+                yield _redact_event({"type": "error", "code": "agy_quota",
+                                     "message": quota_message(quota, model, language)})
+                return
             if side and not model_unavailable:
                 yield _redact_event({"type": "error",
                                      "message": str(exc) + (f"\n{tail}" if tail else "")})

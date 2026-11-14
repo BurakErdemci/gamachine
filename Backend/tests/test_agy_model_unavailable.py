@@ -91,6 +91,28 @@ class TestModelUnavailable(_Harness):
         self.assertEqual(len(errors), 1, events)
         self.assertNotIn("code", errors[0])
 
+    async def test_a_side_turn_on_a_used_up_quota_gets_the_quota_message(self):
+        self.stderr_by_spawn = [(QUOTA_TEXT + "\n").encode()]
+        self.plans = [{"turns": [[failed_result(QUOTA_TEXT, num_turns=0)]], "crash": True}]
+        events = await asyncio.wait_for(self.collect(
+            agy_session.get_session(-5), side=True, model="gemini-4-carbon", language="en"), 5)
+        errors = [e for e in events if e["type"] == "error"]
+        self.assertEqual(len(errors), 1, events)
+        self.assertEqual(errors[0]["code"], "agy_quota")
+        self.assertNotIn("RESOURCE_EXHAUSTED", errors[0]["message"])
+
+    async def test_quota_text_wins_over_the_unknown_model_line(self):
+        text = UNKNOWN_MODEL_TEXT + "\n" + QUOTA_TEXT
+        events = await self.run_turn(text, "en", stderr=text + "\n")
+        errors = [e for e in events if e["type"] == "error"]
+        self.assertEqual(len(errors), 1, events)
+        self.assertEqual(errors[0]["code"], "agy_quota")
+
+    async def test_the_diagnostic_matches_whatever_its_letter_case(self):
+        events = await self.run_turn(UNKNOWN_MODEL_TEXT.upper(), "en")
+        error = [e for e in events if e["type"] == "error"][0]
+        self.assertEqual(error["code"], "agy_model_unavailable")
+
     async def test_the_two_phrases_on_different_lines_do_not_classify(self):
         text = ('invalid model selection (--model "gemini-4-carbon-high"): rejected\n'
                 "later: gemini-4-carbon-high is not recognized as a known model\n"
