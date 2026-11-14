@@ -93,6 +93,9 @@ export interface ComposerDraft { text: string; attachments: ComposerAttachment[]
  * Where drafts are kept per chat. Without a provider (the desktop) the box keeps nothing; the phone
  * shell provides one so a draft survives leaving the chat screen for the list and coming back.
  */
+/** Mirrors ChatRequest.videos max_length in Backend/app/schemas.py; a longer send fails with HTTP 422. */
+const MAX_VIDEOS = 5;
+
 export const ComposerDraftContext = createContext<Map<string, ComposerDraft> | null>(null);
 
 export interface ComposerPickers {
@@ -416,13 +419,32 @@ export function AnimatedChatInput({
         endDictation(true);
     };
 
+    // Videos held right now; bumped synchronously so a multi-file drop or pick counts each file.
+    const videoCountRef = useRef(0);
+    videoCountRef.current = attachments.filter(a => a.type === 'video').length;
+    const [videoCapNotice, setVideoCapNotice] = useState(false);
+
+    /** Adds path videos up to MAX_VIDEOS; anything beyond is dropped with a visible note. */
+    const addVideos = (items: { name: string; path: string }[]) => {
+        const room = Math.max(0, MAX_VIDEOS - videoCountRef.current);
+        const accepted = items.slice(0, room);
+        videoCountRef.current += accepted.length;
+        if (accepted.length < items.length) setVideoCapNotice(true);
+        if (accepted.length > 0) {
+            // Same shape for drop and picker: the path is sent, never the bytes.
+            setAttachments(prev => [...prev, ...accepted.map(v => ({
+                name: v.name, data: '', type: 'video' as const, path: v.path,
+            }))]);
+        }
+    };
+
     const processFile = (file: File) => {
+        // Copy of the "Video" filter in main/background.ts (open-video-dialog); that file is main-process and cannot import this one.
         const isVideo = file.type.startsWith('video/')
             || /\.(mp4|mov|mkv|webm|avi|m4v)$/i.test(file.name);
         const videoPath = isVideo ? (window as any).ipc?.pathForFile?.(file) : '';
         if (videoPath) {
-            // Same shape as pickVideoFile: the path is sent, never the bytes.
-            setAttachments(prev => [...prev, { name: file.name, data: '', type: 'video' as const, path: videoPath }]);
+            addVideos([{ name: file.name, path: videoPath }]);
         } else if (file.type.startsWith('image/')) {
             const reader = new FileReader();
             reader.onload = (e) => {
@@ -449,9 +471,7 @@ export function AnimatedChatInput({
         if (!ipc) return;
         const picked = await ipc.invoke('open-video-dialog');  // [{path, name}] | null
         if (picked && picked.length) {
-            setAttachments(prev => [...prev, ...picked.map((v: any) => ({
-                name: v.name, data: '', type: 'video' as const, path: v.path,
-            }))]);
+            addVideos(picked.map((v: any) => ({ name: v.name, path: v.path })));
         }
     };
 
@@ -774,6 +794,7 @@ export function AnimatedChatInput({
             setInternalValue("");
             setValue("");
             setAttachments([]);
+            setVideoCapNotice(false);
             adjustHeight(true);
         }
     };
@@ -1070,8 +1091,11 @@ export function AnimatedChatInput({
                 )}
             </div>
 
-            {(resolvedMentions.length > 0 || voice.state === 'transcribing' || voice.error) && (
+            {(resolvedMentions.length > 0 || voice.state === 'transcribing' || voice.error || videoCapNotice) && (
                 <div className="composer-notes">
+                    {videoCapNotice && (
+                        <span data-video-cap-note className="composer-note is-error">{t('composer.videoLimit')}</span>
+                    )}
                     {resolvedMentions.length > 0 && (
                         <div
                             data-testid="mention-resolved"
