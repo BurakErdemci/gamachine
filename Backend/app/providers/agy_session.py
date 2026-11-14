@@ -77,6 +77,12 @@ async def _within_idle(awaitable, idle_limit: Optional[float]):
 # once in the result error and again in stderr, so the user saw it three times.
 _QUOTA_PATTERN = re.compile(
     r"resource_exhausted|quota (?:reached|exceeded|exhausted)|\(code 429\)", re.IGNORECASE)
+# Unknown model as agy 1.5.9 reports it (measured 14 Nov 2026): the account
+# or agy version lacks a slug Gamachine sends, so this is never a typo.
+_MODEL_UNAVAILABLE_PATTERN = re.compile(
+    r"invalid model selection.*?is not recognized as a known model", re.IGNORECASE | re.DOTALL)
+_AVAILABLE_MODELS_PATTERN = re.compile(
+    r"available models:[ \t]*\r?\n((?:[ \t]+\S[^\n]*(?:\n|$))+)", re.IGNORECASE)
 _RESET_PATTERN = re.compile(r"resets?\s+in\s+((?:\d+\s*[dhms]\s*)+)", re.IGNORECASE)
 _RESET_UNITS = {"d": 86400, "h": 3600, "m": 60, "s": 1}
 _MONTHS_EN = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -140,6 +146,30 @@ def quota_message(info: dict, model: str, language: str, now: Optional[datetime]
                 "Model seçiciden başka bir model seçip aynı sohbete devam edebilirsin.",
                 "Pick another model in the model selector to continue this chat.")
     return f"{quota}{reset} {hint}"
+
+
+def model_unavailable_models(text: str) -> list:
+    """Display names agy lists after "Available models:", deduplicated, in order."""
+    match = _AVAILABLE_MODELS_PATTERN.search(text or "")
+    names = [line.strip() for line in match.group(1).splitlines()] if match else []
+    return list(dict.fromkeys(name for name in names if name))
+
+
+def model_unavailable_message(model: str, available: list, language: str) -> str:
+    """The account lacks this model: say so and the way on, without agy's raw text."""
+    model = model or "agy"
+    text = _say(language,
+                f"**{model}** modeli Antigravity hesabında kullanılamıyor: aboneliğin bu modeli "
+                "desteklemiyor ya da model hesabına henüz açılmadı. Model seçiciden başka bir "
+                "model seçip bu sohbete devam edebilirsin.",
+                f"**{model}** is not available on your Antigravity account: your subscription "
+                "does not include this model, or it has not reached your account yet. Pick "
+                "another model in the model selector to continue this chat.")
+    if available:
+        names = ", ".join(available)
+        text += " " + _say(language, f"Hesabının kullanabildiği modeller: {names}.",
+                           f"Models your account can use: {names}.")
+    return text
 
 
 def _squeeze(text: str) -> tuple:
@@ -1476,6 +1506,14 @@ class AgyStreamSession(SaglayiciSahipligi):
                 if files:
                     event["changed_files"] = files
                 yield _redact_event(event)
+                return
+            if _MODEL_UNAVAILABLE_PATTERN.search(raw):
+                logger.warning("[agy] model unavailable conv=%s model=%s raw=%s",
+                               self.conversation_id, model, raw[:4000])
+                yield _redact_event({
+                    "type": "error", "code": "agy_model_unavailable",
+                    "message": model_unavailable_message(
+                        model, model_unavailable_models(raw), language)})
                 return
             message = str(exc)
             tail = _dedupe_tail(message, tail)
