@@ -216,4 +216,17 @@ describe('the video limit note and the other ways videos get in', () => {
     rerender(<App id={1} />)
     expect(container.querySelectorAll('.composer-att')).toHaveLength(0)
   })
+
+  it('adds a pick that finishes in the same saved chat', async () => {
+    let finish!: (v: any) => void
+    const invoke = vi.fn(() => new Promise(r => { finish = r }))
+    ;(window as any).ipc = { pathForFile: () => '', invoke }
+    const pickers = React.createRef<ComposerPickers>()
+    const drafts = new Map<string, ComposerDraft>()
+    const { container } = render(
+      <ComposerDraftContext.Provider value={drafts}><Host onSendMessage={vi.fn()} chatId={7} pickersRef={pickers} /></ComposerDraftContext.Provider>)
+    act(() => { pickers.current!.pickVideo() })
+    await act(async () => { finish([{ path: 'C:/a.mp4', name: 'a.mp4' }, { path: 'C:/b.mp4', name: 'b.mp4' }]) })
+    expect(container.querySelectorAll('.composer-att')).toHaveLength(2)
+  })
 })
