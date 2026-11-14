@@ -81,7 +81,7 @@ def test_claude_slash_turn_leaves_a_deferred_rebuild_for_the_next_message(monkey
 
 
 def test_codex_slash_message_reaches_the_session_unchanged(monkeypatch):
-    _unity(monkeypatch, scene="Assets/Live.unity")
+    state = _unity(monkeypatch, scene="Assets/Live.unity")
     sent = []
     monkeypatch.setattr(codex_session, "_SESSIONS", {})
     monkeypatch.setattr(codex_session.CodexSession, "close", AsyncMock())
@@ -102,11 +102,16 @@ def test_codex_slash_message_reaches_the_session_unchanged(monkeypatch):
         return [e async for e in runner._run_codex_session(text)]
 
     # The first turn carries the session guide, so the slash command comes second.
+    # Notes are sent only when they changed (guide-once, 14 Nov 2026): the state
+    # changes before the slash command, whose turn must not use the note up.
     asyncio.run(run("hello"))
+    state.connected = False
+    _prepare(runner)
     asyncio.run(run("/context"))
     asyncio.run(run("hello"))
+    assert NOTE in sent[0]
     assert sent[1] == "/context"
-    assert sent[2].startswith(NOTE)
+    assert sent[2].startswith("Unity now: not responding")
 
 
 def test_agy_slash_message_gets_no_note(monkeypatch):
@@ -129,10 +134,12 @@ def test_agy_slash_message_gets_no_note(monkeypatch):
     async def run(text):
         return [e async for e in runner._run_agy_session(text)]
 
+    # The agy session puts the notes its process lacks in front (agy_session.stream).
     asyncio.run(run("/context"))
+    assert session.turn_notes == ()
     asyncio.run(run("hello"))
-    assert sent[0] == "/context"
-    assert sent[1].startswith(NOTE)
+    assert sent == ["/context", "hello"]
+    assert dict(session.turn_notes)["unity"].startswith(NOTE)
 
 
 def test_oneshot_slash_message_gets_no_note(monkeypatch):

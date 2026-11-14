@@ -104,7 +104,8 @@ def test_agy_message_carries_the_note(monkeypatch):
             seen.append(message)
             yield {"type": "done"}
 
-    monkeypatch.setattr(agy_session, "get_session", lambda cid, **kwargs: _Session())
+    session = _Session()
+    monkeypatch.setattr(agy_session, "get_session", lambda cid, **kwargs: session)
     runner = _prepared(monkeypatch)
     runner.context = ""
 
@@ -112,9 +113,9 @@ def test_agy_message_carries_the_note(monkeypatch):
         return [e async for e in runner._run_agy_session("do the thing")]
 
     asyncio.run(go())
-    assert len(seen) == 1
-    assert seen[0].startswith(runner._unity_note)
-    assert "do the thing" in seen[0]
+    # The note travels as turn_notes: the agy session sends it when its process lacks it.
+    assert seen == ["do the thing"]
+    assert dict(session.turn_notes)["unity"] == runner._unity_note
 
 
 @pytest.mark.parametrize("toggle", [True, False])

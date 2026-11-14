@@ -34,61 +34,40 @@ EXECUTE_CODE_LINES = {
 }
 
 
+# The approval mode left the guide (owner decision, 14 Nov 2026): a mode switch
+# rebuilt the Claude session. The gated rule travels in the mode note instead.
 @pytest.mark.parametrize("language", ["en", "tr"])
-@pytest.mark.parametrize("mode", ["auto", "balanced", "step", "unknown", "AUTO", ""])
-def test_execute_code_line_follows_explicit_approval_mode(monkeypatch, language, mode):
+def test_guide_holds_the_mode_free_execute_code_line_and_never_reads_the_mode(monkeypatch, language):
     from agentic import approval_mode
-    current = Mock(side_effect=AssertionError("explicit mode must not read the store"))
+    current = Mock(side_effect=AssertionError("the guide must not depend on the approval mode"))
     monkeypatch.setattr(approval_mode, "current_mode", current)
     gated, auto = EXECUTE_CODE_LINES[language]
-    result = guide.compose(language, project_open=True, unity_state="connected", approval_mode=mode)
-    assert (auto if mode == "auto" else gated) in result
-    assert (gated if mode == "auto" else auto) not in result
+    result = guide.compose(language, project_open=True, unity_state="connected")
+    assert auto in result and gated not in result
     assert result.count("execute_code") == 1
     current.assert_not_called()
 
 
 @pytest.mark.parametrize("language", ["en", "tr"])
-@pytest.mark.parametrize("mode", ["auto", "step"])
-def test_execute_code_line_reads_global_mode_when_unspecified(monkeypatch, language, mode):
-    from agentic import approval_mode
-    current = Mock(return_value=mode)
-    monkeypatch.setattr(approval_mode, "current_mode", current)
-    gated, auto = EXECUTE_CODE_LINES[language]
-    result = guide.compose(language, project_open=True, unity_state="connected", approval_mode=None)
-    assert (auto if mode == "auto" else gated) in result
-    current.assert_called_once_with()
+@pytest.mark.parametrize("mode", ["auto", "balanced", "step", "unknown", "AUTO", ""])
+def test_gated_execute_code_rule_travels_in_the_mode_note(language, mode):
+    gated, _ = EXECUTE_CODE_LINES[language]
+    rule = guide.EXECUTE_CODE_GATED_EN if language == "en" else guide.EXECUTE_CODE_GATED_TR
+    assert gated.startswith("- " + rule.rstrip("."))
+    note = guide.mode_note(language, mode, unity_tools=True)
+    assert (rule in note) is (mode != "auto")
+    assert rule not in guide.mode_note(language, mode, unity_tools=False)
+    assert "\n" not in note
 
 
 @pytest.mark.parametrize("language", ["en", "tr"])
-def test_execute_code_line_falls_back_when_global_mode_is_unreadable(monkeypatch, language):
+def test_settings_sections_show_the_mode_free_execute_code_line(monkeypatch, language):
+    # The settings page shows what is sent; the gated rule is in the mode note.
     from agentic import approval_mode
-    current = Mock(side_effect=RuntimeError("store unavailable"))
-    monkeypatch.setattr(approval_mode, "current_mode", current)
-    result = guide.compose(language, project_open=True, unity_state="connected")
-    gated, auto = EXECUTE_CODE_LINES[language]
-    assert gated in result and auto not in result
-    current.assert_called_once_with()
-
-
-@pytest.mark.parametrize("language", ["en", "tr"])
-def test_settings_sections_keep_the_gated_execute_code_line(monkeypatch, language):
-    from agentic import approval_mode
-    monkeypatch.setattr(approval_mode, "current_mode", lambda: "auto")
+    monkeypatch.setattr(approval_mode, "current_mode", lambda: "step")
     connected = next(item["text"] for item in guide.sections(language) if item["when"] == "connected")
     gated, auto = EXECUTE_CODE_LINES[language]
-    assert gated in connected and auto not in connected
-
-
-@pytest.mark.parametrize("language", ["en", "tr"])
-@pytest.mark.parametrize("state", ["connected", "off", "not_responding"])
-def test_auto_mode_changes_only_the_connected_section(language, state):
-    gated, auto = EXECUTE_CODE_LINES[language]
-    options = dict(project_open=True, unity_state=state, unity_scene="Assets/Level.unity", addendum=gated)
-    cautious = guide.compose(language, approval_mode="step", **options)
-    automatic = guide.compose(language, approval_mode="auto", **options)
-    assert automatic == (cautious.replace(gated, auto, 1) if state == "connected" else cautious)
-    assert automatic.endswith(gated + "\n\n[/GAMACHINE AGENT GUIDE]")
+    assert auto in connected and gated not in connected
 
 
 def runner(**kwargs):
@@ -125,12 +104,13 @@ def test_fixed_bodies_match_architect_input_verbatim():
     expected = {
         "ALWAYS_en": "ca2f1c21ee47f2134f393f22824f623431909ba3ae0c5f491cbca2afea5bb3da",
         "PROJECT_en": "2d2197b52cb1116d597eb3dbdc6adde7898d8c7f2ded454239a1bb14256cba94",
-        "UNITY_CONNECTED_en": "f62fe770a9a1a0876745a661b0c53b0c6de37ee61db01fae8c967f6c56a99d48",
+        # UNITY_CONNECTED: the gated execute_code line moved to the mode note (14 Nov 2026).
+        "UNITY_CONNECTED_en": "c1168dd4e00b4222e3cc68057b3bd1ddb32382ca4f897618a501422135742b2a",
         "UNITY_OFF_en": "8fb5c1b867dbfdce55c0585b3fbeb856fe412690f75ac6c35373b9456c6124ea",
         "UNITY_NOT_RESPONDING_en": "b6c80d0b19eb651e5fc022d26b70ec8da8ddfccbc76f7a57110e5492aa79e13a",
         "ALWAYS_tr": "fc398c7d39bddc189fec534b336ee3746f90f685fb53e1d8f2ea6329a73f6277",
         "PROJECT_tr": "93164d58e0ce2202c32e2c275fe8ed3854a75b85706dc1b2ca338b431a68914d",
-        "UNITY_CONNECTED_tr": "f641f76928a71eb077c22fa1c437771b97486b11e3f28c2cce412ad2ead14d10",
+        "UNITY_CONNECTED_tr": "62152f9a1c6870fbe7db892bc12a639f19dbfbb66f463dff0d5a6f2a5ec213e5",
         "UNITY_OFF_tr": "9a9acb24462be58dd5f2d0481e1f2b540ea4c696289d4c8672497b3aaa809d05",
         "UNITY_NOT_RESPONDING_tr": "dc045db7b77fc21115ad39e9566e8f554dbb013db583a87e78ef3df21f647df8",
     }

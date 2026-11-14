@@ -17,7 +17,7 @@ ALWAYS_EN = "You are running inside Gamachine, a desktop app that drives coding 
 
 PROJECT_EN = "You work in the user's Unity project folder. Keep game objects real: build levels, characters and UI as GameObjects in scenes or as prefabs, and keep behaviour in scripts. Create objects from code at runtime only when they are truly dynamic (spawned enemies, bullets, pickups). When you build or change game content, save the scenes you changed and the project (including Build Settings) before you finish, and say what you saved."
 
-UNITY_CONNECTED_EN = "You can see and change the open Unity Editor through the Unity MCP tools.\n- Read before you change: find_gameobjects (use the returned instance IDs), the scene/component resources, read_console.\n- Change: manage_gameobject, manage_components (action set_property), manage_scene, manage_prefabs, manage_asset; batch_execute for several independent steps.\n- After writing C# files, call refresh_unity and act only on a clean compile verdict (compile_status); read_console can show 0 errors before Unity has compiled.\n" + EXECUTE_CODE_LINE_EN + "\n- Play what you build, not only read it: play_session start pauses on frame 0; play_step advances N frames with scripted input, `watch`, an `until` condition and a capture of the last frame (play_capture any time), game UI included. Expose state and actions with `[GameHook(\"name\")]` (MCPForUnity.Runtime.Playtest) or GameHooks.State/Action; a hook named `autopilot` returns each frame's input, so a bot can play long stretches. Hooks are part of the game: add them from the first playable version and keep them; write any bot as the `autopilot` hook, not as a command-line mode the tools cannot reach.\n- After every feature, run play_run over several seeds in one batch (until a win or lose hook) and read its summary before you say it works. Use UnityEngine.Random for gameplay randomness and never seed it from the clock: play_run seeds it, so the same seed gives the same start; runs can still drift (frame counters, effects drawing from the same Random), so compare batches, not single frames.\n- A bot proves the game works, not that it is fun: once a build is playable, ask the user to play it for ~10 minutes and tell you what feels off.\n- unity_window_capture shows the whole editor (Console, Inspector, Game view) and open dialogs, even while Unity is blocked.\n- A build blocks Unity until it ends: follow it with manage_build (action wait, job_id), not repeated status calls.\n- Save open scenes (manage_scene, action save) before code or menu items that open or rebuild scenes: an unsaved scene opens a dialog that blocks Unity.\n- If a call says Unity shows a dialog, nothing runs until it is answered: read it with unity_dialog (list), answer with unity_dialog (press). Save if the changes are yours, Cancel if unsure; never Don't Save/Discard unless the user asked. A refused call may still run once the dialog closes: check its effect before resending."
+UNITY_CONNECTED_EN = "You can see and change the open Unity Editor through the Unity MCP tools.\n- Read before you change: find_gameobjects (use the returned instance IDs), the scene/component resources, read_console.\n- Change: manage_gameobject, manage_components (action set_property), manage_scene, manage_prefabs, manage_asset; batch_execute for several independent steps.\n- After writing C# files, call refresh_unity and act only on a clean compile verdict (compile_status); read_console can show 0 errors before Unity has compiled.\n" + EXECUTE_CODE_AUTO_LINE_EN + "\n- Play what you build, not only read it: play_session start pauses on frame 0; play_step advances N frames with scripted input, `watch`, an `until` condition and a capture of the last frame (play_capture any time), game UI included. Expose state and actions with `[GameHook(\"name\")]` (MCPForUnity.Runtime.Playtest) or GameHooks.State/Action; a hook named `autopilot` returns each frame's input, so a bot can play long stretches. Hooks are part of the game: add them from the first playable version and keep them; write any bot as the `autopilot` hook, not as a command-line mode the tools cannot reach.\n- After every feature, run play_run over several seeds in one batch (until a win or lose hook) and read its summary before you say it works. Use UnityEngine.Random for gameplay randomness and never seed it from the clock: play_run seeds it, so the same seed gives the same start; runs can still drift (frame counters, effects drawing from the same Random), so compare batches, not single frames.\n- A bot proves the game works, not that it is fun: once a build is playable, ask the user to play it for ~10 minutes and tell you what feels off.\n- unity_window_capture shows the whole editor (Console, Inspector, Game view) and open dialogs, even while Unity is blocked.\n- A build blocks Unity until it ends: follow it with manage_build (action wait, job_id), not repeated status calls.\n- Save open scenes (manage_scene, action save) before code or menu items that open or rebuild scenes: an unsaved scene opens a dialog that blocks Unity.\n- If a call says Unity shows a dialog, nothing runs until it is answered: read it with unity_dialog (list), answer with unity_dialog (press). Save if the changes are yours, Cancel if unsure; never Don't Save/Discard unless the user asked. A refused call may still run once the dialog closes: check its effect before resending."
 
 UNITY_OFF_EN = "Unity tools are switched off in Gamachine, so you cannot see the editor, its console or compile results. Do not guess editor state. Work with files only, say what needs checking in Unity, and ask the user to turn the Unity switch on if the task needs the editor."
 
@@ -27,7 +27,7 @@ ALWAYS_TR = "Gamachine içinde çalışıyorsun: Unity oyun geliştirme için ko
 
 PROJECT_TR = "Kullanıcının Unity proje klasöründe çalışıyorsun. Oyun nesneleri gerçek olsun: bölümleri, karakterleri ve arayüzü sahnede GameObject ya da prefab olarak kur, davranışı script'lerde tut. Nesneleri çalışma anında koddan yalnızca gerçekten dinamik olduklarında oluştur (doğan düşmanlar, mermiler, toplanabilirler). Oyun içeriği kurduğunda ya da değiştirdiğinde, bitirmeden önce değiştirdiğin sahneleri ve projeyi (Build Settings dahil) kaydet ve neyi kaydettiğini söyle."
 
-UNITY_CONNECTED_TR = "Açık Unity Editor'ü Unity MCP araçlarıyla görebilir ve değiştirebilirsin.\n- Değiştirmeden önce oku: find_gameobjects (dönen instance ID'leri kullan), sahne/bileşen kaynakları, read_console.\n- Değiştir: manage_gameobject, manage_components (action set_property), manage_scene, manage_prefabs, manage_asset; bağımsız adımlar için batch_execute.\n- C# dosyası yazınca refresh_unity çağır, yalnız temiz derleme sonucuyla (compile_status) ilerle; read_console Unity derlemeden 0 hata gösterebilir.\n" + EXECUTE_CODE_LINE_TR + "\n- Yaptığını yalnız okuyarak değil oynayarak test et: play_session start 0. karede durur; play_step N kare ilerletir, hazır girdi, `watch`, `until` koşulu alır ve son kareyi oyun arayüzüyle birlikte yakalar (play_capture her an). Durum ve eylemleri `[GameHook(\"ad\")]` (MCPForUnity.Runtime.Playtest) ya da GameHooks.State/Action ile aç; `autopilot` adlı kanca her karenin girdisini döndürür, böylece bot uzun bölümler oynar. Kancalar oyunun parçasıdır: ilk oynanabilir sürümden itibaren ekle ve kaldırma; botu araçların ulaşamadığı bir komut satırı modu olarak değil `autopilot` kancası olarak yaz.\n- Her özellikten sonra play_run ile birkaç tohumda tek toplu koşu yap (kazanma ya da kaybetme kancasına kadar) ve çalışıyor demeden önce özetini oku. Oyundaki rastgelelik için UnityEngine.Random kullan, onu saatten tohumlama: play_run onu tohumlar, aynı tohum aynı başlangıcı verir; koşular yine de ayrışabilir (kare sayaçları, aynı Random'u tüketen efektler), o yüzden tek kareleri değil toplu koşuları karşılaştır.\n- Bot oyunun çalıştığını kanıtlar, eğlenceli olduğunu değil: build oynanabilir olunca kullanıcıdan ~10 dakika oynayıp neyin tuhaf geldiğini söylemesini iste.\n- unity_window_capture Unity kilitliyken bile tüm editörü (Console, Inspector, Game görünümü) ve açık diyalogları gösterir.\n- Build bitene kadar Unity'yi kilitler: tekrar tekrar status yerine manage_build (action wait, job_id) ile bekle.\n- Sahne açan ya da yeniden kuran kod veya menü komutundan önce açık sahneleri kaydet (manage_scene, action save): kaydedilmemiş sahne Unity'yi kilitleyen bir diyalog açar.\n- Bir çağrı Unity'nin diyalog gösterdiğini söylerse, cevaplanana kadar hiçbir şey çalışmaz: unity_dialog (list) ile oku, unity_dialog (press) ile cevapla. Değişiklik seninse Save, emin değilsen Cancel; kullanıcı istemedikçe Don't Save/Discard'a basma. Reddedilen çağrı diyalog kapanınca çalışabilir; tekrar göndermeden etkisine bak."
+UNITY_CONNECTED_TR = "Açık Unity Editor'ü Unity MCP araçlarıyla görebilir ve değiştirebilirsin.\n- Değiştirmeden önce oku: find_gameobjects (dönen instance ID'leri kullan), sahne/bileşen kaynakları, read_console.\n- Değiştir: manage_gameobject, manage_components (action set_property), manage_scene, manage_prefabs, manage_asset; bağımsız adımlar için batch_execute.\n- C# dosyası yazınca refresh_unity çağır, yalnız temiz derleme sonucuyla (compile_status) ilerle; read_console Unity derlemeden 0 hata gösterebilir.\n" + EXECUTE_CODE_AUTO_LINE_TR + "\n- Yaptığını yalnız okuyarak değil oynayarak test et: play_session start 0. karede durur; play_step N kare ilerletir, hazır girdi, `watch`, `until` koşulu alır ve son kareyi oyun arayüzüyle birlikte yakalar (play_capture her an). Durum ve eylemleri `[GameHook(\"ad\")]` (MCPForUnity.Runtime.Playtest) ya da GameHooks.State/Action ile aç; `autopilot` adlı kanca her karenin girdisini döndürür, böylece bot uzun bölümler oynar. Kancalar oyunun parçasıdır: ilk oynanabilir sürümden itibaren ekle ve kaldırma; botu araçların ulaşamadığı bir komut satırı modu olarak değil `autopilot` kancası olarak yaz.\n- Her özellikten sonra play_run ile birkaç tohumda tek toplu koşu yap (kazanma ya da kaybetme kancasına kadar) ve çalışıyor demeden önce özetini oku. Oyundaki rastgelelik için UnityEngine.Random kullan, onu saatten tohumlama: play_run onu tohumlar, aynı tohum aynı başlangıcı verir; koşular yine de ayrışabilir (kare sayaçları, aynı Random'u tüketen efektler), o yüzden tek kareleri değil toplu koşuları karşılaştır.\n- Bot oyunun çalıştığını kanıtlar, eğlenceli olduğunu değil: build oynanabilir olunca kullanıcıdan ~10 dakika oynayıp neyin tuhaf geldiğini söylemesini iste.\n- unity_window_capture Unity kilitliyken bile tüm editörü (Console, Inspector, Game görünümü) ve açık diyalogları gösterir.\n- Build bitene kadar Unity'yi kilitler: tekrar tekrar status yerine manage_build (action wait, job_id) ile bekle.\n- Sahne açan ya da yeniden kuran kod veya menü komutundan önce açık sahneleri kaydet (manage_scene, action save): kaydedilmemiş sahne Unity'yi kilitleyen bir diyalog açar.\n- Bir çağrı Unity'nin diyalog gösterdiğini söylerse, cevaplanana kadar hiçbir şey çalışmaz: unity_dialog (list) ile oku, unity_dialog (press) ile cevapla. Değişiklik seninse Save, emin değilsen Cancel; kullanıcı istemedikçe Don't Save/Discard'a basma. Reddedilen çağrı diyalog kapanınca çalışabilir; tekrar göndermeden etkisine bak."
 
 UNITY_OFF_TR = "Gamachine'de Unity araçları kapalı; editörü, konsolunu ve derleme sonuçlarını göremezsin. Editör durumunu tahmin etme. Yalnız dosyalarla çalış, Unity'de neyin kontrol edilmesi gerektiğini söyle; iş editör gerektiriyorsa kullanıcıdan Unity anahtarını açmasını iste."
 
@@ -184,6 +184,9 @@ def get_addendum() -> str | None:
 
 
 def provider_guide(provider, *, project_open: bool, unity_running: bool) -> str:
+    if getattr(provider, "_guide_known", False):
+        # A resumed CLI conversation already holds the guide (agent_runner).
+        return ""
     guide = getattr(provider, "_agent_guide", None)
     if not guide:
         try:
@@ -210,7 +213,8 @@ def valid_scene(scene) -> bool:
 
 
 def unity_note(language: str, unity_state: str, scene: str | None = None) -> str:
-    """One per-turn line with the live Unity state (the caller adds it only while the toggle is on). Kept out of the guide: the
+    """One line with the live Unity state (the caller adds it only while the toggle is on, and a session's model
+    hears it again only when it changed: Briefing). Kept out of the guide: the
     guide must not change on a reconnect or a scene switch, or the session is rebuilt."""
     en = language == "en"
     if unity_state == "connected":
@@ -225,15 +229,73 @@ def unity_note(language: str, unity_state: str, scene: str | None = None) -> str
     return "Unity now: not running" if en else "Unity şu an: çalışmıyor"
 
 
+EXECUTE_CODE_GATED_EN = "Prefer manage_* tools and batch_execute: in this approval mode every execute_code call (arbitrary C# in the Editor) opens an approval card."
+EXECUTE_CODE_GATED_TR = "Önce manage_* araçlarını ve batch_execute'u dene: bu modda her execute_code çağrısı (Editor'de keyfi C#) onay kartı açar."
+assert EXECUTE_CODE_LINE_EN.startswith("- " + EXECUTE_CODE_GATED_EN[:-1])
+assert EXECUTE_CODE_LINE_TR.startswith("- " + EXECUTE_CODE_GATED_TR)
+
+_MODE_NOTES = {
+    "en": {"auto": "Approval mode now: auto (no approval cards).",
+           "balanced": "Approval mode now: balanced (only critical actions open an approval card).",
+           "step": "Approval mode now: step (every change opens an approval card)."},
+    "tr": {"auto": "Onay modu şu an: otomatik (onay kartı yok).",
+           "balanced": "Onay modu şu an: dengeli (yalnız kritik işlemler onay kartı açar).",
+           "step": "Onay modu şu an: adım adım (her değişiklik onay kartı açar)."},
+}
+
+
+def mode_note(language: str, mode: str, unity_tools: bool) -> str:
+    """The approval mode as a note: stated once per session and again only when it changes.
+    An unknown mode reads as step, the cautious one."""
+    lang = "en" if language == "en" else "tr"
+    mode = mode if mode in ("auto", "balanced", "step") else "step"
+    note = _MODE_NOTES[lang][mode]
+    if unity_tools and mode != "auto":
+        note += " " + (EXECUTE_CODE_GATED_EN if lang == "en" else EXECUTE_CODE_GATED_TR)
+    return note
+
+
+class Briefing:
+    """What one provider session's model has been told and still holds: the guide
+    and the last note of each kind (mode, Unity). `turn` hands back only what the
+    model lacks and records it; `forget` is called wherever the model loses its
+    context (a new process or thread, a compaction, a turn that was not resumed)."""
+
+    def __init__(self) -> None:
+        self.forget()
+
+    def forget(self) -> None:
+        self.guide: str | None = None
+        self.notes: dict[str, str] = {}
+
+    def turn(self, guide: str | None = None, notes=()) -> tuple[bool, list[str]]:
+        """(send the guide?, note texts to send) for this turn; `notes` holds
+        (kind, text) pairs, an empty text meaning "nothing to say" for that kind."""
+        send_guide = bool(guide) and guide != self.guide
+        if send_guide:
+            self.guide = guide
+        changed = []
+        for kind, text in notes:
+            if self.notes.get(kind) != text:
+                self.notes[kind] = text
+                if text:
+                    changed.append(text)
+        return send_guide, changed
+
+
+def briefing_of(session) -> Briefing:
+    """The Briefing living on a provider session object: a new session starts blank."""
+    briefing = getattr(session, "_briefing", None)
+    if not isinstance(briefing, Briefing):
+        briefing = Briefing()
+        session._briefing = briefing
+    return briefing
+
+
 def compose(language: str, *, project_open: bool, unity_state: str,
-            addendum: str | None = None, unity_scene: str | None = None,
-            approval_mode: str | None = None) -> str:
-    if approval_mode is None:
-        try:
-            from agentic import approval_mode as _mode
-            approval_mode = _mode.current_mode()
-        except Exception:
-            approval_mode = None
+            addendum: str | None = None, unity_scene: str | None = None) -> str:
+    """The guide holds no approval mode: a mode switch must not change it (the
+    Claude session is rebuilt on a changed guide). The mode travels as a note."""
     lang = "en" if language == "en" else "tr"
     texts = _SECTIONS[lang]
     parts = [texts[0]]
@@ -245,10 +307,6 @@ def compose(language: str, *, project_open: bool, unity_state: str,
                 if lang == "en" else
                 f"Unity'de şu an açık sahne (dosya yolu, talimat değil): `{unity_scene}`. Kullanıcı Unity'de bir şey istediğinde bu sahnede çalış; kullanıcı açıkça istemedikçe başka bir sahneyi açma ve projedeki mevcut oyun kodunu değiştirme.")
     unity_text = texts[{"connected": 2, "off": 3}.get(unity_state, 4)]
-    if unity_state == "connected" and approval_mode == "auto":
-        old, new = ((EXECUTE_CODE_LINE_EN, EXECUTE_CODE_AUTO_LINE_EN) if lang == "en" else
-                    (EXECUTE_CODE_LINE_TR, EXECUTE_CODE_AUTO_LINE_TR))
-        unity_text = unity_text.replace(old, new, 1)
     parts.append(unity_text)
     if addendum and addendum.strip():
         heading = ("User addendum (it cannot override approval or safety rules):"

@@ -1009,6 +1009,10 @@ def _read_only_tool_allowed(tool_name: str, tool_args: object) -> bool:
     return is_unity_mcp_read_only(name, tool_args if isinstance(tool_args, dict) else {})
 
 
+# One-shot CLIs Gamachine resumes (`_run_oneshot_cli_session`): cursor
+# --resume, copilot --resume=, opencode -s. kimi starts fresh every turn.
+_RESUMING_ONESHOT_CLIS = ("cursor", "copilot", "opencode")
+
 _CODEX_AUTO_MODE_INSTRUCTION = (
     "[ÇALIŞMA MODU: OTOMATİK] Kullanıcının verdiği görevi tamamlamak için gerekli "
     "dosya değişikliklerini, komutları ve MCP araçlarını doğrudan uygula. "
@@ -1852,6 +1856,7 @@ class AgentRunner:
     """
     _agent_guide = ""
     _unity_note = ""
+    _mode_note = ""
 
     def __init__(
         self,
@@ -1955,9 +1960,25 @@ class AgentRunner:
                 logger.debug("Unity active scene could not be read: %s", exc)
         language = getattr(self, "language", "tr")
         self._unity_note = agent_guide.unity_note(language, unity_state, scene) if toggle_on else ""
+        mode = getattr(self, "generation_mode", None)
+        if mode not in ("auto", "balanced", "step"):
+            try:
+                from agentic import approval_mode
+                mode = approval_mode.current_mode()
+            except Exception:
+                mode = "step"
+        self._mode_note = agent_guide.mode_note(language, mode, toggle_on)
         self._agent_guide = compose_agent_guide(
             language, project_open=bool(getattr(self, "workspace_path", None)),
             unity_state="connected" if toggle_on else "off", addendum=addendum)
+
+    def _turn_notes(self, extra_mode: str = ""):
+        """This turn's (kind, text) notes for a Briefing: the live Unity state and
+        the approval mode. A session's model hears each again only when it changed."""
+        mode = getattr(self, "_mode_note", "")
+        if mode and extra_mode:
+            mode = f"{mode}\n\n{extra_mode}"
+        return (("unity", getattr(self, "_unity_note", "")), ("mode", mode))
 
     def _get_architect_wisdom(self) -> str:
         """
@@ -2507,7 +2528,8 @@ class AgentRunner:
             parts.append(f"[Earlier conversation summary]\n{self.api_memory}")
         system = "\n\n".join(parts)
         guide = toolset.with_guide(self._agent_guide) if toolset is not None else self._agent_guide
-        note = getattr(self, "_unity_note", "")
+        # Rebuilt per request and never stored in history: the current notes every time.
+        note = "\n\n".join(text for _, text in self._turn_notes() if text)
         return (system + "\n\n" + guide + (f"\n\n{note}" if note else "")
                 + self._get_architect_wisdom() + self._identity_note())
 
@@ -2839,8 +2861,9 @@ class AgentRunner:
             provider._agent_guide = self._agent_guide
             provider._language = getattr(self, "language", "tr")
 
-            if getattr(self, "_unity_note", "") and not _is_slash_command(user_message):
-                user_message = f"{self._unity_note}\n\n{user_message}"
+            _notes = [text for _, text in self._turn_notes() if text]
+            if _notes and not _is_slash_command(user_message):
+                user_message = "\n\n".join(_notes + [user_message])
             prompt = f"{_PRODUCT_PROMPT}\n\n[BAĞLAM]\n{self.context}\n\n[KULLANICI]\n{user_message}"
 
             if self.provider_type == "subscription":
@@ -2923,8 +2946,8 @@ class AgentRunner:
         if image_paths:
             message += "\n\nAttached images; open these files to inspect them:\n"
             message += "\n".join(f"- {path}" for path in image_paths)
-        if getattr(self, "_unity_note", "") and not _is_slash_command(user_message):
-            message = f"{self._unity_note}\n\n{message}"
+        # The agy session sends the guide and the notes its process lacks.
+        session.turn_notes = () if _is_slash_command(user_message) else self._turn_notes()
         turn_complete = False
         session.agent_guide = self._agent_guide
         try:
@@ -2987,6 +3010,7 @@ class AgentRunner:
             p._conversation_id = self.conversation_id
             p._read_only = _read_only
             p._agent_guide = _cli_guide
+            p._guide_known = _guide_known
             p._language = getattr(self, "language", "tr")
             return p
 
@@ -2994,6 +3018,7 @@ class AgentRunner:
         # mcp hint; a side turn is fitted and refused in those units (fits/text).
         # The guide travels in the same argv, so its UTF-16 length comes off the cap.
         _read_only = bool(getattr(self, "read_only", False))
+        _guide_known = False
         _cli_guide = self._agent_guide
         if _cli_guide and not _read_only:
             from computer_use import registration as _computer_reg
@@ -3005,8 +3030,8 @@ class AgentRunner:
                 _cli_guide = agent_guide.with_browser_use(_cli_guide)
             if _connectors_reg.stdio_entry() is not None:
                 _cli_guide = agent_guide.with_connectors(_cli_guide)
-        _unity_note = getattr(self, "_unity_note", "")
-        _guide_units = len(((_cli_guide or "") + _unity_note).encode("utf-16-le")) // 2
+        _note_text = "\n\n".join(text for _, text in self._turn_notes())
+        _guide_units = len(((_cli_guide or "") + _note_text).encode("utf-16-le")) // 2
         _prompt_cap = 24000 - _guide_units
         if _prompt_cap < _MIN_ONESHOT_PROMPT_UNITS or (
                 getattr(self, "side_turn", None) is not None and not self.side_turn.fits(_prompt_cap)):
@@ -3019,6 +3044,15 @@ class AgentRunner:
         sess = get_session(cli_key, self.conversation_id)
         sess.auto_approve = (getattr(self, "generation_mode", "auto") == "auto")
         provider.resume_session_id = sess.session_id
+        # Only a resumed CLI conversation holds what earlier turns told it; every
+        # other turn (kimi, a first or reset turn) gets the guide and all notes.
+        _briefing = agent_guide.briefing_of(sess)
+        if not (cli_key in _RESUMING_ONESHOT_CLIS and provider.resume_session_id):
+            _briefing.forget()
+        _send_guide, _notes = _briefing.turn(
+            _cli_guide, () if _is_slash_command(user_message) else self._turn_notes())
+        _guide_known = bool(_cli_guide) and not _send_guide
+        provider._guide_known = _guide_known
         if cli_key == "copilot" and not sess.session_id:
             # Copilot'ta session UUID'ini BİZ üretiriz (--session-id) → yakalama derdi yok.
             import uuid as _uuid
@@ -3061,8 +3095,8 @@ class AgentRunner:
             enriched_prompt += ("\n\n[EKLİ GÖRSELLER] Kullanıcı bu turda görsel ekledi. "
                                 "İncelemen için (read aracıyla aç):\n" + _lines)
 
-        if _unity_note and not _is_slash_command(user_message):
-            enriched_prompt = f"{_unity_note}\n\n{enriched_prompt}"
+        if _notes:
+            enriched_prompt = "\n\n".join(_notes + [enriched_prompt])
 
         # Effort seviyesi provider'a attr olarak geçer (agy _resume_uuid deseni):
         # copilot _build_cmd --effort'a, opencode _register_mcp opencode.json'a çevirir.
@@ -3425,8 +3459,10 @@ class AgentRunner:
                     self.session_reset_notice = "\n".join(filter(None, (self.session_reset_notice, _reset_notice)))
                 if self.session_reset_notice:
                     message = f"{self.session_reset_notice}\n\n{message}"
-                if getattr(self, "_unity_note", ""):
-                    message = f"{self._unity_note}\n\n{message}"
+                # The guide sits in the system prompt; the notes say what changed.
+                _, _notes = agent_guide.briefing_of(session).turn(notes=self._turn_notes())
+                if _notes:
+                    message = "\n\n".join(_notes + [message])
                 if _defer_note:
                     message = f"{_defer_note}\n\n{message}"
 
@@ -3439,6 +3475,9 @@ class AgentRunner:
                 cleanup_dir(_att_dir)
                 return
             except Exception as e:
+                if _yielded == 0:
+                    # The notes may never have reached the model: say them again.
+                    agent_guide.briefing_of(session).forget()
                 if (isinstance(e, SessionBusyError) and _yielded == 0
                         and getattr(self, "task_wake", False) and not session._broken):
                     # A wake never resets the session: the route queues it again.
@@ -3720,27 +3759,35 @@ class AgentRunner:
             message = self.side_turn.text(full=first_turn or _handoff)
         elif self.context and (first_turn or _handoff):
             message = f"{user_message}\n\n{_HANDOFF_HEADER}\n{self.context}"
-        if first_turn:
-            if self._agent_guide:
-                _session_guide = (
-                    agent_guide.with_computer_use(self._agent_guide)
-                    if desired_computer_use else self._agent_guide
-                )
-                if desired_browser_use:
-                    _session_guide = agent_guide.with_browser_use(_session_guide)
-                if desired_connectors[0]:
-                    _session_guide = agent_guide.with_connectors(_session_guide)
-                message = _session_guide + "\n\n" + message
-            session._ctx_injected = True
-        if getattr(self, "_unity_note", "") and not _is_slash_command(user_message):
-            message = f"{self._unity_note}\n\n{message}"
+        session._ctx_injected = True
+        _session_guide = self._agent_guide
+        if _session_guide:
+            if desired_computer_use:
+                _session_guide = agent_guide.with_computer_use(_session_guide)
+            if desired_browser_use:
+                _session_guide = agent_guide.with_browser_use(_session_guide)
+            if desired_connectors[0]:
+                _session_guide = agent_guide.with_connectors(_session_guide)
+        # The thread holds the guide from its first turn until a compaction
+        # (codex_session forgets it there) or a new thread on a dead app-server.
+        _briefing = agent_guide.briefing_of(session)
+        if not getattr(session, "is_live", True):
+            _briefing.forget()
+        # Native requestApproval zaten otomatik kabul ediliyor (balanced'da
+        # rutin olanlar; kritik olan kartla sorulur). Bu kısa talimat
+        # modelin ayrıca metin içinde "yapayım mı?" diye durmasını engeller.
+        _auto_text = (_CODEX_AUTO_MODE_INSTRUCTION
+                      if self.generation_mode in ("auto", "balanced") and not getattr(self, "read_only", False)
+                      else "")
+        _send_guide, _notes = _briefing.turn(
+            _session_guide,
+            () if _is_slash_command(user_message) else self._turn_notes(extra_mode=_auto_text))
+        if _notes:
+            message = "\n\n".join(_notes + [message])
+        if _send_guide:
+            message = _session_guide + "\n\n" + message
         if _defer_note:
             message = f"{_defer_note}\n\n{message}"
-        if self.generation_mode in ("auto", "balanced") and not getattr(self, "read_only", False):
-            # Native requestApproval zaten otomatik kabul ediliyor (balanced'da
-            # rutin olanlar; kritik olan kartla sorulur). Bu kısa talimat
-            # modelin ayrıca metin içinde "yapayım mı?" diye durmasını engeller.
-            message = f"{message}\n\n{_CODEX_AUTO_MODE_INSTRUCTION}"
 
         # Görseller Codex'e native 'localImage' input item'ı olarak gider → dosya yolu
         # gerekiyor. Base64'leri tura özel temp klasörüne yaz; tur sonunda temizle.
@@ -3768,6 +3815,8 @@ class AgentRunner:
                 yield _normalize_session_event(etype, ev)
         except Exception as e:
             logger.exception("[CodexSession] stream hatası")
+            # The thread may never have taken this turn: send guide and notes again.
+            _briefing.forget()
             # ⚠️ `redact_secrets` ŞART — gerekçe Claude yolundaki ikiziyle (bkz.
             # `_run_claude_session` istisna dalı) birebir aynı: bu metin SSE ile
             # tarayıcıya gidiyor ve oturum yapılandırması unityMCP `X-API-Key`'ini

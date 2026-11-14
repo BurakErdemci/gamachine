@@ -1509,6 +1509,9 @@ class CodexSession:
         if method == "thread/compacted" or (
                 method == "item/completed"
                 and (params.get("item") or {}).get("type") == "contextCompaction"):
+            # The summary drops the guide and notes of the first turn: the next turn sends them again.
+            import agent_guide
+            agent_guide.briefing_of(self).forget()
             self._compacted_event.set()
             return
 

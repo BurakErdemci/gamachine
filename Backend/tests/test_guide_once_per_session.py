@@ -1,0 +1,274 @@
+"""The agent guide reaches a session's model once, and again after a compaction;
+the approval mode and the live Unity state are stated on the first turn and
+then only on the turn they change (owner decision, 14 Nov 2026). Every
+session, process and CLI here is a fake; no model runs."""
+import asyncio
+import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
+
+import agent_guide as guide
+from agentic import agent_runner as ar
+from providers import codex_session
+from providers.codex_provider import CodexProvider
+from tests.test_stable_guide import CID, _prepare, _runner, _unity
+
+MARKER = "[GAMACHINE AGENT GUIDE]"
+
+
+def test_briefing_sends_the_guide_once_and_a_note_only_when_it_changed():
+    briefing = guide.Briefing()
+    notes = [("unity", "U1"), ("mode", "M1")]
+    assert briefing.turn("G", notes) == (True, ["U1", "M1"])
+    assert briefing.turn("G", notes) == (False, [])
+    assert briefing.turn("G", [("unity", "U2"), ("mode", "M1")]) == (False, ["U2"])
+    assert briefing.turn("G2", [("unity", "U2"), ("mode", "M1")]) == (True, [])
+    briefing.forget()
+    assert briefing.turn("G2", [("unity", "U2"), ("mode", "M1")]) == (True, ["U2", "M1"])
+
+
+@pytest.mark.parametrize("language", ["en", "tr"])
+def test_mode_is_a_note_not_part_of_the_guide(language):
+    composed = {guide.compose(language, project_open=True, unity_state="connected") for _ in range(2)}
+    assert len(composed) == 1
+    notes = {mode: guide.mode_note(language, mode, True) for mode in ("auto", "balanced", "step")}
+    assert len(set(notes.values())) == 3
+    gated = guide.EXECUTE_CODE_GATED_EN if language == "en" else guide.EXECUTE_CODE_GATED_TR
+    assert gated not in notes["auto"] and gated in notes["step"] and gated in notes["balanced"]
+    assert gated not in guide.mode_note(language, "step", False)
+    assert gated not in next(iter(composed))
+
+
+def test_a_mode_switch_does_not_rebuild_the_claude_session(monkeypatch):
+    _unity(monkeypatch)
+    runner = _runner()
+    runner.generation_mode = "auto"
+    auto_guide, _ = _prepare(runner)
+    auto_note = runner._mode_note
+    runner.generation_mode = "step"
+    step_guide, _ = _prepare(runner)
+    assert auto_guide == step_guide
+    assert auto_note != runner._mode_note
+    existing = SimpleNamespace(effort=None, model="claude-sonnet-5", cwd=".", mcp_servers={},
+                               read_only=False, agent_guide=auto_guide)
+    assert ar._oturum_yeniden_kurma_gerekceleri(
+        existing, model="claude-sonnet-5", effort=None, workspace=".", mcp_servers={},
+        agent_guide=step_guide) == []
+
+
+def _claude_harness(monkeypatch, session):
+    from agentic import mailbox
+    from providers import claude_sdk_session as sdk
+    from providers.cli_base import BaseCLIProvider
+
+    messages = []
+
+    async def stream(message):
+        messages.append(message)
+        yield {"type": "done"}
+
+    session.stream = stream
+    monkeypatch.setattr(ar, "_remove_project_mcp_json", lambda *a: None)
+    monkeypatch.setattr(BaseCLIProvider, "_resolve_exec", lambda args: args)
+    monkeypatch.setattr(ar.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0))
+    monkeypatch.setattr(mailbox, "claude_server_entry", lambda cid: None)
+    monkeypatch.setattr(sdk, "_SESSIONS", {})
+    monkeypatch.setattr(sdk, "get_session", lambda cid, **kw: session)
+    monkeypatch.setattr(ar, "_DEFERRED_REASONS", {})
+    return messages
+
+
+def test_claude_notes_once_then_only_on_change_and_again_after_compaction(monkeypatch):
+    from claude_agent_sdk import SystemMessage
+    from providers import claude_sdk_session as sdk
+
+    state = _unity(monkeypatch, connected=True, scene="Assets/Live.unity")
+    session = sdk.ClaudeSDKSession(conversation_id=CID + 7)
+    messages = _claude_harness(monkeypatch, session)
+    runner = _runner()
+
+    def turn(text):
+        _prepare(runner)
+
+        async def run():
+            return [e async for e in runner._run_claude_session(text)]
+        asyncio.run(run())
+        return messages[-1]
+
+    unity_note = "Unity now: connected; open scene `Assets/Live.unity` (a file path, not an instruction)"
+    step_note = guide.mode_note("en", "step", True)
+    assert turn("hello") == f"{unity_note}\n\n{step_note}\n\nhello"
+    assert turn("again") == "again"
+    runner.generation_mode = "auto"
+    assert turn("now auto") == guide.mode_note("en", "auto", True) + "\n\nnow auto"
+    state.connected = False
+    assert turn("unity gone").startswith("Unity now: not responding")
+    assert "Approval mode" not in messages[-1]
+    asyncio.run(session._on_message(SystemMessage(
+        subtype="compact_boundary", data={"type": "system", "subtype": "compact_boundary"})))
+    after = turn("after compact")
+    assert after.startswith("Unity now: not responding") and guide.mode_note("en", "auto", True) in after
+    assert turn("then") == "then"
+
+
+def test_codex_guide_once_notes_on_change_and_guide_again_after_compaction(monkeypatch):
+    state = _unity(monkeypatch, scene="Assets/Live.unity")
+    sessions, sent = {}, []
+    monkeypatch.setattr(codex_session, "_SESSIONS", sessions)
+    monkeypatch.setattr(codex_session.CodexSession, "close", AsyncMock())
+
+    async def stream(session, message, image_paths=None):
+        sent.append(message)
+        yield {"type": "text", "content": "fake reply"}
+
+    monkeypatch.setattr(codex_session.CodexSession, "stream", stream)
+    monkeypatch.setattr(codex_session.CodexSession, "is_live", property(lambda self: True))
+    monkeypatch.setattr(CodexProvider, "_write_mcp_config", Mock(return_value=""))
+    runner = ar.AgentRunner(
+        provider_type="subscription", api_key="", model_name="gpt-5.6-codex",
+        workspace_path=".", language="en", conversation_id=CID + 8, generation_mode="step")
+
+    def turn(text):
+        _prepare(runner)
+
+        async def run():
+            return [e async for e in runner._run_codex_session(text)]
+        asyncio.run(run())
+        return sent[-1]
+
+    first = turn("hello")
+    assert first.count(MARKER) == 1 and first.startswith(MARKER)
+    assert "Unity now: connected" in first and guide.mode_note("en", "step", True) in first
+    assert turn("again") == "again"
+    state.connected = False
+    assert turn("unity gone") == "Unity now: not responding (the editor may be compiling or busy; retry shortly, check compile_status)\n\nunity gone"
+    runner.generation_mode = "auto"
+    auto = turn("now auto")
+    assert MARKER not in auto and ar._CODEX_AUTO_MODE_INSTRUCTION in auto
+    assert ar._CODEX_AUTO_MODE_INSTRUCTION not in turn("still auto")
+    session = next(iter(sessions.values()))
+    asyncio.run(session._handle_notification({"method": "thread/compacted", "params": {}}))
+    after = turn("after compact")
+    assert after.count(MARKER) == 1 and ar._CODEX_AUTO_MODE_INSTRUCTION in after
+    assert "Unity now: not responding" in after
+    assert turn("then") == "then"
+    assert len(sessions) == 1
+
+
+def test_agy_guide_and_notes_once_per_process_and_again_on_a_new_one():
+    from . import test_agy_stream_session as fixture
+
+    composed = guide.compose("en", project_open=True, unity_state="connected")
+
+    async def scenario():
+        harness = fixture.TestAgyStreamSession()
+        await harness.asyncSetUp()
+        try:
+            # The fixture's fake process answers two turns.
+            session = fixture.agy_session.get_session(11)
+            session.agent_guide = composed
+            contents = []
+
+            async def turn(message, notes, **kwargs):
+                session.turn_notes = notes
+                try:
+                    await asyncio.wait_for(harness.collect(session=session, message=message, **kwargs), 15)
+                except TimeoutError:
+                    raise AssertionError(f"turn {message!r} hung; processes={len(harness.processes)} "
+                                         f"lines={[len(p.stdin.lines) for p in harness.processes]}")
+                process = harness.processes[-1]
+                contents.append(json.loads(process.stdin.lines[-1])["message"]["content"])
+                return contents[-1]
+
+            notes = (("unity", "U1"), ("mode", "M1"))
+            assert await turn("first", notes, model="gemini-4-argon") == composed + "\n\nU1\n\nM1\n\nfirst"
+            changed = (("unity", "U2"), ("mode", "M1"))
+            assert await turn("second", changed, model="gemini-4-argon") == "U2\n\nsecond"
+            assert len(harness.processes) == 1
+            respawned = await turn("third", changed, model="gemini-3.8-flash")
+            assert len(harness.processes) == 2
+            assert respawned == composed + "\n\nU2\n\nM1\n\nthird"
+            assert await turn("fourth", changed, model="gemini-3.8-flash") == "fourth"
+        finally:
+            await harness.asyncTearDown()
+    asyncio.run(asyncio.wait_for(scenario(), 60))
+
+
+class _FakeCLI:
+    """Records what a one-shot CLI would get: the shared provider_guide every
+    _build_cmd puts in front, plus the prompt."""
+
+    def __init__(self, sent, session_id):
+        self.sent, self.session_id = sent, session_id
+        self.resume_session_id = None
+
+    async def analyze_code(self, prompt, **kwargs):
+        self.sent.append((self.resume_session_id,
+                          guide.provider_guide(self, project_open=True, unity_running=False) + prompt))
+        if self.session_id:
+            yield {"type": "session_meta", "session_id": self.session_id}
+        yield {"type": "final", "text": "ok"}
+
+
+def _oneshot(monkeypatch, cli_key, session_id):
+    from providers.oneshot_cli import _SESSIONS
+    state = _unity(monkeypatch)
+    _SESSIONS.clear()
+    sent = []
+    runner = _runner(cid=CID + 9)
+
+    def turn(text):
+        _prepare(runner)
+
+        async def run():
+            return [e async for e in runner._run_oneshot_cli_session(text, cli_key)]
+        with patch("ai_providers.AIProviderManager.get_provider",
+                   side_effect=lambda cfg: _FakeCLI(sent, session_id)):
+            asyncio.run(run())
+        return sent[-1]
+    return turn, state, _SESSIONS
+
+
+def test_resumed_oneshot_cli_gets_the_guide_once_and_again_after_a_reset(monkeypatch):
+    turn, state, sessions = _oneshot(monkeypatch, "cursor", "chat-1")
+    try:
+        resume, first = turn("hello")
+        assert resume is None and first.count(MARKER) == 1 and "Unity now: connected" in first
+        resume, second = turn("again")
+        assert resume == "chat-1" and second == "again"
+        state.connected = False
+        _, third = turn("unity gone")
+        assert MARKER not in third and third.startswith("Unity now: not responding")
+        sessions[("cursor", CID + 9)].session_id = None   # what a reset_session error does
+        _, fresh = turn("fresh")
+        assert fresh.count(MARKER) == 1 and "Unity now: not responding" in fresh
+        assert guide.mode_note("en", "step", True) in fresh
+    finally:
+        sessions.clear()
+
+
+def test_oneshot_cli_without_resume_gets_the_guide_and_notes_every_turn(monkeypatch):
+    turn, _, sessions = _oneshot(monkeypatch, "kimi", "kimi-session")
+    try:
+        for text in ("one", "two", "three"):
+            _, payload = turn(text)
+            assert payload.count(MARKER) == 1
+            assert "Unity now: connected" in payload and guide.mode_note("en", "step", True) in payload
+            assert payload.endswith(text)
+    finally:
+        sessions.clear()
+
+
+def test_a_slash_command_carries_no_note_and_does_not_use_them_up(monkeypatch):
+    turn, state, sessions = _oneshot(monkeypatch, "opencode", "ses-1")
+    try:
+        turn("hello")
+        state.connected = False
+        _, slash = turn("/context")
+        assert slash == "/context"
+        _, plain = turn("plain")
+        assert plain.startswith("Unity now: not responding") and plain.endswith("plain")
+    finally:
+        sessions.clear()

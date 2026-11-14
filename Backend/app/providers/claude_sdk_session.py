@@ -2095,6 +2095,12 @@ class ClaudeSDKSession:
 
         if isinstance(msg, SystemMessage):
             data = getattr(msg, "data", None) or {}
+            if getattr(msg, "subtype", None) == "compact_boundary" or (
+                    isinstance(data, dict) and data.get("compact_result") == "success"):
+                # Manual or automatic: the summary may drop the notes (the guide
+                # stays in the system prompt), so the next turn states them again.
+                import agent_guide
+                agent_guide.briefing_of(self).forget()
             if isinstance(data, dict) and data.get("compact_result"):
                 waiter = getattr(self, "_compact_waiter", None)
                 if waiter is not None and not waiter.done():

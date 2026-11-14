@@ -1299,9 +1299,15 @@ class AgyStreamSession(SaglayiciSahipligi):
                     # A slow git only costs the file list, never the turn.
                     done, _ = await asyncio.wait({snapshot}, timeout=_SNAPSHOT_WAIT_S)
                     workspace_before = snapshot.result() if done else None
-                # A kept process already holds the guide and the hint from its first turn.
-                guide_prefix = agent_guide + "\n\n" if agent_guide and process is not previous_process else ""
-                payload = {"event": "user", "message": {"content": guide_prefix + instructions + message}}
+                # A kept process already holds the guide, the hint and the notes
+                # it was told; a new one is told again.
+                import agent_guide as guides
+                briefing = guides.briefing_of(self)
+                if process is not previous_process:
+                    briefing.forget()
+                send_guide, notes = briefing.turn(agent_guide, getattr(self, "turn_notes", ()))
+                prefix = (agent_guide + "\n\n" if send_guide else "") + "".join(note + "\n\n" for note in notes)
+                payload = {"event": "user", "message": {"content": prefix + instructions + message}}
                 process.stdin.write((json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8"))
                 # A child that stops reading its stdin is as silent as one
                 # that stops writing: the same idle limit covers both.
