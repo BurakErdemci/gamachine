@@ -158,12 +158,26 @@ class BaseCLIProvider(AIProvider):
     # akışlarına kontrollü, fakat gerçek MCP sonuçlarını taşıyabilecek ortak tavan ver.
     _CLI_STREAM_LIMIT_BYTES = 32 * 1024 * 1024
 
-    # Model ID -> agy CLI slug (agy 1.4.0, 17 Oct 2026).
+    # Model ID -> agy CLI slug (agy 1.5.9, 14 Nov 2026).
     _AGY_MODEL_MAP = {
-        # Gemini tiers remain separate model IDs (High/Medium/Low).
+        # Base ids take their tier from the effort picker (_AGY_EFFORT_LEVELS);
+        # the tiered ids are kept for configs saved before 4.0.1.
+        # Carbon slugs come from the agy changelog (not on the measured account).
+        "gemini-4-carbon":               "gemini-4-carbon-high",
+        "gemini-4-carbon-medium":        "gemini-4-carbon-medium",
+        "gemini-4-carbon-low":           "gemini-4-carbon-low",
         "gemini-4-argon":                "gemini-4-argon-high",
         "gemini-4-argon-medium":         "gemini-4-argon-medium",
         "gemini-4-argon-low":            "gemini-4-argon-low",
+        "gemini-4-hydrogen":             "gemini-4-hydrogen-high",
+        "gemini-4-hydrogen-xhigh":       "gemini-4-hydrogen-xhigh",
+        "gemini-4-hydrogen-medium":      "gemini-4-hydrogen-medium",
+        "gemini-4-hydrogen-low":         "gemini-4-hydrogen-low",
+        "gemini-4-orchestrator-argon":   "gemini-pro-orchestrator-g1-pro",
+        # Its slug is served per account and was not on the measured one; agy
+        # also takes a display name for --model (measured with
+        # "Orchestrator (Argon)", 14 Nov 2026), so the announced name is used.
+        "gemini-4-orchestrator-carbon":  "Orchestrator (Carbon)",
         # 3.8 needs agy >=1.1.25; installed 1.1.27 (measured 2026-09-05).
         "gemini-3.8-flash":              "gemini-3.8-flash-high",
         "gemini-3.8-flash-medium":       "gemini-3.8-flash-medium",
@@ -174,6 +188,15 @@ class BaseCLIProvider(AIProvider):
         "agy-gpt-oss-120b":              "gpt-oss-120b-medium",
     }
 
+    # Base ids whose effort level picks the slug's tier suffix; the tiered ids
+    # (gemini-4-argon-medium, ...) stay saved-only with a fixed slug.
+    _AGY_EFFORT_LEVELS = {
+        "gemini-4-carbon": ("low", "medium", "high"),
+        "gemini-4-argon": ("low", "medium", "high"),
+        "gemini-4-hydrogen": ("low", "medium", "high", "xhigh"),
+        "gemini-3.8-flash": ("low", "medium", "high"),
+    }
+
     @classmethod
     def _resolve_agy_model(cls, model: str, thinking_level: Optional[str] = None) -> str:
         """Resolve the CLI slug without encoding Claude effort in saved IDs."""
@@ -181,8 +204,9 @@ class BaseCLIProvider(AIProvider):
         if model not in cls._AGY_MODEL_MAP:
             raise ValueError(f"Unknown agy model ID: {model!r}")
         slug = cls._AGY_MODEL_MAP[model]
-        if model.startswith("agy-claude-"):
-            level = thinking_level if thinking_level in ("low", "medium", "high") else "high"
+        levels = cls._AGY_EFFORT_LEVELS.get(model)
+        if model.startswith("agy-claude-") or levels:
+            level = thinking_level if thinking_level in (levels or ("low", "medium", "high")) else "high"
             return f"{slug.rsplit('-', 1)[0]}-{level}"
         return slug
 

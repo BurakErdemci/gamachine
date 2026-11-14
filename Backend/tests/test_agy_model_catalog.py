@@ -120,16 +120,27 @@ def test_claude_caps_and_unselected_effort(model):
     assert provider._pending_agy_model_slug == f"{model.removeprefix('agy-')}-high"
 
 
-@pytest.mark.parametrize("model", [
-    "gemini-3.8-flash", "gemini-3.8-flash-medium", "gemini-3.8-flash-low",
-    "gemini-4-argon", "gemini-4-argon-medium", "gemini-4-argon-low",
+@pytest.mark.parametrize("model,levels", [
+    ("gemini-4-hydrogen", ["auto", "low", "medium", "high", "xhigh"]),
+    ("gemini-4-carbon", ["auto", "low", "medium", "high"]),
+    ("gemini-4-argon", ["auto", "low", "medium", "high"]),
+    ("gemini-3.8-flash", ["auto", "low", "medium", "high"]),
+    ("gemini-4-orchestrator-argon", ["auto"]),
+    ("gemini-4-orchestrator-carbon", ["auto"]),
+    # Saved tiered IDs and gpt-oss keep a fixed level.
+    ("gemini-4-argon-medium", ["auto"]), ("gemini-4-carbon-low", ["auto"]),
+    ("gemini-4-hydrogen-xhigh", ["auto"]), ("gemini-3.8-flash-low", ["auto"]),
+    ("agy-gpt-oss-120b", ["auto"]),
 ])
-def test_gemini_keeps_its_model_tier_without_an_effort_picker(model):
-    assert get_effort_caps("subscription", model)["levels"] == ["auto"]
+def test_gemini_base_ids_expose_effort_and_tiered_ids_stay_auto_only(model, levels):
+    assert get_effort_caps("subscription", model)["levels"] == levels
     provider = AgyProvider(binary_name=model)
     with patch.object(AgyProvider, "_agy_binary", return_value="fake-agy"):
         provider._build_cmd(thinking_level="low")
-    assert provider._pending_agy_model_slug == BaseCLIProvider._AGY_MODEL_MAP[model]
+    slug = BaseCLIProvider._AGY_MODEL_MAP[model]
+    if "low" in levels:
+        slug = slug.rsplit("-", 1)[0] + "-low"
+    assert provider._pending_agy_model_slug == slug
 
 
 @pytest.mark.parametrize("old,new", REPLACEMENTS.items())

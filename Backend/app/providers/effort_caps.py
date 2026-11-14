@@ -117,8 +117,13 @@ def get_effort_caps(provider_type: str, model_name: str) -> dict:
             return _caps(["auto"], "Cursor CLI reasoning seçimi upstream bug nedeniyle çalışmıyor.")
         if m.startswith("kimi-"):
             return _caps(["auto"], "Kimi K3 düşünmesi her zaman açık — ayrı effort seviyesi yok.")
-        # Gemini keeps effort in the model pick (High/Medium/Low IDs).
-        return _caps(["auto"], "Antigravity'de effort, modelin High/Medium/Low sürümüyle seçilir.")
+        if m == "gemini-4-hydrogen":
+            return _caps(["auto", "low", "medium", "high", "xhigh"])
+        if m in ("gemini-4-carbon", "gemini-4-argon", "gemini-3.8-flash"):
+            return _caps(["auto", "low", "medium", "high"])
+        if m.startswith("gemini-4-orchestrator-"):
+            return _caps(["auto"], "Orchestrator planlama ve yürütme modelini kendisi seçer.")
+        return _caps(["auto"], "Bu modelin düşünme seviyesi sabittir.")
 
     if p == "google":
         if "gemini-3" in m:

@@ -19,11 +19,28 @@ AGY_SLUGS = {
     "claude-opus-5-5-low", "claude-opus-5-5-medium", "claude-opus-5-5-high",
     "claude-sonnet-5-5-low", "claude-sonnet-5-5-medium", "claude-sonnet-5-5-high",
     "gpt-oss-120b-medium",
+    # Measured on agy 1.5.9 (14 Nov 2026).
+    "gemini-4-hydrogen-low", "gemini-4-hydrogen-medium", "gemini-4-hydrogen-high",
+    "gemini-4-hydrogen-xhigh", "gemini-pro-orchestrator-g1-pro",
+    # Carbon is not on the measured account; slugs come from the agy 1.5.5/1.5.8 changelog.
+    "gemini-4-carbon-low", "gemini-4-carbon-medium", "gemini-4-carbon-high",
+    # Not on the measured account; --model also takes a display name (measured
+    # with "Orchestrator (Argon)", agy 1.5.9), so the announced name is the slug.
+    "Orchestrator (Carbon)",
 }
 APP_SLUGS = {
     "gemini-4-argon": "gemini-4-argon-high",
     "gemini-4-argon-medium": "gemini-4-argon-medium",
     "gemini-4-argon-low": "gemini-4-argon-low",
+    "gemini-4-carbon": "gemini-4-carbon-high",
+    "gemini-4-carbon-medium": "gemini-4-carbon-medium",
+    "gemini-4-carbon-low": "gemini-4-carbon-low",
+    "gemini-4-hydrogen": "gemini-4-hydrogen-high",
+    "gemini-4-hydrogen-xhigh": "gemini-4-hydrogen-xhigh",
+    "gemini-4-hydrogen-medium": "gemini-4-hydrogen-medium",
+    "gemini-4-hydrogen-low": "gemini-4-hydrogen-low",
+    "gemini-4-orchestrator-argon": "gemini-pro-orchestrator-g1-pro",
+    "gemini-4-orchestrator-carbon": "Orchestrator (Carbon)",
     "gemini-3.8-flash": "gemini-3.8-flash-high",
     "gemini-3.8-flash-medium": "gemini-3.8-flash-medium",
     "gemini-3.8-flash-low": "gemini-3.8-flash-low",
@@ -42,14 +59,22 @@ def test_every_picker_id_and_effort_selects_a_listed_slug(monkeypatch, effort):
     router = config_routes.create_config_router(Mock())
     models = asyncio.run(router.list_models(None))["subscription"]
     picker_ids = {m["id"] for m in models if m["id"].startswith(("gemini-", "agy-"))}
-    # Flash Low remains a supported saved ID but is absent from the picker.
-    saved_only = {"gemini-3.8-flash-low"}
+    # Gemini tiers are picked with the effort picker; the tiered IDs are saved-only.
+    saved_only = {
+        "gemini-4-argon-medium", "gemini-4-argon-low",
+        "gemini-4-carbon-medium", "gemini-4-carbon-low",
+        "gemini-4-hydrogen-xhigh", "gemini-4-hydrogen-medium", "gemini-4-hydrogen-low",
+        "gemini-3.8-flash-medium", "gemini-3.8-flash-low",
+    }
     assert picker_ids == set(APP_SLUGS) - saved_only
     for model in APP_SLUGS:
         expected = APP_SLUGS[model]
         if model.startswith("agy-claude-"):
             tier = effort if effort in ("low", "medium", "high") else "high"
             expected = model.removeprefix("agy-") + "-" + tier
+        if model in GEMINI_EFFORTS:
+            tier = effort if effort in GEMINI_EFFORTS[model] else "high"
+            expected = APP_SLUGS[model].rsplit("-", 1)[0] + "-" + tier
         slug = BaseCLIProvider._resolve_agy_model(model, effort)
         assert slug == expected
         assert slug in AGY_SLUGS
@@ -214,3 +239,31 @@ def test_one_shot_spawn_passes_both_flags_and_closes(monkeypatch, fake_spawns):
     assert "private prompt" in process.stdin.lines[0].decode()
     assert process.returncode is not None
     assert not agy_session._SESSIONS
+
+
+GEMINI_EFFORTS = {
+    "gemini-4-carbon": ("low", "medium", "high"),
+    "gemini-4-argon": ("low", "medium", "high"),
+    "gemini-4-hydrogen": ("low", "medium", "high", "xhigh"),
+    "gemini-3.8-flash": ("low", "medium", "high"),
+}
+
+
+@pytest.mark.parametrize("model,levels", GEMINI_EFFORTS.items())
+def test_gemini_base_id_effort_picks_the_tier_suffix(model, levels):
+    prefix = APP_SLUGS[model].rsplit("-", 1)[0]
+    for level in levels:
+        slug = BaseCLIProvider._resolve_agy_model(model, level)
+        assert slug == f"{prefix}-{level}"
+        assert slug in AGY_SLUGS
+    for level in ("auto", None, "off", "max", "unknown", *({"xhigh"} - set(levels))):
+        assert BaseCLIProvider._resolve_agy_model(model, level) == f"{prefix}-high"
+
+
+@pytest.mark.parametrize("model", [
+    "gemini-4-argon-low", "gemini-4-carbon-medium", "gemini-4-hydrogen-xhigh",
+    "gemini-3.8-flash-low", "gemini-4-orchestrator-argon", "gemini-4-orchestrator-carbon", "agy-gpt-oss-120b",
+])
+@pytest.mark.parametrize("level", ["low", "high", "xhigh", "auto", None])
+def test_fixed_slug_ids_ignore_the_effort_level(model, level):
+    assert BaseCLIProvider._resolve_agy_model(model, level) == APP_SLUGS[model]

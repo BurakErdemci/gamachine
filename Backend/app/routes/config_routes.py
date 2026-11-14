@@ -539,12 +539,13 @@ def create_config_router(db):
                 *[{**model, "name": f"Codex ({model['name']})"} for model in _CODEX_MODELS],
                 {"id": "kimi-k3",              "name": "Kimi K3 (CLI)",                 "provider": "subscription"},
                 {"id": "kimi-k2.7-code",       "name": "Kimi K2.7 Code (CLI)",          "provider": "subscription"},
-                {"id": "gemini-4-argon",               "name": "Gemini 4 Argon (High)",       "provider": "subscription"},
-                {"id": "gemini-4-argon-medium",        "name": "Gemini 4 Argon (Medium)",     "provider": "subscription"},
-                {"id": "gemini-4-argon-low",           "name": "Gemini 4 Argon (Low)",        "provider": "subscription"},
+                {"id": "gemini-4-carbon",              "name": "Gemini 4 Carbon",             "provider": "subscription"},
+                {"id": "gemini-4-argon",               "name": "Gemini 4 Argon",              "provider": "subscription"},
+                {"id": "gemini-4-hydrogen",            "name": "Gemini 4 Hydrogen",           "provider": "subscription"},
+                {"id": "gemini-4-orchestrator-carbon", "name": "Orchestrator (Carbon)",       "provider": "subscription"},
+                {"id": "gemini-4-orchestrator-argon",  "name": "Orchestrator (Argon)",        "provider": "subscription"},
                 {"id": "gemini-3.8-flash",             "name": "Gemini 3.8 Flash", "provider": "subscription", "tag": "recommended"},
-                {"id": "gemini-3.8-flash-medium",      "name": "Gemini 3.8 Flash (Medium)",   "provider": "subscription"},
-                # Claude effort is selected separately; Gemini keeps tiered IDs.
+                # Gemini and Claude effort is picked in the effort selector, not here.
                 {"id": "agy-claude-opus-5-5",          "name": "Claude Opus 5.5",            "provider": "subscription"},
                 {"id": "agy-claude-sonnet-5-5",        "name": "Claude Sonnet 5.5",          "provider": "subscription"},
                 {"id": "agy-gpt-oss-120b",             "name": "GPT-OSS 120B (Medium)",       "provider": "subscription"},
