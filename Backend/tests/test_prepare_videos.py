@@ -20,7 +20,7 @@ def _runner(videos):
 
 class TestPrepareVideos(unittest.TestCase):
     def test_appends_frames_and_block(self):
-        def fake_extract(src, ws, tag, cancel=None):
+        def fake_extract(src, ws, tag, cancel=None, language="tr"):
             return ve.ExtractResult(
                 ["data:image/jpeg;base64,BBBB", "data:image/jpeg;base64,CCCC"],
                 "[00:00:01] selam",
@@ -43,7 +43,7 @@ class TestPrepareVideos(unittest.TestCase):
         self.assertEqual(len(r.images), 1)
 
     def test_extract_error_is_soft(self):
-        def boom(src, ws, tag, cancel=None):
+        def boom(src, ws, tag, cancel=None, language="tr"):
             raise RuntimeError("ffmpeg patladı")
         with mock.patch.object(ve, "extract", boom):
             r = _runner([{"kind": "url", "url": "http://x"}])
@@ -52,7 +52,7 @@ class TestPrepareVideos(unittest.TestCase):
         self.assertEqual(len(r.images), 1)                       # çökme yok, kare eklenmez
 
     def test_pipeline_error_becomes_a_warning(self):
-        def boom(src, ws, tag, cancel=None):
+        def boom(src, ws, tag, cancel=None, language="tr"):
             raise ve.VideoPipelineError(
                 "video_binary_missing", "yt-dlp bulunamadı.",
                 stage="binary_resolve", detail="çözülemeyen binary: yt-dlp")
@@ -76,7 +76,7 @@ class TestPrepareVideos(unittest.TestCase):
         raw = ("Command '['C:\\\\Users\\\\burcu\\\\bin\\\\yt-dlp.exe', '--no-playlist', "
                f"'--', '{secret_url}']' returned non-zero exit status 1.")
 
-        def boom(src, ws, tag, cancel=None):
+        def boom(src, ws, tag, cancel=None, language="tr"):
             raise ve.VideoPipelineError(
                 "video_download_failed", "Videonun linki indirilemedi.",
                 stage="download", detail=f"CalledProcessError: {raw}")
@@ -91,7 +91,7 @@ class TestPrepareVideos(unittest.TestCase):
         self.assertIn("download", warnings[0]["detail"])
 
     def test_unclassified_error_also_becomes_a_warning(self):
-        def boom(src, ws, tag, cancel=None):
+        def boom(src, ws, tag, cancel=None, language="tr"):
             raise RuntimeError("ffmpeg patladı")
         with mock.patch.object(ve, "extract", boom):
             r = _runner([{"kind": "url", "url": "http://x"}])
@@ -109,7 +109,7 @@ class TestWarningReachesTheStream(unittest.TestCase):
             yield ar.AgentEvent("response", {"content": "ok"})
             yield ar._done_event(1)
 
-        def boom(src, ws, tag, cancel=None):
+        def boom(src, ws, tag, cancel=None, language="tr"):
             raise ve.VideoPipelineError(
                 "video_binary_missing", "ffmpeg bulunamadı.",
                 stage="binary_resolve", detail="çözülemeyen binary: ffmpeg")

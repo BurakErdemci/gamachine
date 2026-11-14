@@ -820,20 +820,42 @@ _GONE_RE = re.compile(r"private video|members[- ]only|video unavailable|"
 _GEO_RE = re.compile(r"available in your country|blocked it in your country|geo[- ]restrict", re.I)
 
 
-def download_failure_message(stderr_text: str) -> str:
+def pick_text(language: str, tr: str, en: str) -> str:
+    """The Turkish or English twin of a user-facing video message."""
+    return en if language == "en" else tr
+
+
+def download_failure_message(stderr_text: str, language: str = "tr") -> str:
     """User-facing sentence for a failed download, chosen from the tool's stderr."""
     if _GEO_RE.search(stderr_text):
-        return ("Video bu ülkeden izlenemiyor (yayıncı bölgesel kısıtlama koymuş); "
-                "video atlandı, sohbet metinle sürüyor.")
+        return pick_text(
+            language,
+            "Video bu ülkeden izlenemiyor (yayıncı bölgesel kısıtlama koymuş); "
+            "video atlandı, sohbet metinle sürüyor.",
+            "The video cannot be watched from this country (the publisher set a regional "
+            "restriction); the video was skipped and the chat continues with text.")
     if _GONE_RE.search(stderr_text):
-        return ("Video artık açık değil (özel, üyelere özel ya da kaldırılmış); "
-                "video atlandı, sohbet metinle sürüyor.")
+        return pick_text(
+            language,
+            "Video artık açık değil (özel, üyelere özel ya da kaldırılmış); "
+            "video atlandı, sohbet metinle sürüyor.",
+            "The video is no longer available (private, members-only or removed); "
+            "the video was skipped and the chat continues with text.")
     if _REFUSED_RE.search(stderr_text):
-        return ("Video sitesi indirmeyi reddetti (403) — genelde geçici bir kısıtlama, "
-                "biraz sonra yeniden denemek işe yarayabilir; video atlandı, "
-                "sohbet metinle sürüyor.")
-    return ("Videonun linki indirilemedi (link kapalı, bölgesel kısıtlı ya da "
-            "ağ engelli olabilir); video atlandı, sohbet metinle sürüyor.")
+        return pick_text(
+            language,
+            "Video sitesi indirmeyi reddetti (403) — genelde geçici bir kısıtlama, "
+            "biraz sonra yeniden denemek işe yarayabilir; video atlandı, "
+            "sohbet metinle sürüyor.",
+            "The video site refused the download (403) - usually a temporary restriction, "
+            "trying again a little later may work; the video was skipped and the chat "
+            "continues with text.")
+    return pick_text(
+        language,
+        "Videonun linki indirilemedi (link kapalı, bölgesel kısıtlı ya da "
+        "ağ engelli olabilir); video atlandı, sohbet metinle sürüyor.",
+        "The video link could not be downloaded (it may be private, region-locked or "
+        "blocked); the video was skipped and the chat continues with text.")
 
 
 def _probe_duration(video_path: str) -> float:
@@ -972,7 +994,8 @@ def _download_url(url: str, out_dir: str):
 
 
 def extract(source: dict, workspace: Optional[str], tag: str,
-            cancel: "Optional[ExtractionCancel]" = None) -> ExtractResult:
+            cancel: "Optional[ExtractionCancel]" = None,
+            language: str = "tr") -> ExtractResult:
     """Video kaynağını kare data-URI'leri + transkripte çevirir. Kendi temp'ini temizler.
 
     `cancel`: the async caller's stop switch (see `ExtractionCancel`). Optional
@@ -1006,8 +1029,13 @@ def extract(source: dict, workspace: Optional[str], tag: str,
             _ad = " ve ".join(_missing)
             raise VideoPipelineError(
                 "video_binary_missing",
-                f"Videoyu işlemek için gereken {_ad} programı bu bilgisayarda bulunamadı; "
-                "video atlandı, sohbet metinle sürüyor.",
+                pick_text(
+                    language,
+                    f"Videoyu işlemek için gereken {_ad} programı bu bilgisayarda bulunamadı; "
+                    "video atlandı, sohbet metinle sürüyor.",
+                    f"The program needed to process the video ({_ad.replace(' ve ', ' and ')}) "
+                    "was not found on this computer; the video was skipped and the chat "
+                    "continues with text."),
                 stage="binary_resolve",
                 detail=f"çözülemeyen binary: {', '.join(_missing)}")
 
@@ -1017,7 +1045,8 @@ def extract(source: dict, workspace: Optional[str], tag: str,
             if not video_path or not os.path.isfile(video_path):
                 raise VideoPipelineError(
                     "video_download_failed",
-                    "Eklenen video dosyası bulunamadı.",
+                    pick_text(language, "Eklenen video dosyası bulunamadı.",
+                              "The attached video file was not found."),
                     stage="kaynak", detail=f"video bulunamadı: {video_path}")
             # GÜVENLİK: mutlak yola normalize et → ffmpeg '-i' argümanı '-' ile başlayıp
             # flag gibi yorumlanamaz (argv flag-smuggling savunması).
@@ -1036,11 +1065,13 @@ def extract(source: dict, workspace: Optional[str], tag: str,
             except Exception as e:
                 raise VideoPipelineError(
                     "video_download_failed",
-                    download_failure_message(_subprocess_stderr(e)),
+                    download_failure_message(_subprocess_stderr(e), language),
                     stage="indirme", detail=_tool_error_detail(e)) from e
         else:
             raise VideoPipelineError(
-                "video_extract_failed", "Bu video kaynağı tanınmadı.",
+                "video_extract_failed",
+                pick_text(language, "Bu video kaynağı tanınmadı.",
+                          "This video source was not recognized."),
                 stage="kaynak", detail=f"bilinmeyen video kaynağı: {kind!r}")
 
         cancel.raise_if_cancelled("kare çıkarma öncesi")
@@ -1056,13 +1087,20 @@ def extract(source: dict, workspace: Optional[str], tag: str,
         except Exception as e:
             raise VideoPipelineError(
                 "video_extract_failed",
-                "Videodan görüntü çıkarılamadı; video atlandı, sohbet metinle sürüyor.",
+                pick_text(language,
+                          "Videodan görüntü çıkarılamadı; video atlandı, sohbet metinle sürüyor.",
+                          "Frames could not be extracted from the video; the video was "
+                          "skipped and the chat continues with text."),
                 stage="kare çıkarma", detail=_tool_error_detail(e)) from e
         if not raw:
             raise VideoPipelineError(
                 "video_extract_failed",
-                "Videodan hiç görüntü çıkmadı (dosya bozuk ya da desteklenmeyen bir "
-                "biçimde olabilir); video atlandı, sohbet metinle sürüyor.",
+                pick_text(language,
+                          "Videodan hiç görüntü çıkmadı (dosya bozuk ya da desteklenmeyen bir "
+                          "biçimde olabilir); video atlandı, sohbet metinle sürüyor.",
+                          "No frames came out of the video (the file may be corrupt or in an "
+                          "unsupported format); the video was skipped and the chat continues "
+                          "with text."),
                 stage="kare çıkarma", detail="ffmpeg 0 kare üretti")
         sigs = [_frame_signature(p) for p in raw]
         keep = dedup_indices(sigs, threshold=2.0)

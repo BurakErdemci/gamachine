@@ -2350,7 +2350,7 @@ class AgentRunner:
             try:
                 res = await asyncio.to_thread(
                     video_extract.extract, src, self.workspace_path,
-                    f"vid_conv{self.conversation_id}", cancel)
+                    f"vid_conv{self.conversation_id}", cancel, language=self.language)
                 all_uris.extend(res.frame_data_uris)
                 blocks.append(video_extract.build_video_block(res.meta, res.transcript))
             except asyncio.CancelledError:
@@ -2374,7 +2374,11 @@ class AgentRunner:
                 # An unclassified error must be visible too, otherwise the silence
                 # comes back through exactly the hole we just closed.
                 logger.warning(f"[video] sınıflandırılmamış çıkarım hatası: {e}", exc_info=True)
-                _msg = "Video işlenemedi; video atlandı, sohbet metinle sürüyor."
+                _msg = video_extract.pick_text(
+                    self.language,
+                    "Video işlenemedi; video atlandı, sohbet metinle sürüyor.",
+                    "The video could not be processed; the video was skipped and the chat "
+                    "continues with text.")
                 warnings.append({
                     "code": "video_extract_failed",
                     "message": _msg,
