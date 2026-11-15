@@ -3105,6 +3105,7 @@ class AgentRunner:
         final_text = ""
         got_error = False
         reset_session = False
+        _turn_ok = False
         try:
             for attempt in (1, 2):
                 got_error = False
@@ -3186,6 +3187,7 @@ class AgentRunner:
                     provider.resume_session_id = None
                 else:
                     provider.resume_session_id = sess.session_id
+            _turn_ok = not got_error
         except (asyncio.CancelledError, GeneratorExit):
             # SSE bağlantısı kesildiğinde sonraki tur yarım OpenCode/Cursor/Copilot
             # session'ını resume etmesin. Tam transcript temiz session'a verilecek.
@@ -3193,6 +3195,8 @@ class AgentRunner:
             sess.ctx_injected = False
             raise
         finally:
+            if not _turn_ok:
+                _briefing.forget()
             if sess.active_provider is provider:
                 sess.active_provider = None
             cleanup_dir(_att_dir)
@@ -3468,16 +3472,23 @@ class AgentRunner:
 
             _yielded = 0
             try:
+                _errored = False
                 async for ev in session.stream(message):
                     _yielded += 1
                     etype = ev.pop("type", "text")
+                    _errored = _errored or etype == "error"
                     yield _normalize_session_event(etype, ev)
+                if _errored:
+                    agent_guide.briefing_of(session).forget()
                 cleanup_dir(_att_dir)
                 return
+            except (asyncio.CancelledError, GeneratorExit):
+                # A turn that did not end normally may not have reached the model.
+                agent_guide.briefing_of(session).forget()
+                raise
             except Exception as e:
-                if _yielded == 0:
-                    # The notes may never have reached the model: say them again.
-                    agent_guide.briefing_of(session).forget()
+                # The notes may never have reached the model: say them again.
+                agent_guide.briefing_of(session).forget()
                 if (isinstance(e, SessionBusyError) and _yielded == 0
                         and getattr(self, "task_wake", False) and not session._broken):
                     # A wake never resets the session: the route queues it again.
@@ -3795,10 +3806,12 @@ class AgentRunner:
         image_paths, _att_dir = materialize_images(
             self.images, self.workspace_path, f"codex_conv{self.conversation_id}")
         from providers.oneshot_cli import CODEX_PLAN_ERROR_RE, QUOTA_ERROR_RE
+        _turn_ok = False
         try:
             async for ev in session.stream(message, image_paths=image_paths):
                 etype = ev.pop("type", "text")
                 if etype == "error":
+                    _briefing.forget()
                     _msg = str(ev.get("message", ""))
                     if CODEX_PLAN_ERROR_RE.search(_msg):
                         # Codex'in account/plan sinyali tutarsız: hatayı açıkla fakat
@@ -3813,10 +3826,9 @@ class AgentRunner:
                             "Kota yenilenene kadar başka bir sağlayıcı seçebilirsin "
                             "(örn. NVIDIA ücretsiz havuzu veya OpenCode).\n\n" + _msg[:200])
                 yield _normalize_session_event(etype, ev)
+            _turn_ok = True
         except Exception as e:
             logger.exception("[CodexSession] stream hatası")
-            # The thread may never have taken this turn: send guide and notes again.
-            _briefing.forget()
             # ⚠️ `redact_secrets` ŞART — gerekçe Claude yolundaki ikiziyle (bkz.
             # `_run_claude_session` istisna dalı) birebir aynı: bu metin SSE ile
             # tarayıcıya gidiyor ve oturum yapılandırması unityMCP `X-API-Key`'ini
@@ -3827,6 +3839,10 @@ class AgentRunner:
             from secret_redaction import redact_secrets as _redact
             yield AgentEvent("error", {"message": f"Codex session hatası: {_redact(str(e))}"})
         finally:
+            if not _turn_ok:
+                # The thread may never have taken this turn (error, cancel, close):
+                # send guide and notes again.
+                _briefing.forget()
             cleanup_dir(_att_dir)
 
     def _summarize_result(self, tool_name: str, result: dict) -> str:
