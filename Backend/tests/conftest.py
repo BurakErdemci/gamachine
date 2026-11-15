@@ -76,6 +76,17 @@ def _local_token_file_off_real_home(monkeypatch, tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
+def _plan_caps_file_off_real_home(monkeypatch, tmp_path_factory):
+    # The one-shot CLI plan caps live under the real home; a turn that hits a
+    # plan error or succeeds on a named model writes them. Tests that need their
+    # own location patch the constant again (monkeypatch stacks).
+    from providers import oneshot_cli
+    caps_dir = str(tmp_path_factory.mktemp("plan-caps"))
+    monkeypatch.setattr(oneshot_cli, "_CAPS_PATH", os.path.join(caps_dir, "cli_plan_caps.json"))
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _opencode_shadow_off(monkeypatch, tmp_path_factory):
     # OpenCodeProvider._register_mcp writes its bash shadow under the real
     # home and runs `opencode --version`; several tests call it directly.
