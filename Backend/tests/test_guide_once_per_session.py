@@ -201,6 +201,8 @@ class _FakeCLI:
     _build_cmd puts in front, plus the prompt."""
 
     fail_next = False
+    raise_next = None
+    hang_next = False
 
     def __init__(self, sent, session_id):
         self.sent, self.session_id = sent, session_id
@@ -209,6 +211,11 @@ class _FakeCLI:
     async def analyze_code(self, prompt, **kwargs):
         self.sent.append((self.resume_session_id,
                           guide.provider_guide(self, project_open=True, unity_running=False) + prompt))
+        if _FakeCLI.raise_next is not None:
+            raise _FakeCLI.raise_next
+        if _FakeCLI.hang_next:
+            yield {"type": "delta", "text": "partial"}
+            await asyncio.sleep(3600)
         if _FakeCLI.fail_next:
             yield {"type": "error", "content": "cli failed"}
             return
@@ -236,6 +243,7 @@ def _oneshot(monkeypatch, cli_key, session_id):
                    side_effect=lambda cfg: _FakeCLI(sent, session_id)):
             asyncio.run(run())
         return sent[-1]
+    turn.runner = runner
     return turn, state, _SESSIONS
 
 
@@ -314,6 +322,7 @@ def _codex_runner(monkeypatch, cid, streams, mode="step"):
         async def run():
             return [e async for e in runner._run_codex_session(text)]
         return asyncio.run(run())
+    turn.runner = runner
     return turn, sent
 
 
@@ -491,3 +500,195 @@ def test_api_and_simple_paths_carry_the_mode_note_on_every_request(monkeypatch):
                 return [e async for e in runner._run_simple(text)]
             asyncio.run(run())
     assert len(seen) == 2 and all(note in prompt for prompt in seen)
+
+
+# ── Round 2: every abnormal end, and the history transcript ──────────────────
+
+HIST = "EARLIER-CHAT-HISTORY-MARKER"
+
+
+def _claude_runner(monkeypatch, cid, plan):
+    """A runner on a fake Claude session whose stream() plays `plan` in order:
+    a list of events, an exception raised before any event, or a tuple
+    (events, exception) raised after them. Returns (runner, session, messages)."""
+    from providers import claude_sdk_session as sdk
+
+    _unity(monkeypatch)
+    session = sdk.ClaudeSDKSession(conversation_id=cid)
+    messages = _claude_harness(monkeypatch, session)
+    steps = list(plan)
+
+    async def stream(message):
+        messages.append(message)
+        step = steps.pop(0) if steps else [{"type": "done"}]
+        if isinstance(step, BaseException):
+            events, error = [], step
+        elif isinstance(step, tuple):
+            events, error = step
+        else:
+            events, error = step, None
+        for event in events:
+            yield dict(event)
+        if error is not None:
+            raise error
+
+    session.stream = stream
+    runner = _runner(cid=cid)
+    return runner, session, messages
+
+
+def _claude_turn(runner, text):
+    _prepare(runner)
+
+    async def run():
+        return [e async for e in runner._run_claude_session(text)]
+    return asyncio.run(run())
+
+
+def test_claude_error_event_turn_is_not_remembered(monkeypatch):
+    runner, _, messages = _claude_runner(monkeypatch, CID + 30, [[{"type": "error", "message": "boom"}]])
+    _claude_turn(runner, "first")
+    _claude_turn(runner, "second")
+    assert guide.mode_note("en", "step", True) in messages[-1]
+    _claude_turn(runner, "third")
+    assert messages[-1] == "third"
+
+
+def test_claude_generator_close_is_not_remembered(monkeypatch):
+    runner, _, messages = _claude_runner(
+        monkeypatch, CID + 31, [[{"type": "text", "content": "partial"}, {"type": "done"}]])
+    _prepare(runner)
+
+    async def close_midway():
+        agen = runner._run_claude_session("first")
+        await agen.__anext__()
+        await agen.aclose()
+    asyncio.run(close_midway())
+    _claude_turn(runner, "second")
+    assert guide.mode_note("en", "step", True) in messages[-1]
+
+
+def test_claude_exception_after_events_is_not_remembered(monkeypatch):
+    runner, _, messages = _claude_runner(
+        monkeypatch, CID + 32, [([{"type": "text", "content": "partial"}], RuntimeError("stream broke"))])
+    events = _claude_turn(runner, "first")
+    assert any(e.type == "error" for e in events)
+    _claude_turn(runner, "second")
+    assert guide.mode_note("en", "step", True) in messages[-1]
+
+
+def test_oneshot_raise_cancel_and_close_are_not_remembered(monkeypatch):
+    turn, _, sessions = _oneshot(monkeypatch, "cursor", "chat-4")
+    key = ("cursor", CID + 9)
+    try:
+        turn("hello")
+        assert guide.briefing_of(sessions[key]).notes
+
+        _FakeCLI.raise_next = RuntimeError("cli died")
+        try:
+            with pytest.raises(RuntimeError):
+                turn("raises")
+        finally:
+            _FakeCLI.raise_next = None
+        assert guide.briefing_of(sessions[key]).notes == {}
+        resume, after = turn("after the raise")
+        assert resume == "chat-4" and after.count(MARKER) == 1
+        assert guide.mode_note("en", "step", True) in after
+
+        _FakeCLI.raise_next = asyncio.CancelledError()
+        try:
+            with pytest.raises(asyncio.CancelledError):
+                turn("cancelled")
+        finally:
+            _FakeCLI.raise_next = None
+        assert guide.briefing_of(sessions[key]).notes == {}
+        _, fresh = turn("after the cancel")
+        assert fresh.count(MARKER) == 1 and guide.mode_note("en", "step", True) in fresh
+
+        runner = turn.runner
+        _FakeCLI.hang_next = True
+        _prepare(runner)
+
+        async def close_midway():
+            with patch("ai_providers.AIProviderManager.get_provider",
+                       side_effect=lambda cfg: _FakeCLI([], "chat-4")):
+                agen = runner._run_oneshot_cli_session("closed", "cursor")
+                await agen.__anext__()
+                await agen.aclose()
+        try:
+            asyncio.run(close_midway())
+        finally:
+            _FakeCLI.hang_next = False
+        assert guide.briefing_of(sessions[key]).notes == {}
+        _, again = turn("after the close")
+        assert again.count(MARKER) == 1
+    finally:
+        sessions.clear()
+
+
+def test_codex_native_stop_is_not_remembered(monkeypatch):
+    turn, sent = _codex_runner(
+        monkeypatch, CID + 33, [[{"type": "done", "stop_reason": "cancelled"}]])
+    turn("first, stopped")
+    turn("second")
+    assert sent[1].count(MARKER) == 1
+    assert guide.mode_note("en", "step", True) in sent[1]
+    turn("third")
+    assert MARKER not in sent[2]
+
+
+def test_codex_history_is_resent_after_a_failed_first_turn(monkeypatch):
+    turn, sent = _codex_runner(monkeypatch, CID + 34, [[{"type": "error", "message": "quota"}]])
+    turn.runner.context = HIST
+    turn("first, errors")
+    turn("retry")
+    turn("third")
+    assert HIST in sent[0] and HIST in sent[1]
+    assert HIST not in sent[2]
+
+
+def test_oneshot_history_is_resent_after_a_failed_first_turn(monkeypatch):
+    turn, _, sessions = _oneshot(monkeypatch, "cursor", "chat-5")
+    turn.runner.context = HIST
+    try:
+        _FakeCLI.fail_next = True
+        try:
+            turn("first, errors")
+        finally:
+            _FakeCLI.fail_next = False
+        _, retry = turn("retry")
+        assert HIST in retry
+        _, later = turn("later")
+        assert HIST not in later
+        _FakeCLI.raise_next = RuntimeError("cli died")
+        sessions.clear()
+        try:
+            with pytest.raises(RuntimeError):
+                turn("raises on a fresh session")
+        finally:
+            _FakeCLI.raise_next = None
+        _, again = turn("again")
+        assert HIST in again
+    finally:
+        sessions.clear()
+
+
+def test_claude_handoff_history_is_resent_after_failed_turns(monkeypatch):
+    from providers import claude_sdk_session as sdk
+
+    runner, session, messages = _claude_runner(
+        monkeypatch, CID + 35, [RuntimeError("a"), RuntimeError("b"), [{"type": "done"}], [{"type": "done"}]])
+    session.session_id = "live-session"
+    session._handoff_pending = True
+    runner.context = HIST
+
+    async def fake_close(cid):
+        return None
+    monkeypatch.setattr(sdk, "close_session", fake_close)
+    _claude_turn(runner, "first, fails twice")
+    assert session._handoff_pending is True
+    _claude_turn(runner, "retry")
+    assert HIST in messages[-1]
+    assert session._handoff_pending is False
+    _claude_turn(runner, "later")
+    assert HIST not in messages[-1]

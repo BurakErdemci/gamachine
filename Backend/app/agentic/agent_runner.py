@@ -3084,6 +3084,7 @@ class AgentRunner:
             if len(_ctx) > _CTX_CAP:
                 _ctx = "…[eski geçmiş kırpıldı — en yeni kısım korundu]\n" + _ctx[-_CTX_CAP:]
             enriched_prompt = f"{user_message}\n\n{_HANDOFF_HEADER}\n{_ctx}"
+        _ctx_before = sess.ctx_injected
         sess.ctx_injected = (cli_key != "kimi")
 
         # Görseller: dosyaya yaz + yolu prompt'a enjekte (CLI read aracıyla açar).
@@ -3106,6 +3107,7 @@ class AgentRunner:
         got_error = False
         reset_session = False
         _turn_ok = False
+        _cancelled = False
         try:
             for attempt in (1, 2):
                 got_error = False
@@ -3193,10 +3195,14 @@ class AgentRunner:
             # session'ını resume etmesin. Tam transcript temiz session'a verilecek.
             sess.session_id = None
             sess.ctx_injected = False
+            _cancelled = True
             raise
         finally:
             if not _turn_ok:
                 _briefing.forget()
+                if not _cancelled:
+                    # The history may never have reached the CLI: say it again.
+                    sess.ctx_injected = _ctx_before
             if sess.active_provider is provider:
                 sess.active_provider = None
             cleanup_dir(_att_dir)
@@ -3480,15 +3486,18 @@ class AgentRunner:
                     yield _normalize_session_event(etype, ev)
                 if _errored:
                     agent_guide.briefing_of(session).forget()
+                    session._handoff_pending = _handoff
                 cleanup_dir(_att_dir)
                 return
             except (asyncio.CancelledError, GeneratorExit):
                 # A turn that did not end normally may not have reached the model.
                 agent_guide.briefing_of(session).forget()
+                session._handoff_pending = _handoff
                 raise
             except Exception as e:
                 # The notes may never have reached the model: say them again.
                 agent_guide.briefing_of(session).forget()
+                session._handoff_pending = _handoff
                 if (isinstance(e, SessionBusyError) and _yielded == 0
                         and getattr(self, "task_wake", False) and not session._broken):
                     # A wake never resets the session: the route queues it again.
@@ -3762,6 +3771,7 @@ class AgentRunner:
         _handoff = getattr(session, "_handoff_pending", False)
         if _handoff:
             session._handoff_pending = False
+        _ctx_before = session._ctx_injected
         if getattr(self, "side_turn", None) is not None:
             # A dead or never-started app-server gets a brand-new thread on
             # this stream (start() only does thread/start), so the flag from
@@ -3807,11 +3817,13 @@ class AgentRunner:
             self.images, self.workspace_path, f"codex_conv{self.conversation_id}")
         from providers.oneshot_cli import CODEX_PLAN_ERROR_RE, QUOTA_ERROR_RE
         _turn_ok = False
+        _failed = False
         try:
             async for ev in session.stream(message, image_paths=image_paths):
                 etype = ev.pop("type", "text")
                 if etype == "error":
                     _briefing.forget()
+                    _failed = True
                     _msg = str(ev.get("message", ""))
                     if CODEX_PLAN_ERROR_RE.search(_msg):
                         # Codex'in account/plan sinyali tutarsız: hatayı açıkla fakat
@@ -3825,8 +3837,10 @@ class AgentRunner:
                             "⏳ Codex kullanım hakkın dolmuş görünüyor (plan kotası). "
                             "Kota yenilenene kadar başka bir sağlayıcı seçebilirsin "
                             "(örn. NVIDIA ücretsiz havuzu veya OpenCode).\n\n" + _msg[:200])
+                if etype == "done" and ev.get("stop_reason") == "cancelled":
+                    _failed = True
                 yield _normalize_session_event(etype, ev)
-            _turn_ok = True
+            _turn_ok = not _failed
         except Exception as e:
             logger.exception("[CodexSession] stream hatası")
             # ⚠️ `redact_secrets` ŞART — gerekçe Claude yolundaki ikiziyle (bkz.
@@ -3843,6 +3857,8 @@ class AgentRunner:
                 # The thread may never have taken this turn (error, cancel, close):
                 # send guide and notes again.
                 _briefing.forget()
+                session._ctx_injected = _ctx_before
+                session._handoff_pending = _handoff
             cleanup_dir(_att_dir)
 
     def _summarize_result(self, tool_name: str, result: dict) -> str:
