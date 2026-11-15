@@ -1129,5 +1129,30 @@ class TestCopilotTurnMcpConfig(unittest.TestCase):
         self.assertFalse(os.path.exists(seen["path"]))
 
 
+class TestCursorVersionPick(unittest.TestCase):
+    def test_an_unpacking_update_does_not_replace_the_installed_version(self):
+        from providers import oneshot_cli
+        with tempfile.TemporaryDirectory() as local:
+            versions = os.path.join(local, "cursor-agent", "versions")
+
+            def tree(name, complete=True):
+                os.makedirs(os.path.join(versions, name))
+                for f in (("node.exe", "index.js") if complete else ("1163.index.js",)):
+                    open(os.path.join(versions, name, f), "w").close()
+                return os.path.join(versions, name)
+
+            older = tree("2026.07.09-a3815c0")
+            tree("2026.11.13-eacade1", complete=False)   # promote not finished
+            tree("extract-4f7ef805-939f-44ce-9977-d210ffb7d787", complete=False)
+            with patch.dict(os.environ, {"LOCALAPPDATA": local}), \
+                    patch.object(sys, "platform", "win32"):
+                self.assertEqual(oneshot_cli.resolve_cursor_cmd(),
+                                 [os.path.join(older, "node.exe"), os.path.join(older, "index.js")])
+                newer = os.path.join(versions, "2026.11.13-eacade1")
+                for f in ("node.exe", "index.js"):
+                    open(os.path.join(newer, f), "w").close()
+                self.assertEqual(oneshot_cli.resolve_cursor_cmd()[0], os.path.join(newer, "node.exe"))
+
+
 if __name__ == "__main__":
     unittest.main()

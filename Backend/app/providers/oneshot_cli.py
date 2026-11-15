@@ -27,6 +27,7 @@ import sys
 import json
 import subprocess
 import glob
+import re
 import shutil
 import logging
 from typing import Dict, List, Optional, Tuple
@@ -111,8 +112,14 @@ def _latest_cursor_version_dir() -> Optional[str]:
     """<LOCALAPPDATA>/cursor-agent/versions/ altındaki en yeni sürüm klasörü.
     Klasör adı YYYY.MM.DD-hash formatında → ada göre sıralama kronolojiktir."""
     base = os.path.join(os.environ.get("LOCALAPPDATA", ""), "cursor-agent", "versions")
+    # The self-updater unpacks into `extract-<uuid>` beside the versions and can leave it
+    # there; by name it sorts after every date (measured 15 Nov 2026, 2026.11.13 update),
+    # and an incomplete tree has no node.exe. Only complete dated versions count.
     try:
-        dirs = [d for d in glob.glob(os.path.join(base, "*")) if os.path.isdir(d)]
+        dirs = [d for d in glob.glob(os.path.join(base, "*"))
+                if re.match(r"\d{4}\.\d{2}\.\d{2}-", os.path.basename(d))
+                and os.path.isfile(os.path.join(d, "node.exe"))
+                and os.path.isfile(os.path.join(d, "index.js"))]
     except Exception:
         return None
     if not dirs:
