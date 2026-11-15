@@ -364,7 +364,7 @@ async def test_every_level_the_registry_lists_for_the_chat_is_carried(env, store
     (("subscription", "claude-haiku-4-5"), "high"),
     (("subscription", "claude-opus-4-6"), "xhigh"),
     (("subscription", "gpt-6-luna"), "minimal"),
-    (("subscription", "kimi-k3"), "low"),
+    (("subscription", "kimi-code/kimi-for-coding"), "low"),
     (("subscription", "claude-opus-5"), "turbo"),
     (("subscription", "claude-opus-5"), "HIGH"),
     (("subscription", "claude-opus-5"), " high"),
