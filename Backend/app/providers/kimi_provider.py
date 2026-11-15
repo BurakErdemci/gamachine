@@ -4,11 +4,15 @@ import json
 import shutil
 import logging
 import tempfile
+import threading
 from .cli_base import BaseCLIProvider
 from .families import kimi_cli_model
 from .unityai_tool_text import mail_and_fallback, mcp_double_underscore
 
 logger = logging.getLogger(__name__)
+
+# One read-merge-write of the user's mcp.json at a time in this process.
+_USER_MCP_LOCK = threading.Lock()
 
 
 class KimiProvider(BaseCLIProvider):
@@ -55,51 +59,90 @@ class KimiProvider(BaseCLIProvider):
         + _KIMI_MANAGED_END + "\n"
     )
 
-    _mcp_cfg_path = None  # this turn's temp MCP config file
-
-    async def analyze_code(self, *args, **kwargs):
-        try:
-            async for event in super().analyze_code(*args, **kwargs):
-                yield event
-        finally:
-            self._drop_mcp_cfg()
-
-    def _drop_mcp_cfg(self):
-        """Deletes this turn's temp MCP config once kimi has exited."""
-        path, self._mcp_cfg_path = self._mcp_cfg_path, None
-        if path:
-            try:
-                os.remove(path)
-            except OSError as e:
-                logger.warning("[KimiProvider] %s silinemedi: %s", path, e)
+    # -- MCP: $KIMI_CODE_HOME/mcp.json --
+    # kimi 2.5.3 has no MCP file flag; the user-level mcp.json is the only file
+    # it loads without trusting the project (turn-1 sources S1/S3). The file is
+    # the user's, so Gamachine owns a fixed set of entry names and merges them
+    # in. Nothing per turn or per chat goes into it: every stdio server inherits
+    # kimi's own env (entry env merged on top, measured with kimi 2.5.3), so the
+    # workspace, backend URL, Unity URL and connector ids ride `_mcp_env`, and
+    # the chat id and read-only flag ride the base spawn env. The file changes
+    # only with machine-wide state: install paths, Unity running, the
+    # computer/browser/connectors switches.
+    #
+    # `enabled: false` instead of a listed-but-dead server (measured, kimi 2.5.3,
+    # 15 Nov 2026): prompt mode waits for every server's first connect before
+    # the first model request, and the unityMCP bridge answers `initialize` only
+    # after 10-17 s with Unity off, so a listed bridge delayed each turn ~30 s;
+    # a disabled one costs nothing. A command that does not exist on disk
+    # crashes kimi outright (spawn ENOENT, rc 1, for .exe and .cmd alike), so an
+    # entry whose command is missing is written disabled too.
+    #
+    # `unityai` keeps its bare name: the hint, the permission rules already in
+    # users' config.toml and the guide tests name its tools mcp__unityai__*.
+    # The others carry the gamachine prefix; the Unity one is not `unityMCP`,
+    # which is the name a user's own Unity MCP server would have.
+    _KIMI_UNITY_SERVER = "gamachineUnityMCP"
+    _mcp_env = {}  # this turn's env for the MCP servers, set by _register_mcp
 
     def _register_mcp(self, launcher: str, workspace: str, backend_url: str):
-        """Writes a per-turn file with only the product servers. The workspace
-        .mcp.json is the project's own and must never be handed to kimi: its
-        servers would start without a prompt."""
-        self._drop_mcp_cfg()
-        path = None
+        """Brings $KIMI_CODE_HOME/mcp.json up to date and keeps this turn's
+        per-turn values for the spawn env."""
+        from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
+        from computer_use import registration as computer_reg
+        from browser_use import registration as browser_reg
+        from connectors import registration as connectors_reg
+        from .codex_unitymcp_bridge import bridge_argv
+
+        unity_url = unity_mcp_manager.mcp_url()
+        env = {"WORKSPACE_PATH": workspace, "WORKSPACE": workspace,
+               "UNITYAI_URL": backend_url, connectors_reg.IDS_ENV: ""}
+        if unity_url:
+            env["UNITY_MCP_URL"] = unity_url
+        servers = {"unityai": self._kimi_entry([launcher], True),
+                   self._KIMI_UNITY_SERVER: self._kimi_entry(bridge_argv(), bool(unity_url))}
+        for reg in (computer_reg, browser_reg, connectors_reg):
+            entry = reg.stdio_entry()  # None while the user's switch is off
+            servers[reg.SERVER_NAME] = self._kimi_entry(reg.server_argv(), entry is not None)
+            if reg is connectors_reg and entry:
+                env.update({key: entry["env"][key] for key in
+                            (connectors_reg.IDS_ENV, connectors_reg.ROOT_ENV) if key in entry["env"]})
+        self._mcp_env = env
         try:
-            servers = self._product_mcp_servers_stdio(launcher, workspace, backend_url)
-            self._apply_computer_servers(servers, lambda e: e, chat_id=True)
-            fd, path = tempfile.mkstemp(prefix="uai_kimi_mcp_", suffix=".json")
-            os.close(fd)
-            from .workspace_config import harden_config_file
-            if not harden_config_file(path):
-                logger.warning(
-                    "[KimiProvider] %s izinleri kısıtlanamadı; dosya dizin "
-                    "izinlerini miras alıyor.", path)
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump({"mcpServers": servers}, f, indent=2)
-            self._mcp_cfg_path = path
-        except Exception as e:
-            self._mcp_cfg_path = None
-            if path:
-                try:
-                    os.remove(path)
-                except OSError:
-                    pass
-            logger.warning(f"[KimiProvider] MCP config yazılamadı: {e}")
+            self._write_user_mcp(servers)
+        except Exception as e:  # the turn still runs, without Gamachine's MCP tools
+            logger.warning("[KimiProvider] mcp.json could not be updated: %s", e)
+
+    @staticmethod
+    def _kimi_entry(argv, enabled: bool) -> dict:
+        command = argv[0]
+        exists = (os.path.isfile(command) if os.path.isabs(command)
+                  else shutil.which(command) is not None)
+        return {"command": command, "args": list(argv[1:]), "enabled": bool(enabled and exists)}
+
+    @classmethod
+    def _kimi_mcp_path(cls) -> str:
+        return os.path.join(os.path.dirname(cls._kimi_config_path()), "mcp.json")
+
+    def _write_user_mcp(self, ours: dict):
+        """Merges Gamachine's entries into the user's mcp.json: their servers and
+        other keys stay as they are, nothing is written when ours already match,
+        and an unreadable file is left alone (rewriting it would lose theirs)."""
+        from .agy_provider import _read_json_config, _write_json_config
+        from .workspace_config import harden_config_file
+        path = self._kimi_mcp_path()
+        with _USER_MCP_LOCK:
+            data = _read_json_config(path)
+            servers = data.get("mcpServers", {}) if data is not None else None
+            if not isinstance(servers, dict):
+                logger.warning("[KimiProvider] %s cannot be merged safely; left unchanged, "
+                               "kimi runs without Gamachine's MCP tools.", path)
+                return
+            if all(servers.get(name) == entry for name, entry in ours.items()):
+                return
+            data["mcpServers"] = {**servers, **ours}
+            if _write_json_config(path, data) and not harden_config_file(os.path.realpath(path)):
+                logger.warning("[KimiProvider] %s could not be made private.", path)
 
     @staticmethod
     def _kimi_config_path() -> str:
@@ -180,7 +223,9 @@ class KimiProvider(BaseCLIProvider):
         unity_section = ""
         if unity_running:
             unity_section = (
-                "\nUNITY EDITOR (unityMCP MCP tools — call DIRECTLY for ALL Unity work):\n"
+                "\nUNITY EDITOR (unityMCP tools — call DIRECTLY for ALL Unity work). Here the\n"
+                "server is named gamachineUnityMCP: unityMCP/<tool> below and in the guide\n"
+                "is the tool mcp__gamachineUnityMCP__<tool>.\n"
                 "RULE: NEVER read .unity/.prefab/.asset files to answer Unity questions —\n"
                 "      ALWAYS call the live editor via unityMCP tools instead.\n"
                 "- Hierarchy/objects: unityMCP/manage_scene, find_gameobjects, manage_gameobject\n"
@@ -221,13 +266,6 @@ class KimiProvider(BaseCLIProvider):
         hint = self._build_hint(unity_running)
         from agent_guide import provider_guide
         hint += provider_guide(self, project_open=bool(workspace), unity_running=unity_running)
-        if self._mcp_cfg_path:
-            # kimi 2.5.3 has no MCP file flag (`--mcp-config-file` is an unknown
-            # option, rc 1): it reads only $KIMI_CODE_HOME/mcp.json and, in a
-            # trusted folder, the project's .mcp.json / .kimi-code/mcp.json.
-            # How the per-turn file reaches it is an open decision.
-            logger.warning("[KimiProvider] per-turn MCP config is not passed to kimi "
-                           "(the CLI has no flag for it).")
         # The working directory is the spawn cwd (cli_base); kimi has no -w flag.
         # The prompt never starts with "/" (the hint comes first), so prompt
         # mode cannot read it as a slash command such as /goal.
@@ -253,6 +291,7 @@ class KimiProvider(BaseCLIProvider):
     def _turn_spawn_env(self) -> dict:
         env = {
             **super()._turn_spawn_env(),
+            **self._mcp_env,
             # Prompt mode runs an update preflight before the turn; these keep a
             # chat turn from updating or relaunching the CLI (KIMI_CLI_* is the
             # legacy spelling the 2.5.3 binary still reads).

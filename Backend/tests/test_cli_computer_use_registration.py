@@ -1,4 +1,5 @@
 """copilot, cursor, kimi and opencode register the computer-use, agent-browser and connectors servers per turn."""
+import asyncio
 import json
 import os
 from types import SimpleNamespace
@@ -12,7 +13,7 @@ from providers.copilot_provider import CopilotProvider
 from providers.cursor_provider import CursorProvider
 from providers.kimi_provider import KimiProvider
 from providers.opencode_provider import OpenCodeProvider
-from spawn_env import CONVERSATION_ENV
+from spawn_env import CONVERSATION_ENV, READ_ONLY_ENV
 
 NAMES = (computer_reg.SERVER_NAME, browser_reg.SERVER_NAME, connectors_reg.SERVER_NAME)
 CHAT = 77
@@ -127,28 +128,52 @@ def test_cursor_shared_file_has_no_chat_id_and_drops_servers(switch, tmp_path, m
     assert "mine" in servers
 
 
-def _kimi_servers(provider, ws):
-    provider._write_mcp_config(ws)
-    cmd = provider._build_cmd("hi", workspace=ws)
-    path = cmd[cmd.index("--mcp-config-file") + 1]
-    with open(path, encoding="utf-8") as f:
-        servers = json.load(f)["mcpServers"]
-    provider._drop_mcp_cfg()
-    return servers
+def _kimi_turn(provider, ws, monkeypatch):
+    """kimi reads the user-level $KIMI_CODE_HOME/mcp.json and its stdio servers inherit
+    the kimi process env: (servers in the file, env of the spawned kimi)."""
+    from providers.cli_base import BaseCLIProvider
+
+    monkeypatch.setattr(BaseCLIProvider, "_cli_installed", staticmethod(lambda name: True))
+    monkeypatch.setattr(BaseCLIProvider, "_resolve_exec", staticmethod(lambda cmd: list(cmd)))
+    seen = {}
+
+    async def fake_spawn(*argv, **kw):
+        seen["env"] = dict(kw.get("env") or {})
+        raise RuntimeError("spawn intercepted")
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", fake_spawn)
+
+    async def drive():
+        try:
+            async for _ in provider.analyze_code("hi", cwd=ws):
+                pass
+        except RuntimeError as e:
+            assert "spawn intercepted" in str(e)
+
+    asyncio.run(drive())
+    with open(provider._kimi_mcp_path(), encoding="utf-8") as f:
+        return json.load(f)["mcpServers"], seen["env"]
 
 
 def test_kimi_entries_chat_id_and_switch(switch, tmp_path, monkeypatch):
     monkeypatch.setenv("KIMI_CODE_HOME", str(tmp_path / "kimi-home"))
     provider = _prepare(KimiProvider(binary_name="kimi-k3"), monkeypatch)
     ws = _ws(tmp_path)
-    servers = _kimi_servers(provider, ws)
+    servers, env = _kimi_turn(provider, ws, monkeypatch)
     for name in NAMES:
-        assert servers[name]["env"][CONVERSATION_ENV] == str(CHAT)
+        assert servers[name]["enabled"] is True
+        assert CONVERSATION_ENV not in json.dumps(servers[name])  # shared file: no chat id in it
+    assert env[CONVERSATION_ENV] == str(CHAT)
+    assert env[connectors_reg.IDS_ENV] == "blender"
     provider._read_only = True
-    assert not set(NAMES) & set(_kimi_servers(provider, ws))
+    ro_servers, ro_env = _kimi_turn(provider, ws, monkeypatch)
+    assert ro_servers == servers  # the servers refuse on the env mark, the file stays
+    assert ro_env[READ_ONLY_ENV] == "1"
     provider._read_only = False
     switch["on"] = False
-    assert not set(NAMES) & set(_kimi_servers(provider, ws))
+    servers, env = _kimi_turn(provider, ws, monkeypatch)
+    assert all(servers[name]["enabled"] is False for name in NAMES)
+    assert env[connectors_reg.IDS_ENV] == ""
 
 
 def test_kimi_refreshes_a_stale_managed_block(tmp_path, monkeypatch):
