@@ -62,9 +62,9 @@ _WINDOWS_INSTALL_CMDS = {
     "codex":    ("npm install -g @openai/codex", True),
     # npm'deki 'agy'/'antigravity-cli' paketleri Google'ın değil (squatter).
     "agy":      ("irm 'https://antigravity.google/cli/install.ps1' | iex", False),
-    # Kimi Code CLI resmi olarak macOS/Linux (Python 3.13+); Windows'ta kurulum
-    # denenebilir ama desteklenmez — kurulu değilse UI temiz uyarı verir.
-    "kimi":     ("pip install kimi-cli", False),
+    # Kimi Code's official Windows installer (code.kimi.com); it puts kimi.exe in
+    # ~/.kimi-code/bin. The old `pip install kimi-cli` installs the legacy CLI.
+    "kimi":     ("irm https://code.kimi.com/kimi-code/install.ps1 | iex", False),
 }
 
 # macOS'ta mümkün olan yerlerde sağlayıcının resmi native installer'ını kullan.
@@ -537,8 +537,16 @@ def create_config_router(db):
                 {"id": "claude-sonnet-4-6",    "name": "Claude 4.6 Sonnet (CLI)",       "provider": "subscription"},
                 {"id": "claude-haiku-4-5",     "name": "Claude 4.5 Haiku (CLI)",        "provider": "subscription"},
                 *[{**model, "name": f"Codex ({model['name']})"} for model in _CODEX_MODELS],
-                {"id": "kimi-k3",              "name": "Kimi K3 (CLI)",                 "provider": "subscription"},
-                {"id": "kimi-k2.7-code",       "name": "Kimi K2.7 Code (CLI)",          "provider": "subscription"},
+                # Kimi Code CLI aliases (`-m` takes them as is). kimi-code/k3,
+                # kimi-for-coding and kimi-for-coding-highspeed are in the doc's
+                # config.toml example; k3.1-pro is in the CLI's own "Kimi For
+                # Coding" catalog (kimi.exe 2.5.3). Login provisions the aliases
+                # an account has; a missing one gets kimi_model_unavailable.
+                # Ids saved as kimi-k3 / kimi-k2.7-code map in families.kimi_cli_model.
+                {"id": "kimi-code/k3",                        "name": "Kimi K3 (CLI)",                   "provider": "subscription"},
+                {"id": "kimi-code/k3.1-pro",                  "name": "Kimi K3.1 Pro (CLI)",             "provider": "subscription"},
+                {"id": "kimi-code/kimi-for-coding",           "name": "Kimi For Coding (CLI)",           "provider": "subscription"},
+                {"id": "kimi-code/kimi-for-coding-highspeed", "name": "Kimi For Coding HighSpeed (CLI)", "provider": "subscription"},
                 {"id": "gemini-4-carbon",              "name": "Gemini 4 Carbon",             "provider": "subscription"},
                 {"id": "gemini-4-argon",               "name": "Gemini 4 Argon",              "provider": "subscription"},
                 {"id": "gemini-4-hydrogen",            "name": "Gemini 4 Hydrogen",           "provider": "subscription"},

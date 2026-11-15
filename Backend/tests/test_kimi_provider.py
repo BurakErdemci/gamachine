@@ -69,6 +69,9 @@ class TestApiProviders(unittest.TestCase):
 
 class TestKimiProvider(unittest.TestCase):
     def test_build_cmd(self):
+        """The command uses only options kimi 2.5.3 accepts in prompt mode
+        (inputs/help.txt; `--print`, `--verbose`, `-w` and `--mcp-config-file`
+        were rejected as unknown options) and ends with the prompt."""
         from providers.kimi_provider import KimiProvider
 
         with tempfile.TemporaryDirectory() as tmpdir, \
@@ -78,25 +81,18 @@ class TestKimiProvider(unittest.TestCase):
                  return_value=False,
              ), \
              patch.object(KimiProvider, "_ensure_exec"):
-            cmd = KimiProvider(binary_name="kimi-k3")._build_cmd(
+            cmd = KimiProvider(binary_name="kimi-code/k3")._build_cmd(
                 "HELLO_PROMPT",
                 workspace=tmpdir,
             )
 
-        expected_order = [
-            "kimi",
-            "--print",
-            "--output-format",
-            "stream-json",
-            "--verbose",
-            "-m",
-            "kimi-k3",
-            "-p",
-        ]
-        positions = [cmd.index(item) for item in expected_order]
-        self.assertEqual(positions, sorted(positions))
-        prompt = cmd[cmd.index("-p") + 1]
+        self.assertEqual(os.path.basename(cmd[0]).lower().split(".")[0], "kimi")
+        self.assertEqual(cmd[1:5], ["--output-format", "stream-json", "-m", "kimi-code/k3"])
+        self.assertEqual(cmd[5], "-p")
+        self.assertEqual(len(cmd), 7)
+        prompt = cmd[6]
         self.assertTrue(prompt.endswith("HELLO_PROMPT"))
+        self.assertFalse(prompt.startswith("/"))
         self.assertIn("mcp__unityai__save_file", prompt)
 
     def test_write_kimi_permissions_is_idempotent(self):
@@ -187,6 +183,215 @@ class TestKimiProvider(unittest.TestCase):
         self.assertEqual(len(provider.prompts), 2)
         self.assertTrue(all("CONTEXT_MARKER" in p for p in provider.prompts))
         _SESSIONS.clear()
+
+
+# ── Kimi Code 2.5.3 behaviour through the real analyze_code ──────────────────
+# The CLI is the boundary: a stand-in process prints the lines kimi writes and
+# exits with its code; everything on our side (spawn, env, parsing, error
+# handling) runs for real.
+
+import json  # noqa: E402
+
+import pytest  # noqa: E402
+
+# Lines in the shapes kimi 2.5.3's PromptJsonWriter writes (prompt-render.ts in
+# the kimi.exe bundle; doc reference/kimi-command "stream-json"). The first line
+# is verbatim from the installed CLI (measured 15 Nov 2026).
+_TURN_LINES = [
+    '{"role":"meta","type":"system.version","version":"2.5.3"}',
+    json.dumps({"role": "assistant", "content": "Sahneye bakıyorum.",
+                "tool_calls": [{"type": "function", "id": "call_1", "function": {
+                    "name": "mcp__unityai__read_file",
+                    "arguments": json.dumps({"path": "Assets/Player.cs"})}}]}),
+    json.dumps({"role": "tool", "tool_call_id": "call_1", "content": "public class Player {}"}),
+    json.dumps({"role": "meta", "type": "turn.step.retrying", "failed_attempt": 1,
+                "next_attempt": 2, "max_attempts": 3, "delay_ms": 500,
+                "error_name": "APIError", "error_message": "overloaded"}),
+    json.dumps({"role": "assistant", "content": "Player sınıfı boş."}),
+    # Not written by 2.5.3 for a plain prompt, or not JSON objects: ignored.
+    json.dumps({"type": "goal.summary", "goalId": None, "status": None}),
+    json.dumps({"role": "meta", "type": "some.future.meta"}),
+    "[1, 2]",
+    '"bare string"',
+    json.dumps({"role": "meta", "type": "session.resume_hint", "session_id": "sess-42",
+                "command": "kimi -r sess-42",
+                "content": "To resume this session: kimi -r sess-42"}),
+]
+
+# Measured 15 Nov 2026: kimi 2.5.3 with an empty KIMI_CODE_HOME (no login) and
+# `-m kimi-code/k3` printed the version line on stdout, this on stderr, rc 1.
+_NOT_CONFIGURED_STDERR = [
+    'error: failed to run prompt: Model "kimi-code/k3" is not configured in config.toml.',
+    "See log: C:\\kimi-home\\logs\\kimi-code.log",
+]
+
+
+@pytest.fixture
+def run_kimi(tmp_path, monkeypatch):
+    """Runs one KimiProvider turn against a stand-in CLI; returns its events."""
+    from providers.kimi_provider import KimiProvider
+    from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
+
+    monkeypatch.setenv("KIMI_CODE_HOME", str(tmp_path / "kimi-home"))
+    monkeypatch.setattr(unity_mcp_manager, "is_running", lambda: False)
+    monkeypatch.setattr(unity_mcp_manager, "mcp_url", lambda: None)
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    real_build = KimiProvider._build_cmd
+
+    def run(stdout_lines, stderr_lines=(), rc=0, model="kimi-code/k3"):
+        script = tmp_path / "fake_kimi.py"
+        script.write_text(
+            "import os, sys\n"
+            f"sys.stdout.write({json.dumps(chr(10).join(stdout_lines) + chr(10) if stdout_lines else '')})\n"
+            f"sys.stderr.write({json.dumps(chr(10).join(stderr_lines) + chr(10) if stderr_lines else '')})\n"
+            "sys.stdout.flush(); sys.stderr.flush()\n"
+            f"os._exit({rc})\n",
+            encoding="utf-8")
+
+        def build(self, *args, **kwargs):
+            real_build(self, *args, **kwargs)
+            return [sys.executable, str(script)]
+
+        monkeypatch.setattr(KimiProvider, "_build_cmd", build)
+        provider = KimiProvider(binary_name=model)
+        monkeypatch.setattr(provider, "_launcher_path", lambda name: "test-launcher")
+        monkeypatch.setattr(provider, "_ensure_exec", lambda path: None)
+
+        async def collect():
+            return [ev async for ev in provider.analyze_code("hi", cwd=str(ws))]
+
+        return asyncio.run(collect())
+
+    return run
+
+
+def test_a_turn_streams_text_tools_and_session_and_ignores_unknown_lines(run_kimi):
+    events = run_kimi(_TURN_LINES)
+
+    assert not [e for e in events if e["type"] == "error"], events
+    deltas = "".join(e["text"] for e in events if e["type"] == "delta")
+    assert deltas == "Sahneye bakıyorum.\n\nPlayer sınıfı boş."
+    assert events[-1] == {"type": "final", "text": "Sahneye bakıyorum.\n\nPlayer sınıfı boş."}
+    thinking = [e["text"] for e in events if e["type"] == "thinking"]
+    assert thinking[0] == "🔧 `mcp__unityai__read_file` → `Assets/Player.cs`"
+    assert thinking[1] == "↩ public class Player {}"
+    assert thinking[2].startswith("↻") and "2/3" in thinking[2] and "overloaded" in thinking[2]
+    assert len(thinking) == 3
+    assert [e for e in events if e["type"] == "session_meta"] == [
+        {"type": "session_meta", "session_id": "sess-42"}]
+    # The meta version line, the goal summary and the non-object lines left no text.
+    assert "system.version" not in deltas and "[1, 2]" not in deltas
+
+
+def test_an_unconfigured_model_gives_a_clear_error_naming_the_alias(run_kimi):
+    events = run_kimi(['{"role":"meta","type":"system.version","version":"2.5.3"}'],
+                      _NOT_CONFIGURED_STDERR, rc=1, model="kimi-k3")
+
+    errors = [e for e in events if e["type"] == "error"]
+    assert len(errors) == 1, events
+    assert errors[0]["code"] == "kimi_model_unavailable"
+    assert "kimi-code/k3" in errors[0]["content"] and "kimi login" in errors[0]["content"]
+    assert errors[0]["retryable"] is False
+    assert events[-1]["type"] == "final"
+
+
+def test_a_missing_login_says_how_to_log_in(run_kimi):
+    events = run_kimi(['{"role":"meta","type":"system.version","version":"2.5.3"}'], [
+        "error: failed to run prompt: No model configured. Run `kimi` and use /login to "
+        "sign in, then retry; or set default_model in config.toml.",
+    ], rc=1)
+
+    errors = [e for e in events if e["type"] == "error"]
+    assert [e["code"] for e in errors] == ["kimi_not_logged_in"], events
+    assert "kimi login" in errors[0]["content"]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="0xC0000409 is a Windows exit status")
+def test_a_windows_crash_exit_is_a_clear_error_not_a_raw_code(run_kimi):
+    # -1073740791 as a C int is the 0xC0000409 status kimi 2.5.3 exited with.
+    events = run_kimi(['{"role":"meta","type":"system.version","version":"2.5.3"}'],
+                      ["fatal"], rc=-1073740791)
+
+    errors = [e for e in events if e["type"] == "error"]
+    assert [e["code"] for e in errors] == ["kimi_crashed"], events
+    assert "0xC0000409" in errors[0]["content"] and errors[0]["reset_session"] is True
+
+
+def test_a_session_occupied_line_is_reported_once(run_kimi):
+    events = run_kimi([
+        '{"role":"meta","type":"system.version","version":"2.5.3"}',
+        json.dumps({"type": "error", "code": "SESSION_OCCUPIED",
+                    "message": "Session is in use by another process.", "details": None}),
+    ], rc=4)
+
+    errors = [e for e in events if e["type"] == "error"]
+    assert len(errors) == 1, events
+    assert "Session is in use by another process." in errors[0]["content"]
+
+
+@pytest.mark.parametrize("saved, alias", [
+    ("kimi-k3", "kimi-code/k3"),
+    ("kimi-k2.7-code", "kimi-code/kimi-for-coding"),
+    ("kimi-code/k3.1-pro", "kimi-code/k3.1-pro"),
+])
+def test_saved_model_ids_start_the_cli_with_a_kimi_code_alias(saved, alias, tmp_path, monkeypatch):
+    from providers.kimi_provider import KimiProvider
+    from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
+
+    monkeypatch.setenv("KIMI_CODE_HOME", str(tmp_path))
+    monkeypatch.setattr(unity_mcp_manager, "is_running", lambda: False)
+    provider = KimiProvider(binary_name=saved)
+    monkeypatch.setattr(provider, "_ensure_exec", lambda path: None)
+    cmd = provider._build_cmd("HELLO", workspace=str(tmp_path))
+    assert cmd[cmd.index("-m") + 1] == alias
+
+
+def test_every_picker_kimi_model_is_a_cli_alias_run_by_the_kimi_provider():
+    """The picker offers only ids the CLI's -m takes as is (kimi-code/<model>),
+    and each one still routes to the Kimi Code CLI."""
+    from unittest.mock import MagicMock
+    from providers.families import kimi_cli_model, subscription_family
+    from routes.config_routes import create_config_router
+
+    with patch("providers.model_catalog.list_models", return_value=None), \
+         patch("providers.model_catalog.openrouter_catalog", return_value={}), \
+         patch("urllib.request.urlopen", side_effect=OSError("closed")):
+        catalog = asyncio.run(create_config_router(MagicMock()).list_models(None))
+    ids = [m["id"] for m in catalog["subscription"] if subscription_family(m["id"]) == "kimi"]
+    assert "kimi-code/k3" in ids, ids
+    assert all(i.startswith("kimi-code/") and kimi_cli_model(i) == i for i in ids), ids
+
+
+def _spawn_env(provider):
+    from spawn_env import build_spawn_env, env_family
+
+    return build_spawn_env(family=env_family(provider.binary_name),
+                           overrides=provider._turn_spawn_env())
+
+
+def test_spawn_env_turns_off_auto_update_and_telemetry():
+    from providers.kimi_provider import KimiProvider
+
+    env = _spawn_env(KimiProvider(binary_name="kimi-code/kimi-for-coding"))
+    assert env["KIMI_CODE_NO_AUTO_UPDATE"] == "1"
+    assert env["KIMI_DISABLE_TELEMETRY"] == "1"
+    assert "KIMI_MODEL_THINKING_EFFORT" not in env
+
+
+@pytest.mark.parametrize("model, level, expected", [
+    ("kimi-code/k3", "max", "max"),
+    ("kimi-k3", "low", "low"),
+    ("kimi-code/k3", "medium", None),          # not in K3's declared list
+    ("kimi-code/k3", "auto", None),
+    ("kimi-code/kimi-for-coding", "high", None),  # declares no efforts
+])
+def test_effort_reaches_the_cli_only_for_levels_the_model_declares(model, level, expected):
+    from providers.kimi_provider import KimiProvider
+
+    provider = KimiProvider(binary_name=model)
+    provider._effort_level = level
+    assert _spawn_env(provider).get("KIMI_MODEL_THINKING_EFFORT") == expected
 
 
 if __name__ == "__main__":

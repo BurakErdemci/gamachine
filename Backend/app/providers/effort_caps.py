@@ -23,6 +23,7 @@ import re
 from typing import Optional
 
 from providers.cli_base import BaseCLIProvider
+from providers.families import kimi_thinks_with_effort
 
 CANON_ORDER = ["auto", "off", "minimal", "low", "medium", "high", "xhigh", "max"]
 
@@ -118,7 +119,15 @@ def get_effort_caps(provider_type: str, model_name: str) -> dict:
         if m.startswith("cursor-"):
             return _caps(["auto"], "Cursor CLI reasoning seçimi upstream bug nedeniyle çalışmıyor.")
         if m.startswith("kimi-"):
-            return _caps(["auto"], "Kimi K3 düşünmesi her zaman açık — ayrı effort seviyesi yok.")
+            # K3 aliases declare support_efforts = ["low", "high", "max"] (doc
+            # config-files example); the CLI forces one through
+            # KIMI_MODEL_THINKING_EFFORT and validates it strictly against the
+            # model's list (kimi.exe 2.5.3: provider "kimi" thinkingDriven +
+            # strictThinkingValidation), so `medium` is not offered.
+            if kimi_thinks_with_effort(m):
+                return _caps(["auto", "low", "high", "max"],
+                             "Kimi K3: KIMI_MODEL_THINKING_EFFORT ile uygulanır.")
+            return _caps(["auto"], "Bu Kimi modeli ayrı bir düşünme seviyesi sunmuyor.")
         if m in BaseCLIProvider._AGY_EFFORT_LEVELS:
             return _caps(["auto", *BaseCLIProvider._AGY_EFFORT_LEVELS[m]])
         if m.startswith("gemini-4-orchestrator-"):
@@ -197,7 +206,7 @@ def map_effort(provider_type: str, model_name: str, level: str) -> dict:
         if m.startswith("opencode:"):
             return {"opencode_reasoning": lvl}
         if m.startswith("kimi-"):
-            return {}
+            return {"cli_env": {"KIMI_MODEL_THINKING_EFFORT": lvl}}
         return {}
 
     if p == "google":

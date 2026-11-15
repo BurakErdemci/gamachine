@@ -330,6 +330,18 @@ class BaseCLIProvider(AIProvider):
         """Subclass'lar kendi MCP kayıt mantığını override eder."""
         pass
 
+    def _stream_json_events(self, ev: Any, text_so_far: str) -> Optional[List[Dict[str, Any]]]:
+        """Events for one parsed stdout JSON line of a CLI whose stream format is
+        its own; None hands the line to the shared parser in analyze_code."""
+        return None
+
+    def _failure_event(self, returncode: Optional[int], stderr_lines: List[str],
+                       text: str) -> Optional[Dict[str, Any]]:
+        """A provider-specific error event for a finished process, {} when the
+        provider already reported the failure, or None for the generic
+        exit-code handling."""
+        return None
+
     def _turn_spawn_env(self) -> dict:
         """Extra env for this turn's CLI process only. Per-turn secrets go here,
         never into a config file several chats of one workspace share."""
@@ -729,51 +741,16 @@ class BaseCLIProvider(AIProvider):
                 if _is_json_provider:
                     try:
                         ev = _json.loads(raw)
-                        ev_type = ev.get("type", "")
-
-                        # ── Kimi Code stream-json: OpenAI-mesaj şekilli NDJSON (role tabanlı,
-                        #    "type" YOK). Diğer parser dallarına düşmeden burada ele alınır. ──
-                        #    NOT (canlı doğrulanmadı): content'in delta mı yoksa kümülatif mi
-                        #    geldiği bir Kimi hesabıyla doğrulanmalı; delta varsayıyoruz +
-                        #    tam-tekrar koruması var.
-                        if self.binary_name.startswith("kimi-"):
-                            if not _sess_meta_sent:
-                                _ksid = (ev.get("session_id") or ev.get("sessionId")
-                                         or (ev.get("data") or {}).get("session_id"))
-                                if _ksid:
-                                    _sess_meta_sent = True
-                                    yield {"type": "session_meta", "session_id": str(_ksid)}
-                            _krole = ev.get("role", "")
-                            if _krole == "assistant":
-                                _kc = ev.get("content", "")
-                                if isinstance(_kc, str) and _kc and _kc != full_text:
-                                    full_text += _kc
-                                    yield {"type": "delta", "text": _kc}
-                                for _ktc in (ev.get("tool_calls") or []):
-                                    if not isinstance(_ktc, dict):
-                                        continue
-                                    _kfn = _ktc.get("function") or {}
-                                    _ktn = _kfn.get("name", "")
-                                    if not _ktn:
-                                        continue
-                                    _khint = f"🔧 `{_ktn}`"
-                                    try:
-                                        _kargs = _json.loads(_kfn.get("arguments") or "{}")
-                                        if isinstance(_kargs, dict):
-                                            if "path" in _kargs:
-                                                _khint += f" → `{_kargs['path']}`"
-                                            elif "command" in _kargs:
-                                                _khint += f" → `{str(_kargs['command'])[:80]}`"
-                                            elif "action" in _kargs:
-                                                _khint += f" → `{_kargs['action']}`"
-                                    except Exception:
-                                        pass
-                                    yield {"type": "thinking", "text": _khint}
-                            elif _krole == "tool":
-                                _kres = str(ev.get("content", ""))[:200].strip()
-                                if _kres:
-                                    yield {"type": "thinking", "text": f"↩ {_kres}"}
+                        # A CLI with its own stream format parses it itself;
+                        # None means "not mine", fall through to the shared branches.
+                        _own_events = self._stream_json_events(ev, full_text)
+                        if _own_events is not None:
+                            for _own in _own_events:
+                                if _own.get("type") == "delta":
+                                    full_text += _own.get("text", "")
+                                yield _own
                             continue
+                        ev_type = ev.get("type", "")
 
                         # ── Resume anahtarı yakalama (cursor: session_id her event'te;
                         #    opencode: sessionID her event'te; copilot: result.sessionId) ──
@@ -1072,6 +1049,10 @@ class BaseCLIProvider(AIProvider):
                     "reset_session": True,
                     "reason": _termination_reason,
                 }
+            elif (_own_failure := self._failure_event(
+                    process.returncode, stderr_buffer, full_text)) is not None:
+                if _own_failure:
+                    yield _own_failure
             elif process.returncode not in (0, 1, None):
                 stderr_full = "\n".join(stderr_buffer)
                 # İÇERİK KULLANICIYA GİDER, DİSKE GİTMEZ. Doğrulama turu 2

@@ -203,3 +203,22 @@ def test_every_literal_level_list_in_the_registry_is_in_effort_levels():
 def test_effort_levels_extend_the_canonical_scale_without_reordering_it():
     assert [v for v in EFFORT_LEVELS if v in CANON_ORDER] == CANON_ORDER
     assert set(EFFORT_LEVELS) - set(CANON_ORDER) == {"none"}
+
+
+def test_kimi_k3_offers_the_levels_its_alias_declares_and_maps_them_to_the_cli_env():
+    """Kimi Code's K3 aliases declare support_efforts low/high/max; the CLI takes
+    the choice through KIMI_MODEL_THINKING_EFFORT. An id saved before the alias
+    form (kimi-k3) is the same model and gets the same levels."""
+    for model in ("kimi-code/k3", "kimi-code/k3.1-pro", "kimi-k3"):
+        assert get_effort_caps("subscription", model)["levels"] == ["auto", "low", "high", "max"], model
+        assert map_effort("subscription", model, "max") == {
+            "cli_env": {"KIMI_MODEL_THINKING_EFFORT": "max"}}, model
+    # medium is not in the alias's list and the CLI validates strictly: nothing is sent.
+    assert map_effort("subscription", "kimi-code/k3", "medium") == {}
+    assert map_effort("subscription", "kimi-code/k3", "auto") == {}
+
+
+def test_kimi_models_without_declared_efforts_stay_auto_only():
+    for model in ("kimi-code/kimi-for-coding", "kimi-code/kimi-for-coding-highspeed", "kimi-k2.7-code"):
+        assert get_effort_caps("subscription", model)["levels"] == ["auto"], model
+        assert map_effort("subscription", model, "high") == {}, model

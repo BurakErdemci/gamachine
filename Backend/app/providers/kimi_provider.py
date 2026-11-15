@@ -1,25 +1,33 @@
 import os
+import sys
 import json
+import shutil
 import logging
 import tempfile
 from .cli_base import BaseCLIProvider
+from .families import kimi_cli_model
 from .unityai_tool_text import mail_and_fallback, mcp_double_underscore
 
 logger = logging.getLogger(__name__)
 
 
 class KimiProvider(BaseCLIProvider):
-    """Moonshot Kimi Code CLI (subscription). Print modunda stream-json ile sürülür.
+    """Moonshot Kimi Code CLI (subscription), one prompt-mode run per turn:
+    `kimi --output-format stream-json -m <alias> -p <prompt>`, cwd = workspace.
 
-    GÜVENLİK: `kimi --print` otomatik `--yolo` (tüm tool onay bypass) açar. Ama
-    `[[permission.rules]]` `deny` kuralları YOLO tarafından EZİLMEZ (CLI önce tüm
-    deny'leri değerlendirir — kaynakla doğrulandı). Bu yüzden built-in Write/Edit/Bash
-    DENY edilir → model dosya/shell işlemlerini yalnız `mcp__unityai__*` ile yapar →
-    onay kartı app'te çıkar (agy'deki _AGY_DISABLED_TOOLS mantığının eşdeğeri).
+    Approval: prompt mode always runs in the CLI's "auto" (Never Ask) permission
+    mode and rejects --yolo/--auto/--plan next to -p (kimi.exe 2.5.3 source,
+    `validateOptions`; doc reference/kimi-command). That is the one-shot
+    pattern cursor (`--force`) and copilot (`--allow-tool`) use: the CLI never
+    stops for a prompt, its built-in Write/Edit/Bash are DENIED by
+    `[[permission.rules]]`, and every file/shell action goes through
+    `mcp__unityai__*`, whose approval card follows Gamachine's own approval
+    mode. The deny rules still bite in auto mode: `UserConfiguredDeny` runs
+    before `AutoModeApprove` in the CLI's policy chain (kimi.exe 2.5.3,
+    AgentPermissionPolicyService), and `kimi doctor config` accepts the block.
 
-    NOT (canlı doğrulanmadı — abonelik yok): deny kuralının fiilen Write'ı blokladığı,
-    stream-json event şemasının cli_base parser'ıyla eşleştiği ve `--mcp-config-file`'ın
-    .mcp.json shape'ini okuduğu bir Kimi hesabıyla test edilmeli.
+    NOT measured live (no Kimi subscription on the dev machine): a logged-in
+    turn's stream. The parser follows the CLI's PromptJsonWriter source.
     """
 
     _KIMI_MANAGED_MARKER = "# >>> gamachine managed (permission rules) >>>"
@@ -202,6 +210,7 @@ class KimiProvider(BaseCLIProvider):
 
     def _build_cmd(self, prompt: str, thinking_level: str = "medium", workspace: str = None) -> list:
         self._write_kimi_permissions()
+        self._kimi_error_reported = False
         workspace = workspace or os.getcwd()
 
         from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
@@ -212,17 +221,160 @@ class KimiProvider(BaseCLIProvider):
         hint = self._build_hint(unity_running)
         from agent_guide import provider_guide
         hint += provider_guide(self, project_open=bool(workspace), unity_running=unity_running)
-        # binary_name = kimi model slug'ı (kimi-k3 / kimi-k2.7-code) → -m ile geçer.
-        # K3 düşünmesi always-on; kimi CLI ayrı effort knob'u sunmaz → thinking_level yok sayılır.
-        cmd = [
-            "kimi", "--print",
-            "--output-format", "stream-json", "--verbose",
-            "-w", workspace,
-        ]
         if self._mcp_cfg_path:
-            cmd += ["--mcp-config-file", self._mcp_cfg_path]
-        else:
-            logger.warning("[KimiProvider] per-turn MCP config yok; "
-                           "--mcp-config-file verilmedi.")
-        cmd += ["-m", self.binary_name, "-p", hint + prompt]
-        return cmd
+            # kimi 2.5.3 has no MCP file flag (`--mcp-config-file` is an unknown
+            # option, rc 1): it reads only $KIMI_CODE_HOME/mcp.json and, in a
+            # trusted folder, the project's .mcp.json / .kimi-code/mcp.json.
+            # How the per-turn file reaches it is an open decision.
+            logger.warning("[KimiProvider] per-turn MCP config is not passed to kimi "
+                           "(the CLI has no flag for it).")
+        # The working directory is the spawn cwd (cli_base); kimi has no -w flag.
+        # The prompt never starts with "/" (the hint comes first), so prompt
+        # mode cannot read it as a slash command such as /goal.
+        return [
+            self._kimi_binary(),
+            "--output-format", "stream-json",
+            "-m", kimi_cli_model(self.binary_name),
+            "-p", hint + prompt,
+        ]
+
+    @staticmethod
+    def _kimi_binary() -> str:
+        """`kimi` from PATH, else the official installer's ~/.kimi-code/bin copy:
+        a backend started before the install still has the old PATH."""
+        if shutil.which("kimi"):
+            return "kimi"
+        for name in ("kimi.exe", "kimi") if sys.platform == "win32" else ("kimi",):
+            path = os.path.join(os.path.expanduser("~"), ".kimi-code", "bin", name)
+            if os.path.isfile(path):
+                return path
+        return "kimi"
+
+    def _turn_spawn_env(self) -> dict:
+        env = {
+            **super()._turn_spawn_env(),
+            # Prompt mode runs an update preflight before the turn; these keep a
+            # chat turn from updating or relaunching the CLI (KIMI_CLI_* is the
+            # legacy spelling the 2.5.3 binary still reads).
+            "KIMI_CODE_NO_AUTO_UPDATE": "1",
+            "KIMI_CLI_NO_AUTO_UPDATE": "1",
+            "KIMI_DISABLE_TELEMETRY": "1",
+        }
+        from .effort_caps import map_effort
+        env.update(map_effort("subscription", self.binary_name,
+                              getattr(self, "_effort_level", "auto")).get("cli_env", {}))
+        return env
+
+    # ── stream-json ────────────────────────────────────────────────────────
+    # kimi 2.5.3 `PromptJsonWriter` (prompt-render.ts) writes one JSON object
+    # per line: a meta version line first; one FULL assistant message per model
+    # step (text is buffered, not streamed; thinking is never written), with
+    # `tool_calls[].function.arguments` as a JSON string; a tool message per
+    # result; meta retry lines; a meta resume hint carrying the session id last.
+    # Failures are stderr text plus exit 1, except "session occupied", which is
+    # a role-less {"type": "error"} line and exit 4.
+    def _stream_json_events(self, ev, text_so_far: str):
+        if not isinstance(ev, dict):
+            return []
+        role = ev.get("role")
+        if role == "assistant":
+            out = []
+            text = ev.get("content")
+            if isinstance(text, list):  # defensive: content-part form, not written by 2.5.3
+                text = "".join(part.get("text", "") for part in text
+                               if isinstance(part, dict) and isinstance(part.get("text"), str))
+            if isinstance(text, str) and text:
+                # Each step is a whole message; keep consecutive steps apart.
+                if text_so_far and not text_so_far.endswith("\n"):
+                    text = "\n\n" + text
+                out.append({"type": "delta", "text": text})
+            for call in ev.get("tool_calls") or []:
+                fn = call.get("function") if isinstance(call, dict) else None
+                name = fn.get("name") if isinstance(fn, dict) else None
+                if name:
+                    out.append({"type": "thinking",
+                                "text": self._kimi_tool_hint(name, fn.get("arguments"))})
+            return out
+        if role == "tool":
+            result = ev.get("content")
+            if not isinstance(result, str):
+                result = json.dumps(result, ensure_ascii=False) if result is not None else ""
+            result = result[:200].strip()
+            return [{"type": "thinking", "text": f"↩ {result}"}] if result else []
+        if role == "meta":
+            kind = ev.get("type")
+            if kind == "session.resume_hint" and ev.get("session_id"):
+                return [{"type": "session_meta", "session_id": str(ev["session_id"])}]
+            if kind == "turn.step.retrying":
+                reason = str(ev.get("error_message") or ev.get("error_name") or "").strip()[:160]
+                attempt = f"{ev.get('next_attempt', '?')}/{ev.get('max_attempts', '?')}"
+                return [{"type": "thinking",
+                         "text": f"↻ Kimi isteği yeniden deneniyor ({attempt})"
+                                 + (f": {reason}" if reason else "")}]
+            return []  # system.version and any newer meta line
+        if ev.get("type") == "error":
+            message = str(ev.get("message") or ev.get("code") or "").strip()
+            self._kimi_error_reported = True
+            return [{"type": "error", "content": f"❌ Kimi Code: {message or 'bilinmeyen hata'}",
+                     "code": str(ev.get("code") or "kimi_error")}]
+        return []  # goal.summary and lines this version does not write
+
+    @staticmethod
+    def _kimi_tool_hint(name: str, arguments) -> str:
+        hint = f"🔧 `{name}`"
+        try:
+            args = json.loads(arguments) if isinstance(arguments, str) else arguments
+        except ValueError:
+            return hint
+        if isinstance(args, dict):
+            for key in ("path", "file_path", "command", "action"):
+                if args.get(key):
+                    return hint + f" → `{str(args[key])[:80]}`"
+        return hint
+
+    # ── failures ───────────────────────────────────────────────────────────
+    # STATUS_STACK_BUFFER_OVERRUN: measured on Windows (kimi 2.5.3, 14 Nov 2026)
+    # on some error exits; asyncio reports it unsigned, other paths signed.
+    _KIMI_CRASH_CODES = (3221226505, -1073740791)
+    # Startup errors the CLI prints when no usable login/model exists (kimi.exe
+    # 2.5.3: requireConfiguredModel, AuthSummaryService.ensureReady, auth errors).
+    _KIMI_LOGIN_MARKERS = (
+        "no model configured", "login required", "/login", "no provider configured",
+        "has no credential configured", "no default model configured",
+        "does not resolve to a configured provider",
+    )
+    _KIMI_STDERR_NOISE = ("Warning: this folder is not trusted", "Run kimi here and choose")
+
+    def _failure_event(self, returncode, stderr_lines, text):
+        if returncode in (0, None):
+            return None
+        detail = "\n".join(line for line in stderr_lines
+                           if line.strip() and not line.startswith(self._KIMI_STDERR_NOISE))
+        detail = detail.strip()[:400]
+        if returncode in self._KIMI_CRASH_CODES:
+            return {"type": "error", "code": "kimi_crashed", "reason": "process_exit",
+                    "reset_session": True,
+                    "content": ("❌ Kimi Code CLI çöktü (çıkış kodu 0xC0000409); mesajın "
+                                "işlenmemiş olabilir. Tekrar dene; sürerse bir terminalde "
+                                "`kimi doctor` ile kurulumu kontrol et."
+                                + (f"\n\n{detail}" if detail else ""))}
+        if getattr(self, "_kimi_error_reported", False):
+            return {}  # the stream's own error line already said it
+        if text.strip():
+            return None  # an answer came: generic exit-code handling
+        low = detail.lower()
+        if "is not configured in config.toml" in low:
+            # An empty home answers this too, so a missing login lands here first.
+            return {"type": "error", "code": "kimi_model_unavailable",
+                    "reason": "provider_access", "retryable": False,
+                    "content": (f"⚠️ Kimi Code `{kimi_cli_model(self.binary_name)}` modelini "
+                                "tanımıyor. Kimi Code'a giriş yapmadıysan bir terminalde "
+                                "`kimi login` çalıştır; giriş yaptıysan aboneliğin bu modeli "
+                                "sunmuyor olabilir, model seçiciden başka bir Kimi modeli seç.")}
+        if any(marker in low for marker in self._KIMI_LOGIN_MARKERS):
+            return {"type": "error", "code": "kimi_not_logged_in",
+                    "reason": "provider_access", "retryable": False,
+                    "content": ("🔑 Kimi Code'a giriş yapılmamış. Bir terminalde `kimi login` "
+                                "çalıştırıp giriş yap, sonra tekrar dene.")}
+        return {"type": "error", "code": "kimi_failed", "reason": "process_exit",
+                "content": f"⚠️ Kimi Code yanıt üretmedi (rc={returncode}): {detail or '(boş)'}"}
