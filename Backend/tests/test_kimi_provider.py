@@ -396,3 +396,34 @@ def test_effort_reaches_the_cli_only_for_levels_the_model_declares(model, level,
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_a_failure_after_answer_text_is_an_error_and_keeps_the_text(run_kimi):
+    # kimi's only failure signal is stderr + rc 1; a failed later step must not look finished.
+    events = run_kimi([
+        '{"role":"meta","type":"system.version","version":"2.5.3"}',
+        '{"role":"assistant","content":"Let me look at the file first."}',
+    ], ["error: failed to run prompt: APIConnectionError: fetch failed"], rc=1)
+
+    errors = [e for e in events if e["type"] == "error"]
+    assert [e["code"] for e in errors] == ["kimi_failed"], events
+    assert "fetch failed" in errors[0]["content"]
+    assert any(e["type"] == "delta" and "look at the file" in e["text"] for e in events)
+
+
+def test_a_clean_exit_with_text_is_not_an_error(run_kimi):
+    events = run_kimi([
+        '{"role":"meta","type":"system.version","version":"2.5.3"}',
+        '{"role":"assistant","content":"Done."}',
+    ], [], rc=0)
+    assert not [e for e in events if e["type"] == "error"], events
+
+
+def test_an_unrelated_login_url_in_an_error_is_not_a_missing_login(run_kimi):
+    events = run_kimi(['{"role":"meta","type":"system.version","version":"2.5.3"}'], [
+        "error: failed to run prompt: request to https://api.example.invalid/v1/login/refresh "
+        "failed: 502 Bad Gateway",
+    ], rc=1)
+
+    errors = [e for e in events if e["type"] == "error"]
+    assert [e["code"] for e in errors] == ["kimi_failed"], events

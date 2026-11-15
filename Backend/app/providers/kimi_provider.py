@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import json
 import shlex
@@ -15,6 +16,15 @@ logger = logging.getLogger(__name__)
 
 # One read-merge-write of the user's mcp.json at a time in this process.
 _USER_MCP_LOCK = threading.Lock()
+
+
+def _cmd_quote(arg: str) -> str:
+    """Always double-quoted for a cmd.exe batch line: unlike list2cmdline, which
+    leaves `&`, `^`, `|`, `<`, `>` bare when there is no space, so cmd would read
+    them as syntax. Quotes and trailing backslashes follow the MS C runtime rules."""
+    arg = re.sub(r'(\\*)"', r'\1\1\\"', arg)
+    arg = re.sub(r'(\\+)$', r'\1\1', arg)
+    return '"' + arg + '"'
 
 
 class KimiProvider(BaseCLIProvider):
@@ -94,6 +104,7 @@ class KimiProvider(BaseCLIProvider):
     _KIMI_UNITY_SERVER = "gamachineUnityMCP"
     _KIMI_TURN_ENV = "GAMACHINE_KIMI_TURN"
     _mcp_env = {}  # this turn's env for the MCP servers, set by _register_mcp
+    _mcp_failure = None  # why this turn runs without Gamachine's MCP tools, if it does
 
     @staticmethod
     def _launcher_env_names(name: str):
@@ -164,7 +175,7 @@ class KimiProvider(BaseCLIProvider):
             command = shutil.which(command) or command
         argv = [command, *argv[1:]]
         if sys.platform == "win32":
-            return command, subprocess.list2cmdline(argv)
+            return command, " ".join(_cmd_quote(arg) for arg in argv)
         return command, shlex.join(argv)
 
     def _register_mcp(self, launcher: str, workspace: str, backend_url: str):
@@ -191,27 +202,93 @@ class KimiProvider(BaseCLIProvider):
                 env.update({key: entry["env"][key] for key in
                             (connectors_reg.IDS_ENV, connectors_reg.ROOT_ENV) if key in entry["env"]})
         servers = {}
+        failure = None
         for name, argv, enabled in specs:
             exe_env, cmd_env = self._launcher_env_names(name)
             env[exe_env], env[cmd_env] = self._real_command(argv)
             path = self._write_launcher(name)
+            if path is None and name == "unityai":
+                failure = f"başlatıcı yazılamadı ({self._kimi_launcher_path(name)})"
             servers[name] = {"command": path or self._kimi_launcher_path(name), "args": [],
                              "enabled": bool(enabled and path)}
         self._mcp_env = env
         try:
-            self._write_user_mcp(servers)
+            failure = self._write_user_mcp(servers) or failure
         except Exception as e:  # the turn still runs, without Gamachine's MCP tools
             logger.warning("[KimiProvider] mcp.json could not be updated: %s", e)
+            failure = f"{type(e).__name__}: {e}"
+        self._mcp_failure = failure
 
     @classmethod
     def _kimi_mcp_path(cls) -> str:
         return os.path.join(os.path.dirname(cls._kimi_config_path()), "mcp.json")
 
+    @classmethod
+    def _is_own_launcher(cls, entry) -> bool:
+        """An entry whose command is one of the launchers Gamachine writes."""
+        command = entry.get("command") if isinstance(entry, dict) else None
+        if not isinstance(command, str):
+            return False
+        folder = os.path.dirname(cls._kimi_launcher_path("x"))
+        return os.path.normcase(os.path.dirname(os.path.abspath(command))) == os.path.normcase(folder)
+
+    @staticmethod
+    def _backup_user_mcp(path: str):
+        """Copies the user's mcp.json once to `<path>.gamachine-backup`, never over
+        an existing backup. Returns None when a backup exists, else the error."""
+        from .workspace_config import harden_config_file
+        backup = path + ".gamachine-backup"
+        try:
+            with open(path, "rb") as src, open(backup, "xb") as dst:
+                dst.write(src.read())
+        except FileExistsError:
+            return None
+        except OSError as e:
+            return str(e)
+        if not harden_config_file(backup):
+            logger.warning("[KimiProvider] %s could not be made private.", backup)
+        return None
+
+    @staticmethod
+    def _write_mcp_json(path: str, data: dict) -> bool:
+        """Atomic write of the user's mcp.json (temp file + os.replace) that keeps
+        their non-ASCII text readable; a symlink is written through and the
+        file's permission bits are kept."""
+        import stat
+        target = os.path.realpath(path)
+        directory = os.path.dirname(target)
+        tmp = None
+        try:
+            os.makedirs(directory, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(dir=directory, prefix=".gamachine-", suffix=".tmp")
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            if os.name != "nt" and os.path.exists(target):
+                os.chmod(tmp, stat.S_IMODE(os.stat(target).st_mode))  # mkstemp made it 0600
+            os.replace(tmp, target)
+            return True
+        except OSError as e:
+            logger.warning("[KimiProvider] %s could not be written (%s)", path, e)
+            if tmp is not None:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+            return False
+
     def _write_user_mcp(self, ours: dict):
         """Merges Gamachine's entries into the user's mcp.json: their servers and
         other keys stay as they are, nothing is written when ours already match,
-        and an unreadable file is left alone (rewriting it would lose theirs)."""
-        from .agy_provider import _read_json_config, _write_json_config
+        and an unreadable file is left alone (rewriting it would lose theirs).
+
+        A user entry under one of our names (`unityai` is fixed: the tool names
+        mcp__unityai__* are) that is not one of our launchers is replaced only
+        after the file is copied once to mcp.json.gamachine-backup.
+
+        Returns None on success, else a short user-facing reason it failed."""
+        from .agy_provider import _read_json_config
         from .workspace_config import harden_config_file
         path = self._kimi_mcp_path()
         with _USER_MCP_LOCK:
@@ -220,12 +297,26 @@ class KimiProvider(BaseCLIProvider):
             if not isinstance(servers, dict):
                 logger.warning("[KimiProvider] %s cannot be merged safely; left unchanged, "
                                "kimi runs without Gamachine's MCP tools.", path)
-                return
+                return f"{path} okunamadı ya da geçerli bir mcp.json değil"
             if all(servers.get(name) == entry for name, entry in ours.items()):
-                return
+                return None
+            foreign = [name for name in ours if name in servers
+                       and not self._is_own_launcher(servers[name])]
+            if foreign:
+                error = self._backup_user_mcp(path)
+                if error:
+                    logger.warning("[KimiProvider] backup of %s failed (%s); left unchanged.",
+                                   path, error)
+                    return f"{path} yedeklenemedi"
+                logger.warning("[KimiProvider] %s already has an entry named %s that is not "
+                               "Gamachine's; it is replaced, the original file is kept as "
+                               "%s.gamachine-backup", path, ", ".join(foreign), path)
             data["mcpServers"] = {**servers, **ours}
-            if _write_json_config(path, data) and not harden_config_file(os.path.realpath(path)):
+            if not self._write_mcp_json(path, data):
+                return f"{path} yazılamadı"
+            if not harden_config_file(os.path.realpath(path)):
                 logger.warning("[KimiProvider] %s could not be made private.", path)
+            return None
 
     @staticmethod
     def _kimi_config_path() -> str:
@@ -302,7 +393,21 @@ class KimiProvider(BaseCLIProvider):
         except Exception as e:
             logger.warning(f"[KimiProvider] config.toml yazılamadı: {e}")
 
+    def _turn_notices(self) -> list:
+        if not self._mcp_failure:
+            return []
+        return [{"type": "thinking", "code": "kimi_no_gamachine_tools",
+                 "text": ("⚠️ Kimi bu turda Gamachine araçları olmadan çalışıyor "
+                          f"({self._mcp_failure}); dosya yazma ve komut çalıştırma kullanılamaz.")}]
+
     def _build_hint(self, unity_running: bool) -> str:
+        if self._mcp_failure:
+            return (
+                "TOOL POLICY — Gamachine's MCP tools (mcp__unityai__*, mcp__gamachine*__*) are NOT\n"
+                "available in this turn, and your built-in Write, Edit and Bash tools are DENIED.\n"
+                "You cannot create, edit or delete files or run shell commands now: say so in one\n"
+                "short sentence when the request needs it, and answer anything else from what you\n"
+                "can read. Never claim an action was done.\n\n")
         unity_section = ""
         if unity_running:
             unity_section = (
@@ -461,7 +566,7 @@ class KimiProvider(BaseCLIProvider):
     # Startup errors the CLI prints when no usable login/model exists (kimi.exe
     # 2.5.3: requireConfiguredModel, AuthSummaryService.ensureReady, auth errors).
     _KIMI_LOGIN_MARKERS = (
-        "no model configured", "login required", "/login", "no provider configured",
+        "no model configured", "login required", "use /login", "no provider configured",
         "has no credential configured", "no default model configured",
         "does not resolve to a configured provider",
     )
@@ -483,7 +588,12 @@ class KimiProvider(BaseCLIProvider):
         if getattr(self, "_kimi_error_reported", False):
             return {}  # the stream's own error line already said it
         if text.strip():
-            return None  # an answer came: generic exit-code handling
+            if not detail:
+                return None  # an answer came: generic exit-code handling
+            # rc 1 is kimi's only failure signal and the generic code reads it as
+            # success, so a failure after the first step's text would look finished.
+            return {"type": "error", "code": "kimi_failed", "reason": "process_exit",
+                    "content": f"⚠️ Kimi Code turu yarıda kesildi (rc={returncode}): {detail}"}
         low = detail.lower()
         if "is not configured in config.toml" in low:
             # An empty home answers this too, so a missing login lands here first.

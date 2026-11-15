@@ -340,7 +340,7 @@ def test_launcher_exits_quietly_without_the_gamachine_marker(home, tmp_path, mon
            if sys.platform == "win32" else f"'{sys.executable}' '{stub}' '{flag}'"}
     env.pop("GAMACHINE_KIMI_TURN")
     done, seconds = _run_launcher(home, env)
-    assert (done.returncode, done.stdout) == (0, "")
+    assert (done.returncode, done.stdout, done.stderr) == (0, "", "")
     assert not flag.exists()
     assert seconds < 20
 
@@ -353,7 +353,7 @@ def test_launcher_exits_quietly_when_the_real_command_is_gone(home, tmp_path, mo
            "GAMACHINE_KIMI_CMD_UNITYAI": subprocess.list2cmdline([sys.executable, str(stub), str(flag)])
            if sys.platform == "win32" else f"'{sys.executable}' '{stub}' '{flag}'"}
     done, seconds = _run_launcher(home, env)
-    assert (done.returncode, done.stdout) == (0, "")
+    assert (done.returncode, done.stdout, done.stderr) == (0, "", "")
     assert not flag.exists()
     assert seconds < 20
 
@@ -391,3 +391,97 @@ def test_entry_is_disabled_when_its_launcher_cannot_be_written(home, tmp_path, m
     spawn = _run(_provider(chat=3), _ws(tmp_path), home, monkeypatch)
     assert spawn["argv"]
     assert all(entry["enabled"] is False for entry in _servers(home).values())
+
+
+@pytest.mark.parametrize("folder", ["srv&x", "srv &x (1)"])
+def test_launcher_starts_a_server_from_a_path_with_shell_syntax(home, tmp_path, monkeypatch, folder):
+    # The turn's own env values (not hand-made ones) must start the server when the install
+    # path holds `&` (cmd would read a bare one as a second command) and spaces.
+    server = tmp_path / folder / ("run_mcp_server.cmd" if sys.platform == "win32" else "run_mcp_server.sh")
+    server.parent.mkdir()
+    flag = tmp_path / "ran.txt"
+    if sys.platform == "win32":
+        server.write_text(f'@echo off\r\necho %WORKSPACE_PATH%> "{flag}"\r\necho server up\r\n', encoding="ascii")
+    else:
+        server.write_text(f'#!/bin/sh\necho "$WORKSPACE_PATH" > \'{flag}\'\necho server up\n', encoding="ascii")
+        server.chmod(0o755)
+    monkeypatch.setattr(BaseCLIProvider, "_launcher_path", lambda self, name: str(server))
+    ws = _ws(tmp_path)
+    spawn = _run(_provider(chat=7), ws, home, monkeypatch)
+    done, _ = _run_launcher(home, {**os.environ, **spawn["env"]})
+    assert (done.returncode, done.stderr) == (0, "")
+    assert "server up" in done.stdout
+    assert flag.read_text(encoding="utf-8").strip() == str(ws)
+
+
+async def _events(provider, ws, home, monkeypatch):
+    """Every event of one turn up to the spawn, and the prompt argument kimi would get."""
+    seen, events = [], []
+
+    async def fake_spawn(*argv, **kw):
+        seen.append(list(argv))
+        raise RuntimeError("spawn intercepted")
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", fake_spawn)
+    try:
+        async for event in provider.analyze_code("prompt", cwd=str(ws)):
+            events.append(event)
+    except RuntimeError as e:
+        assert "spawn intercepted" in str(e)
+    return events, seen[0][seen[0].index("-p") + 1]
+
+
+def test_a_normal_turn_has_no_notice_and_names_the_gamachine_tools(home, tmp_path, monkeypatch):
+    events, prompt = asyncio.run(_events(_provider(chat=3), _ws(tmp_path), home, monkeypatch))
+    assert not [e for e in events if e.get("code") == "kimi_no_gamachine_tools"]
+    assert "mcp__unityai__save_file" in prompt
+
+
+@pytest.mark.parametrize("broken", ["bad json", "home is a file"])
+def test_a_turn_without_registration_says_so_and_does_not_promise_the_tools(home, tmp_path, monkeypatch, broken):
+    if broken == "bad json":
+        home.mkdir()
+        (home / "mcp.json").write_text("{broken", encoding="utf-8")
+    else:
+        home.write_text("not a folder", encoding="utf-8")
+    events, prompt = asyncio.run(_events(_provider(chat=3), _ws(tmp_path), home, monkeypatch))
+    notices = [e for e in events if e.get("code") == "kimi_no_gamachine_tools"]
+    assert len(notices) == 1, events
+    assert notices[0]["type"] == "thinking" and "olmadan" in notices[0]["text"]
+    assert "mcp__unityai__save_file" not in prompt
+    assert "NOT\navailable" in prompt
+
+
+def test_a_foreign_entry_under_a_managed_name_is_backed_up_once(home, tmp_path, monkeypatch):
+    home.mkdir()
+    foreign = {"command": "my-unity-server", "args": ["--keep"], "env": {"K": "v"}}
+    original = json.dumps({"mcpServers": {"unityai": foreign, "mine": {"command": "m"}}, "note": 1})
+    (home / "mcp.json").write_text(original, encoding="utf-8")
+    backup = home / "mcp.json.gamachine-backup"
+    _run(_provider(chat=1), _ws(tmp_path), home, monkeypatch)
+    assert backup.read_text(encoding="utf-8") == original
+    assert _servers(home)["unityai"] == {"command": _kimi_launcher(home), "args": [], "enabled": True}
+    assert _servers(home)["mine"] == {"command": "m"}
+    # The user puts a different entry back: the first backup stays as it was.
+    data = json.loads((home / "mcp.json").read_text(encoding="utf-8"))
+    data["mcpServers"]["unityai"] = {"command": "another"}
+    (home / "mcp.json").write_text(json.dumps(data), encoding="utf-8")
+    _run(_provider(chat=2), _ws(tmp_path), home, monkeypatch)
+    assert backup.read_text(encoding="utf-8") == original
+
+
+def test_no_backup_without_a_collision(home, tmp_path, monkeypatch):
+    home.mkdir()
+    (home / "mcp.json").write_text(json.dumps({"mcpServers": {"mine": {"command": "m"}}}), encoding="utf-8")
+    _run(_provider(chat=1), _ws(tmp_path), home, monkeypatch)
+    _run(_provider(chat=2), _ws(tmp_path), home, monkeypatch)  # now holds our own launcher entries
+    assert not (home / "mcp.json.gamachine-backup").exists()
+
+
+def test_users_non_ascii_text_stays_readable_in_the_file(home, tmp_path, monkeypatch):
+    home.mkdir()
+    (home / "mcp.json").write_text(json.dumps({"mcpServers": {"mine": {"command": "m", "env": {"K": "Ünicode ✓ ş"}}}}),
+                                   encoding="utf-8")
+    _run(_provider(chat=1), _ws(tmp_path), home, monkeypatch)
+    text = (home / "mcp.json").read_text(encoding="utf-8")
+    assert "Ünicode ✓ ş" in text and (chr(92) + "u0") not in text

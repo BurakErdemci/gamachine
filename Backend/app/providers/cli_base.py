@@ -342,6 +342,10 @@ class BaseCLIProvider(AIProvider):
         exit-code handling."""
         return None
 
+    def _turn_notices(self) -> List[Dict[str, Any]]:
+        """Events shown before the CLI starts (a turn that runs degraded)."""
+        return []
+
     def _turn_spawn_env(self) -> dict:
         """Extra env for this turn's CLI process only. Per-turn secrets go here,
         never into a config file several chats of one workspace share."""
@@ -504,6 +508,8 @@ class BaseCLIProvider(AIProvider):
                 logger.error(f"[CLIProvider:{self.binary_name}] izin politikası yazılamadı — CLI başlatılmadı")
                 yield {"type": "error", "content": self._policy_refusal_message}
                 return
+            for _notice in self._turn_notices():
+                yield _notice
 
             # Codex için prompt'a gerçek dosya ağacını ekle (hallucination'ı önler)
             enriched_prompt = prompt
