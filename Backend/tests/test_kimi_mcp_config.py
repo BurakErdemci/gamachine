@@ -633,13 +633,20 @@ def test_every_file_is_private_before_it_takes_its_final_name(home, tmp_path, mo
     published = []
     real_replace, real_link = os.replace, os.link
 
+    def owner_only(path):
+        # On POSIX a launcher is 0700 (it must run) and a data file 0600; both are private.
+        if sys.platform == "win32":
+            _assert_private(path)
+        else:
+            assert stat.S_IMODE(os.stat(path).st_mode) & 0o077 == 0, oct(os.stat(path).st_mode)
+
     def replace(src, dst, *a, **k):
-        _assert_private(str(src))
+        owner_only(str(src))
         published.append(os.path.basename(str(dst)))
         return real_replace(src, dst, *a, **k)
 
     def link(src, dst, *a, **k):
-        _assert_private(str(src))
+        owner_only(str(src))
         published.append(os.path.basename(str(dst)))
         return real_link(src, dst, *a, **k)
 
