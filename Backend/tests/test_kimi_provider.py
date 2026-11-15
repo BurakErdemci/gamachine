@@ -239,7 +239,7 @@ def run_kimi(tmp_path, monkeypatch):
     ws.mkdir()
     real_build = KimiProvider._build_cmd
 
-    def run(stdout_lines, stderr_lines=(), rc=0, model="kimi-code/k3"):
+    def run(stdout_lines, stderr_lines=(), rc=0, model="kimi-code/k3", language="en"):
         script = tmp_path / "fake_kimi.py"
         script.write_text(
             "import os, sys\n"
@@ -255,6 +255,7 @@ def run_kimi(tmp_path, monkeypatch):
 
         monkeypatch.setattr(KimiProvider, "_build_cmd", build)
         provider = KimiProvider(binary_name=model)
+        provider.language = language
         monkeypatch.setattr(provider, "_launcher_path", lambda name: "test-launcher")
         monkeypatch.setattr(provider, "_ensure_exec", lambda path: None)
 
@@ -453,3 +454,85 @@ def test_a_failure_after_text_resets_the_session_like_the_generic_path(run_kimi,
 
 if __name__ == "__main__":
     unittest.main()
+
+
+_LOGIN_STDERR = ["error: failed to run prompt: No model configured. Run `kimi` and use /login to "
+                 "sign in, then retry; or set default_model in config.toml."]
+_META = ['{"role":"meta","type":"system.version","version":"2.5.3"}']
+
+
+@pytest.mark.parametrize("language, expected", [
+    ("en", "Run `kimi login` in a terminal"),
+    ("tr", "terminalde `kimi login` çalıştırıp"),
+])
+def test_the_login_error_follows_the_chat_language(run_kimi, language, expected):
+    events = run_kimi(_META, _LOGIN_STDERR, rc=1, language=language)
+    (error,) = [e for e in events if e["type"] == "error"]
+    assert error["code"] == "kimi_not_logged_in" and expected in error["content"]
+
+
+@pytest.mark.parametrize("language, expected", [
+    ("en", "does not recognize the `kimi-code/k3` model"),
+    ("tr", "`kimi-code/k3` modelini tanımıyor"),
+])
+def test_the_unconfigured_model_error_follows_the_chat_language(run_kimi, language, expected):
+    events = run_kimi(_META, _NOT_CONFIGURED_STDERR, rc=1, model="kimi-k3", language=language)
+    (error,) = [e for e in events if e["type"] == "error"]
+    assert error["code"] == "kimi_model_unavailable" and expected in error["content"]
+
+
+@pytest.mark.parametrize("language, expected", [
+    ("en", "produced no response"),
+    ("tr", "yanıt üretmedi"),
+])
+def test_a_failed_turn_without_text_follows_the_chat_language(run_kimi, language, expected):
+    events = run_kimi(_META, ["error: failed to run prompt: APIConnectionError: fetch failed"],
+                      rc=1, language=language)
+    (error,) = [e for e in events if e["type"] == "error"]
+    assert error["code"] == "kimi_failed" and expected in error["content"]
+
+
+@pytest.mark.parametrize("language, expected", [
+    ("en", "was cut short"),
+    ("tr", "yarıda kesildi"),
+])
+def test_a_failure_after_text_follows_the_chat_language(run_kimi, language, expected):
+    events = run_kimi(_META + ['{"role":"assistant","content":"Looking."}'],
+                      ["error: failed to run prompt: fetch failed"], rc=1, language=language)
+    (error,) = [e for e in events if e["type"] == "error"]
+    assert error["code"] == "kimi_failed" and expected in error["content"]
+
+
+@pytest.mark.parametrize("language, expected", [
+    ("en", "crashed"),
+    ("tr", "çöktü"),
+])
+def test_a_crash_exit_follows_the_chat_language(language, expected):
+    from providers.kimi_provider import KimiProvider
+
+    provider = KimiProvider(binary_name="kimi-k3")
+    provider.language = language
+    error = provider._failure_event(-1073740791, ["fatal"], "")
+    assert error["code"] == "kimi_crashed" and expected in error["content"]
+
+
+@pytest.mark.parametrize("language, expected, other", [
+    ("en", "without Gamachine tools", "olmadan"),
+    ("tr", "olmadan çalışıyor", "without"),
+])
+def test_the_no_tools_notice_is_a_warning_in_the_chat_language(language, expected, other):
+    from providers.kimi_provider import KimiProvider
+
+    provider = KimiProvider(binary_name="kimi-k3")
+    provider._mcp_failure = "mcp.json is not valid JSON"
+    provider.language = language
+    (notice,) = provider._turn_notices()
+    assert notice["type"] == "warning" and notice["code"] == "kimi_no_gamachine_tools"
+    assert expected in notice["message"] and other not in notice["message"]
+    assert "mcp.json is not valid JSON" in notice["message"]
+
+
+def test_a_provider_speaks_english_until_the_runner_says_otherwise():
+    from providers.kimi_provider import KimiProvider
+
+    assert KimiProvider(binary_name="kimi-k3").language == "en"

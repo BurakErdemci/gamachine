@@ -111,6 +111,9 @@ class BaseCLIProvider(AIProvider):
     Claude Code, Codex ve agy CLI'larını UnityAI MCP Server üzerinden çalıştırır.
     """
 
+    # The chat's language ("tr" or "en"); the runner sets it per turn.
+    language = "en"
+
     # Serialize whole agy turns: live processes share the settings file.
     _AGY_LOCK = asyncio.Lock()
     # An agy turn is cut when the child is silent for _AGY_IDLE_LIMIT, and in

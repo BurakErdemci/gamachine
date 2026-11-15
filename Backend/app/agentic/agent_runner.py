@@ -3012,6 +3012,7 @@ class AgentRunner:
             p._agent_guide = _cli_guide
             p._guide_known = _guide_known
             p._language = getattr(self, "language", "tr")
+            p.language = getattr(self, "language", "tr")
             return p
 
         # Windows command-line limit (32,767 UTF-16 units) minus room for the
@@ -3133,6 +3134,9 @@ class AgentRunner:
                         yield AgentEvent("text", {"content": event.get("text", "")})
                     elif etype == "thinking":
                         yield AgentEvent("thinking", {"text": event.get("text", "")})
+                    elif etype == "warning":
+                        yield AgentEvent("warning", {k: event[k] for k in ("message", "code", "detail")
+                                                     if k in event})
                     elif etype == "final":
                         final_text = event.get("text", "")
                     elif etype == "error":

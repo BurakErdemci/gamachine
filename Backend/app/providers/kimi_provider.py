@@ -17,6 +17,10 @@ logger = logging.getLogger(__name__)
 _USER_MCP_LOCK = threading.Lock()
 
 
+def _say(language: str, tr: str, en: str) -> str:
+    return tr if language == "tr" else en
+
+
 def _cmd_quote(arg: str) -> str:
     """Always double-quoted for a cmd.exe batch line: unlike list2cmdline, which
     leaves `&`, `^`, `|`, `<`, `>` bare when there is no space, so cmd would read
@@ -258,13 +262,17 @@ class KimiProvider(BaseCLIProvider):
                 env[exe_env], env[cmd_env] = self._real_command(argv)
             except ValueError as e:
                 logger.warning("[KimiProvider] %s server is not registered: %s", name, e)
-                failure = failure or f"{name} sunucusunun komutu çift tırnak içeriyor"
+                failure = failure or _say(
+                    self.language, f"{name} sunucusunun komutu çift tırnak içeriyor",
+                    f"the {name} server's command contains a double quote")
                 servers[name] = {"command": self._kimi_launcher_path(name), "args": [],
                                  "enabled": False}
                 continue
             path = self._write_launcher(name)
             if path is None and name == "unityai":
-                failure = f"başlatıcı yazılamadı ({self._kimi_launcher_path(name)})"
+                failure = _say(self.language,
+                               f"başlatıcı yazılamadı ({self._kimi_launcher_path(name)})",
+                               f"could not write the launcher ({self._kimi_launcher_path(name)})")
             servers[name] = {"command": path or self._kimi_launcher_path(name), "args": [],
                              "enabled": bool(enabled and path)}
         self._mcp_env = env
@@ -335,7 +343,8 @@ class KimiProvider(BaseCLIProvider):
             if not isinstance(servers, dict):
                 logger.warning("[KimiProvider] %s cannot be merged safely; left unchanged, "
                                "kimi runs without Gamachine's MCP tools.", path)
-                return f"{path} okunamadı ya da geçerli bir mcp.json değil"
+                return _say(self.language, f"{path} okunamadı ya da geçerli bir mcp.json değil",
+                            f"{path} could not be read or is not a valid mcp.json")
             if all(servers.get(name) == entry for name, entry in ours.items()):
                 return None
             foreign = [name for name in ours if name in servers
@@ -345,13 +354,13 @@ class KimiProvider(BaseCLIProvider):
                 if error:
                     logger.warning("[KimiProvider] backup of %s failed (%s); left unchanged.",
                                    path, error)
-                    return f"{path} yedeklenemedi"
+                    return _say(self.language, f"{path} yedeklenemedi", f"{path} could not be backed up")
                 logger.warning("[KimiProvider] %s already has an entry named %s that is not "
                                "Gamachine's; it is replaced, the original file is kept as "
                                "%s.gamachine-backup", path, ", ".join(foreign), path)
             data["mcpServers"] = {**servers, **ours}
             if not self._write_mcp_json(path, data):
-                return f"{path} yazılamadı"
+                return _say(self.language, f"{path} yazılamadı", f"{path} could not be written")
             return None
 
     @staticmethod
@@ -432,9 +441,13 @@ class KimiProvider(BaseCLIProvider):
     def _turn_notices(self) -> list:
         if not self._mcp_failure:
             return []
-        return [{"type": "thinking", "code": "kimi_no_gamachine_tools",
-                 "text": ("⚠️ Kimi bu turda Gamachine araçları olmadan çalışıyor "
-                          f"({self._mcp_failure}); dosya yazma ve komut çalıştırma kullanılamaz.")}]
+        return [{"type": "warning", "code": "kimi_no_gamachine_tools",
+                 "message": _say(
+                     self.language,
+                     "⚠️ Kimi bu turda Gamachine araçları olmadan çalışıyor "
+                     f"({self._mcp_failure}); dosya yazma ve komut çalıştırma kullanılamaz.",
+                     "⚠️ Kimi is running this turn without Gamachine tools "
+                     f"({self._mcp_failure}); file writes and command execution are unavailable.")}]
 
     def _build_hint(self, unity_running: bool) -> str:
         if self._mcp_failure:
@@ -572,13 +585,14 @@ class KimiProvider(BaseCLIProvider):
                 reason = str(ev.get("error_message") or ev.get("error_name") or "").strip()[:160]
                 attempt = f"{ev.get('next_attempt', '?')}/{ev.get('max_attempts', '?')}"
                 return [{"type": "thinking",
-                         "text": f"↻ Kimi isteği yeniden deneniyor ({attempt})"
+                         "text": _say(self.language, f"↻ Kimi isteği yeniden deneniyor ({attempt})",
+                                      f"↻ Retrying the Kimi request ({attempt})")
                                  + (f": {reason}" if reason else "")}]
             return []  # system.version and any newer meta line
         if ev.get("type") == "error":
             message = str(ev.get("message") or ev.get("code") or "").strip()
             self._kimi_error_reported = True
-            return [{"type": "error", "content": f"❌ Kimi Code: {message or 'bilinmeyen hata'}",
+            return [{"type": "error", "content": f"❌ Kimi Code: {message or _say(self.language, 'bilinmeyen hata', 'unknown error')}",
                      "code": str(ev.get("code") or "kimi_error")}]
         return []  # goal.summary and lines this version does not write
 
@@ -618,9 +632,14 @@ class KimiProvider(BaseCLIProvider):
         if returncode in self._KIMI_CRASH_CODES:
             return {"type": "error", "code": "kimi_crashed", "reason": "process_exit",
                     "reset_session": True,
-                    "content": ("❌ Kimi Code CLI çöktü (çıkış kodu 0xC0000409); mesajın "
-                                "işlenmemiş olabilir. Tekrar dene; sürerse bir terminalde "
-                                "`kimi doctor` ile kurulumu kontrol et."
+                    "content": (_say(self.language,
+                                     "❌ Kimi Code CLI çöktü (çıkış kodu 0xC0000409); mesajın "
+                                     "işlenmemiş olabilir. Tekrar dene; sürerse bir terminalde "
+                                     "`kimi doctor` ile kurulumu kontrol et.",
+                                     "❌ The Kimi Code CLI crashed (exit code 0xC0000409); your "
+                                     "message may not have been processed. Try again; if it "
+                                     "keeps happening, check the install with `kimi doctor` in "
+                                     "a terminal.")
                                 + (f"\n\n{detail}" if detail else ""))}
         if getattr(self, "_kimi_error_reported", False):
             return {}  # the stream's own error line already said it
@@ -630,7 +649,9 @@ class KimiProvider(BaseCLIProvider):
             # rc 1 is kimi's only failure signal and the generic code reads it as
             # success, so a failure after the first step's text would look finished.
             event = {"type": "error", "code": "kimi_failed", "reason": "process_exit",
-                     "content": f"⚠️ Kimi Code turu yarıda kesildi (rc={returncode}): {detail}"}
+                     "content": _say(self.language,
+                                     f"⚠️ Kimi Code turu yarıda kesildi (rc={returncode}): {detail}",
+                                     f"⚠️ The Kimi Code turn was cut short (rc={returncode}): {detail}")}
             if returncode != 1:
                 event["reset_session"] = True  # as the generic branch: a killed CLI can leave a half-written session
             return event
@@ -639,14 +660,27 @@ class KimiProvider(BaseCLIProvider):
             # An empty home answers this too, so a missing login lands here first.
             return {"type": "error", "code": "kimi_model_unavailable",
                     "reason": "provider_access", "retryable": False,
-                    "content": (f"⚠️ Kimi Code `{kimi_cli_model(self.binary_name)}` modelini "
-                                "tanımıyor. Kimi Code'a giriş yapmadıysan bir terminalde "
-                                "`kimi login` çalıştır; giriş yaptıysan aboneliğin bu modeli "
-                                "sunmuyor olabilir, model seçiciden başka bir Kimi modeli seç.")}
+                    "content": _say(
+                        self.language,
+                        f"⚠️ Kimi Code `{kimi_cli_model(self.binary_name)}` modelini "
+                        "tanımıyor. Kimi Code'a giriş yapmadıysan bir terminalde "
+                        "`kimi login` çalıştır; giriş yaptıysan aboneliğin bu modeli "
+                        "sunmuyor olabilir, model seçiciden başka bir Kimi modeli seç.",
+                        f"⚠️ Kimi Code does not recognize the `{kimi_cli_model(self.binary_name)}` "
+                        "model. If you have not logged in to Kimi Code, run `kimi login` in a "
+                        "terminal; if you have, your subscription may not offer this model, so "
+                        "pick another Kimi model in the model selector.")}
         if any(marker in low for marker in self._KIMI_LOGIN_MARKERS):
             return {"type": "error", "code": "kimi_not_logged_in",
                     "reason": "provider_access", "retryable": False,
-                    "content": ("🔑 Kimi Code'a giriş yapılmamış. Bir terminalde `kimi login` "
-                                "çalıştırıp giriş yap, sonra tekrar dene.")}
+                    "content": _say(
+                        self.language,
+                        "🔑 Kimi Code'a giriş yapılmamış. Bir terminalde `kimi login` "
+                        "çalıştırıp giriş yap, sonra tekrar dene.",
+                        "🔑 You are not logged in to Kimi Code. Run `kimi login` in a "
+                        "terminal, log in, then try again.")}
         return {"type": "error", "code": "kimi_failed", "reason": "process_exit",
-                "content": f"⚠️ Kimi Code yanıt üretmedi (rc={returncode}): {detail or '(boş)'}"}
+                "content": _say(
+                    self.language,
+                    f"⚠️ Kimi Code yanıt üretmedi (rc={returncode}): {detail or '(boş)'}",
+                    f"⚠️ Kimi Code produced no response (rc={returncode}): {detail or '(empty)'}")}

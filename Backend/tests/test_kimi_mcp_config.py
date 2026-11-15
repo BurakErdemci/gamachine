@@ -447,7 +447,7 @@ def test_a_turn_without_registration_says_so_and_does_not_promise_the_tools(home
     events, prompt = asyncio.run(_events(_provider(chat=3), _ws(tmp_path), home, monkeypatch))
     notices = [e for e in events if e.get("code") == "kimi_no_gamachine_tools"]
     assert len(notices) == 1, events
-    assert notices[0]["type"] == "thinking" and "olmadan" in notices[0]["text"]
+    assert notices[0]["type"] == "warning" and "without Gamachine tools" in notices[0]["message"]
     assert "mcp__unityai__save_file" not in prompt
     assert "NOT\navailable" in prompt
 
@@ -533,7 +533,7 @@ def test_a_backup_that_cannot_be_made_leaves_the_file_unchanged_and_says_so(home
     (home / "mcp.json.gamachine-backup").mkdir()  # nothing can be written under that name
     events, prompt = asyncio.run(_events(_provider(chat=1), _ws(tmp_path), home, monkeypatch))
     assert (home / "mcp.json").read_text(encoding="utf-8") == original
-    assert len(_notices(events)) == 1 and "yedeklenemedi" in _notices(events)[0]["text"]
+    assert len(_notices(events)) == 1 and "could not be backed up" in _notices(events)[0]["message"]
     assert "mcp__unityai__save_file" not in prompt
     assert not _no_temp_files(home)
 
@@ -574,7 +574,7 @@ def test_a_foreign_launcher_that_cannot_be_backed_up_is_left_alone_and_says_so(h
     (launcher.parent / (launcher.name + ".gamachine-backup")).mkdir()
     events, _ = asyncio.run(_events(_provider(chat=1), _ws(tmp_path), home, monkeypatch))
     assert launcher.read_bytes() == mine
-    assert len(_notices(events)) == 1 and "başlatıcı yazılamadı" in _notices(events)[0]["text"]
+    assert len(_notices(events)) == 1 and "could not write the launcher" in _notices(events)[0]["message"]
     assert _servers(home)["unityai"]["enabled"] is False
     assert not _no_temp_files(home)
 
@@ -583,7 +583,7 @@ def test_a_launcher_that_cannot_be_written_is_reported_in_the_turn(home, tmp_pat
     home.mkdir()
     (home / "gamachine").write_text("in the way", encoding="utf-8")
     events, prompt = asyncio.run(_events(_provider(chat=3), _ws(tmp_path), home, monkeypatch))
-    assert len(_notices(events)) == 1 and "başlatıcı yazılamadı" in _notices(events)[0]["text"]
+    assert len(_notices(events)) == 1 and "could not write the launcher" in _notices(events)[0]["message"]
     assert "mcp__unityai__save_file" not in prompt
 
 
@@ -601,7 +601,7 @@ def test_a_failed_write_of_mcp_json_is_reported_and_leaves_no_temp_file(home, tm
     monkeypatch.setattr(os, "replace", refuse)
     events, prompt = asyncio.run(_events(_provider(chat=3), _ws(tmp_path), home, monkeypatch))
     assert (home / "mcp.json").read_text(encoding="utf-8") == original
-    assert len(_notices(events)) == 1 and "yazılamadı" in _notices(events)[0]["text"]
+    assert len(_notices(events)) == 1 and "could not be written" in _notices(events)[0]["message"]
     assert "mcp__unityai__save_file" not in prompt
     assert not _no_temp_files(home)
 
@@ -659,7 +659,17 @@ def test_a_double_quote_in_a_server_command_is_refused_and_the_entry_stays_off(h
     # A harmless stand-in for the Unity bridge command that holds a quote.
     monkeypatch.setattr(codex_unitymcp_bridge, "bridge_argv", lambda: ["bridge-server", 'x"y'])
     events, prompt = asyncio.run(_events(_provider(chat=1), _ws(tmp_path), home, monkeypatch))
-    assert len(_notices(events)) == 1 and "gamachineUnityMCP" in _notices(events)[0]["text"]
+    assert len(_notices(events)) == 1 and "gamachineUnityMCP" in _notices(events)[0]["message"]
     assert _servers(home)["gamachineUnityMCP"]["enabled"] is False
     assert 'x"y' not in (home / "mcp.json").read_text(encoding="utf-8")
     assert "mcp__unityai__save_file" not in prompt
+
+
+def test_the_reason_in_the_notice_follows_the_chat_language(home, tmp_path, monkeypatch):
+    home.mkdir()
+    (home / "mcp.json").write_text("{broken", encoding="utf-8")
+    provider = _provider(chat=3)
+    provider.language = "tr"
+    events, _ = asyncio.run(_events(provider, _ws(tmp_path), home, monkeypatch))
+    (notice,) = _notices(events)
+    assert "geçerli bir mcp.json değil" in notice["message"] and "olmadan" in notice["message"]

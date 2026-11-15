@@ -1044,6 +1044,67 @@ class TestOneShotTurnNamesItsChat(unittest.TestCase):
             self.assertEqual(provider.seen, conversation_id)
         _SESSIONS.clear()
 
+    def _turn(self, cli, model, language, make_provider):
+        from agentic.agent_runner import AgentRunner
+        from providers.oneshot_cli import _SESSIONS
+
+        _SESSIONS.clear()
+        runner = AgentRunner(provider_type="subscription", api_key="", model_name=model,
+                             workspace_path=os.getcwd(), conversation_id=995, language=language)
+
+        async def collect():
+            return [e async for e in runner._run_oneshot_cli_session("selam", cli)]
+
+        try:
+            with patch("ai_providers.AIProviderManager.get_provider", side_effect=make_provider), \
+                 patch("providers.oneshot_cli.set_named_models_cap"):
+                return asyncio.run(collect())
+        finally:
+            _SESSIONS.clear()
+
+    def test_a_provider_warning_reaches_the_chat_as_a_warning_event(self):
+        class WarnProvider:
+            resume_session_id = None
+
+            async def analyze_code(self, *args, **kwargs):
+                yield {"type": "warning", "code": "some_code", "message": "heads up", "detail": "more"}
+                yield {"type": "final", "text": "tamam"}
+
+        events = self._turn("kimi", "kimi-code/k3", "en", lambda cfg: WarnProvider())
+        warnings = [e for e in events if e.type == "warning"]
+        self.assertEqual(len(warnings), 1, [e.type for e in events])
+        self.assertEqual(warnings[0].data,
+                         {"message": "heads up", "code": "some_code", "detail": "more"})
+
+    def test_the_chat_language_reaches_the_provider_and_the_auto_fallback(self):
+        seen = []
+
+        class LangProvider:
+            resume_session_id = None
+
+            def __init__(self, fail):
+                self.fail = fail
+
+            async def analyze_code(self, *args, **kwargs):
+                seen.append(self.language)
+                if self.fail:
+                    yield {"type": "error", "content": "Named models unavailable on free plans"}
+                else:
+                    yield {"type": "final", "text": "tamam"}
+
+        made = []
+
+        def make(cfg):
+            made.append(cfg["model_name"])
+            return LangProvider(fail=len(made) == 1)
+
+        for language in ("tr", "en"):
+            seen.clear()
+            made.clear()
+            self._turn("cursor", "cursor-gpt-5.2", language, make)
+            self.assertEqual(made, ["cursor-gpt-5.2", "cursor-auto"], language)
+            self.assertEqual(seen, [language, language], language)
+
 
 class TestCopilotTurnMcpConfig(unittest.TestCase):
     """copilot's --additional-mcp-config file is written per turn, so it can
