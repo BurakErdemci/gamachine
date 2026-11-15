@@ -33,7 +33,14 @@ CI, the repo, or a synced folder; the owner signs the draft release locally.
 1. Bump the version and push a `v*` tag. `.github/workflows/release.yml` builds
    and creates a DRAFT release with the installers, blockmaps, `latest.yml` and
    `latest-mac.yml`.
-2. On the Windows PC, with the GitHub CLI logged in (`gh auth status`):
+   The macOS build waits behind the `release-signing` environment: approve it
+   under Actions -> the run -> "Review deployments". Every attempt asks again,
+   including a re-run. If macOS signing fails with "The timestamp service is not
+   available" (Apple's timestamp server, transient), re-run only the failed jobs
+   (`gh run rerun <run-id> --failed`) and approve again; the draft is created
+   only after both builds pass.
+2. On the Windows PC, with the GitHub CLI logged in (`gh auth status`), from
+   `Frontend/frontend` (the script lives in `Frontend/frontend/scripts/`):
    `node scripts/sign-release.js v4.0.0 C:\Users\<you>\gamachine-update-primary.pem`
    It refuses a release that is not a draft, downloads both manifests, asks the
    passphrase (hidden), prints each manifest's version and sha512 prefixes, and
