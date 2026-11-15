@@ -1,13 +1,16 @@
 """kimi gets Gamachine's MCP servers from the user-level $KIMI_CODE_HOME/mcp.json, merged
-with the user's own servers; per-turn values reach the servers through kimi's env, never the
-file; the project's own .mcp.json is never handed to kimi."""
+with the user's own servers; every entry runs a launcher under $KIMI_CODE_HOME/gamachine/ that
+starts the real server only inside a Gamachine turn; per-turn values reach the servers through
+kimi's env, never the file; the project's own .mcp.json is never handed to kimi."""
 import asyncio
 import glob
 import json
 import os
+import stat
 import subprocess
 import sys
 import tempfile
+import time
 
 import pytest
 
@@ -40,6 +43,27 @@ def home(tmp_path, monkeypatch):
 
 def _launcher(home):
     return str(home.parent / "bin" / "run_mcp_server.cmd")
+
+
+def _kimi_launcher(home, name="unityai"):
+    return str(home / "gamachine" / (name + (".cmd" if sys.platform == "win32" else "")))
+
+
+def _stub(tmp_path):
+    """A real command in a folder with a space: records its args and the env it got."""
+    stub = tmp_path / "dir with space" / "stub.py"
+    stub.parent.mkdir(exist_ok=True)
+    stub.write_text("import json, os, sys\n"
+                    "open(sys.argv[1], 'w').write(json.dumps([sys.argv[2:], os.environ.get('WORKSPACE_PATH')]))\n"
+                    "print('hello from the real server')\n", encoding="utf-8")
+    return stub
+
+
+def _run_launcher(home, env, name="unityai"):
+    start = time.monotonic()
+    done = subprocess.run([_kimi_launcher(home, name)], env=env, capture_output=True, text=True,
+                          stdin=subprocess.DEVNULL, timeout=60)
+    return done, time.monotonic() - start
 
 
 def _ws(tmp_path, name="ws"):
@@ -93,7 +117,8 @@ def test_user_servers_and_keys_survive_and_gamachine_entries_are_added(home, tmp
     assert data["mcpServers"]["mine"] == mine
     assert data["mcpServers"]["unityMCP"] == {"url": "http://u"}  # the user's own Unity entry
     assert OURS <= set(data["mcpServers"])
-    assert data["mcpServers"]["unityai"] == {"command": _launcher(home), "args": [], "enabled": True}
+    assert data["mcpServers"]["unityai"] == {"command": _kimi_launcher(home), "args": [], "enabled": True}
+    assert all(data["mcpServers"][name]["command"] == _kimi_launcher(home, name) for name in OURS)
 
 
 def test_file_is_not_rewritten_when_gamachine_entries_match(home, tmp_path, monkeypatch):
@@ -166,11 +191,14 @@ def test_unity_entry_follows_unity_and_its_url_rides_the_env(home, tmp_path, mon
     assert spawn["env"]["UNITY_MCP_URL"] == "http://127.0.0.1:1/mcp"
 
 
-def test_entry_whose_command_is_missing_is_written_disabled(home, tmp_path, monkeypatch):
-    # kimi 2.5.3 dies on spawn ENOENT of any enabled server (measured), user sessions included.
+def test_entry_stays_enabled_when_the_real_command_is_gone(home, tmp_path, monkeypatch):
+    # The launcher, not the file, copes with a moved or uninstalled Gamachine: the entry only
+    # ever names a file Gamachine wrote under the user's kimi home.
     os.remove(_launcher(home))
-    _run(_provider(chat=3), _ws(tmp_path), home, monkeypatch)
-    assert _servers(home)["unityai"]["enabled"] is False
+    spawn = _run(_provider(chat=3), _ws(tmp_path), home, monkeypatch)
+    assert _servers(home)["unityai"]["enabled"] is True
+    assert os.path.isfile(_kimi_launcher(home))
+    assert spawn["env"]["GAMACHINE_KIMI_EXE_UNITYAI"] == _launcher(home)
 
 
 @pytest.mark.parametrize("content", ["{broken", '{"mcpServers": []}', "[1, 2]"])
@@ -241,3 +269,125 @@ def test_bad_workspace_mcp_json_is_left_alone_and_kimi_still_gets_its_servers(ho
     _run(_provider(chat=3), ws, home, monkeypatch)
     assert (ws / ".mcp.json").read_text(encoding="utf-8") == '{"mcpServers": []}'
     assert OURS <= set(_servers(home))
+
+
+def _kimi_files(home):
+    """mcp.json and the launchers (config.toml is the permission block, not under test here)."""
+    return {str(p.relative_to(home)): p.read_bytes() for p in home.rglob("*")
+            if p.is_file() and p.name != "config.toml"}
+
+
+def test_mcp_json_and_launchers_hold_no_install_path_or_token(home, tmp_path, monkeypatch):
+    secret = "token-77aa31c0"
+    monkeypatch.setenv("LOCAL_APP_TOKEN", secret)
+    _run(_provider(chat=9), _ws(tmp_path, "project-ws-12"), home, monkeypatch)
+    texts = {name: data.decode("utf-8") for name, data in _kimi_files(home).items()}
+    assert len(texts) == 1 + len(OURS)  # mcp.json and one launcher per server
+    backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for name, text in texts.items():
+        for forbidden in (secret, "project-ws-12", BACKEND, os.path.dirname(sys.executable),
+                          backend_dir, str(tmp_path / "bin")):
+            # JSON doubles a Windows path's backslashes, so look for that spelling too.
+            for spelling in (forbidden, json.dumps(forbidden)[1:-1]):
+                assert spelling not in text, (name, forbidden)
+
+
+def test_two_chats_leave_mcp_json_and_launchers_byte_identical(home, tmp_path, monkeypatch):
+    _run(_provider(chat=1), _ws(tmp_path, "one"), home, monkeypatch)
+    before = _kimi_files(home)
+    mtimes = {p: os.stat(home / p).st_mtime_ns for p in before}
+    _run(_provider(chat=2, read_only=True), _ws(tmp_path, "two"), home, monkeypatch)
+    assert _kimi_files(home) == before
+    assert {p: os.stat(home / p).st_mtime_ns for p in before} == mtimes  # not even rewritten
+
+
+def test_launcher_is_restored_when_missing_or_changed(home, tmp_path, monkeypatch):
+    _run(_provider(chat=1), _ws(tmp_path), home, monkeypatch)
+    good = _kimi_files(home)
+    path = _kimi_launcher(home, "gamachineBrowser")
+    with open(path, "wb") as f:
+        f.write(b"tampered")
+    os.remove(_kimi_launcher(home, "gamachineComputer"))
+    _run(_provider(chat=1), _ws(tmp_path), home, monkeypatch)
+    assert _kimi_files(home) == good
+    assert not [p for p in (home / "gamachine").iterdir() if p.name.endswith(".tmp")]
+
+
+def test_launchers_are_private_and_runnable(home, tmp_path, monkeypatch):
+    from tests.test_cli_read_only_marker import _assert_private
+
+    # A broad folder, so privacy has to come from the write: on Windows a new file would
+    # inherit the folder's Users entry.
+    home.mkdir()
+    if sys.platform == "win32":
+        subprocess.run(["icacls", str(home), "/grant", "*S-1-5-32-545:(OI)(CI)R"],
+                       capture_output=True, check=True)
+    _run(_provider(chat=1), _ws(tmp_path), home, monkeypatch)
+    for name in OURS:
+        path = _kimi_launcher(home, name)
+        if os.name == "nt":
+            _assert_private(path)
+        else:
+            assert stat.S_IMODE(os.stat(path).st_mode) == 0o700  # owner only, and runnable
+
+
+def test_launcher_exits_quietly_without_the_gamachine_marker(home, tmp_path, monkeypatch):
+    # The user's own kimi sessions read the same mcp.json but carry no Gamachine marker.
+    stub, flag = _stub(tmp_path), tmp_path / "ran.json"
+    spawn = _run(_provider(chat=7), _ws(tmp_path), home, monkeypatch)
+    env = {**os.environ, **spawn["env"], "GAMACHINE_KIMI_EXE_UNITYAI": sys.executable,
+           "GAMACHINE_KIMI_CMD_UNITYAI": subprocess.list2cmdline([sys.executable, str(stub), str(flag)])
+           if sys.platform == "win32" else f"'{sys.executable}' '{stub}' '{flag}'"}
+    env.pop("GAMACHINE_KIMI_TURN")
+    done, seconds = _run_launcher(home, env)
+    assert (done.returncode, done.stdout) == (0, "")
+    assert not flag.exists()
+    assert seconds < 20
+
+
+def test_launcher_exits_quietly_when_the_real_command_is_gone(home, tmp_path, monkeypatch):
+    # Gamachine moved or uninstalled: the entry still sits in the user's file.
+    stub, flag = _stub(tmp_path), tmp_path / "ran.json"
+    spawn = _run(_provider(chat=7), _ws(tmp_path), home, monkeypatch)
+    env = {**os.environ, **spawn["env"], "GAMACHINE_KIMI_EXE_UNITYAI": str(tmp_path / "gone" / "python.exe"),
+           "GAMACHINE_KIMI_CMD_UNITYAI": subprocess.list2cmdline([sys.executable, str(stub), str(flag)])
+           if sys.platform == "win32" else f"'{sys.executable}' '{stub}' '{flag}'"}
+    done, seconds = _run_launcher(home, env)
+    assert (done.returncode, done.stdout) == (0, "")
+    assert not flag.exists()
+    assert seconds < 20
+
+
+def test_launcher_runs_the_real_command_inside_a_turn(home, tmp_path, monkeypatch):
+    # The turn's own env names the real command; a path with a space and an argument survive.
+    stub, flag = _stub(tmp_path), tmp_path / "ran.json"
+    ws = _ws(tmp_path, "the ws")
+    spawn = _run(_provider(chat=7), ws, home, monkeypatch)
+    line = ([sys.executable, str(stub), str(flag), "an arg"])
+    env = {**os.environ, **spawn["env"], "GAMACHINE_KIMI_EXE_UNITYAI": sys.executable,
+           "GAMACHINE_KIMI_CMD_UNITYAI": subprocess.list2cmdline(line) if sys.platform == "win32"
+           else " ".join(f"'{part}'" for part in line)}
+    done, _ = _run_launcher(home, env)
+    assert done.returncode == 0
+    assert "hello from the real server" in done.stdout
+    assert json.loads(flag.read_text(encoding="utf-8")) == [["an arg"], str(ws)]
+
+
+def test_every_launcher_is_wired_to_its_own_server_in_the_turn_env(home, tmp_path, monkeypatch):
+    spawn = _run(_provider(chat=7), _ws(tmp_path), home, monkeypatch)
+    env = spawn["env"]
+    assert env["GAMACHINE_KIMI_TURN"] == "1"
+    for name in OURS:
+        assert env[f"GAMACHINE_KIMI_EXE_{name.upper()}"]
+        assert env[f"GAMACHINE_KIMI_CMD_{name.upper()}"]
+    assert env["GAMACHINE_KIMI_EXE_UNITYAI"] == _launcher(home)
+
+
+def test_entry_is_disabled_when_its_launcher_cannot_be_written(home, tmp_path, monkeypatch):
+    # A file where the launcher folder should be: an enabled entry would point at nothing and
+    # crash the user's kimi (spawn ENOENT), so it is written disabled and the turn still runs.
+    home.mkdir()
+    (home / "gamachine").write_text("in the way", encoding="utf-8")
+    spawn = _run(_provider(chat=3), _ws(tmp_path), home, monkeypatch)
+    assert spawn["argv"]
+    assert all(entry["enabled"] is False for entry in _servers(home).values())

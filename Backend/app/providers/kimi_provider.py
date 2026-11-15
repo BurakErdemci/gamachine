@@ -1,8 +1,10 @@
 import os
 import sys
 import json
+import shlex
 import shutil
 import logging
+import subprocess
 import tempfile
 import threading
 from .cli_base import BaseCLIProvider
@@ -67,27 +69,107 @@ class KimiProvider(BaseCLIProvider):
     # kimi's own env (entry env merged on top, measured with kimi 2.5.3), so the
     # workspace, backend URL, Unity URL and connector ids ride `_mcp_env`, and
     # the chat id and read-only flag ride the base spawn env. The file changes
-    # only with machine-wide state: install paths, Unity running, the
+    # only with machine-wide state: Unity running and the
     # computer/browser/connectors switches.
+    #
+    # Every entry points at a tiny launcher under $KIMI_CODE_HOME/gamachine/,
+    # never at the install: the file outlives the install (moved, updated,
+    # uninstalled), and a command missing on disk crashes the user's own kimi
+    # (spawn ENOENT, rc 1, measured 15 Nov 2026). The launcher runs the real
+    # server only inside a Gamachine turn (marker env var, real command line in
+    # per-server env vars); otherwise, or when the real command is gone, it
+    # exits 0 at once with no output, which kimi tolerates (measured). So the
+    # launcher and file texts hold no install path and no secret.
     #
     # `enabled: false` instead of a listed-but-dead server (measured, kimi 2.5.3,
     # 15 Nov 2026): prompt mode waits for every server's first connect before
     # the first model request, and the unityMCP bridge answers `initialize` only
     # after 10-17 s with Unity off, so a listed bridge delayed each turn ~30 s;
-    # a disabled one costs nothing. A command that does not exist on disk
-    # crashes kimi outright (spawn ENOENT, rc 1, for .exe and .cmd alike), so an
-    # entry whose command is missing is written disabled too.
+    # a disabled one costs nothing.
     #
     # `unityai` keeps its bare name: the hint, the permission rules already in
     # users' config.toml and the guide tests name its tools mcp__unityai__*.
     # The others carry the gamachine prefix; the Unity one is not `unityMCP`,
     # which is the name a user's own Unity MCP server would have.
     _KIMI_UNITY_SERVER = "gamachineUnityMCP"
+    _KIMI_TURN_ENV = "GAMACHINE_KIMI_TURN"
     _mcp_env = {}  # this turn's env for the MCP servers, set by _register_mcp
 
+    @staticmethod
+    def _launcher_env_names(name: str):
+        key = name.upper()
+        return f"GAMACHINE_KIMI_EXE_{key}", f"GAMACHINE_KIMI_CMD_{key}"
+
+    @classmethod
+    def _launcher_text(cls, name: str) -> str:
+        exe, cmd = cls._launcher_env_names(name)
+        if sys.platform == "win32":
+            return ("@echo off\r\n"
+                    f'if not "%{cls._KIMI_TURN_ENV}%"=="1" exit /b 0\r\n'
+                    f'if not exist "%{exe}%" exit /b 0\r\n'
+                    f"%{cmd}%\r\n")
+        return ("#!/bin/sh\n"
+                f'[ "${cls._KIMI_TURN_ENV}" = "1" ] || exit 0\n'
+                f'[ -e "${exe}" ] || exit 0\n'
+                f'eval "exec ${cmd}"\n')
+
+    @classmethod
+    def _kimi_launcher_path(cls, name: str) -> str:
+        suffix = ".cmd" if sys.platform == "win32" else ""
+        return os.path.join(os.path.dirname(cls._kimi_config_path()), "gamachine", name + suffix)
+
+    @classmethod
+    def _write_launcher(cls, name: str):
+        """Writes the launcher for `name` (atomic, private, only when missing or
+        different); returns its path, or None when it could not be written."""
+        from .workspace_config import harden_config_file
+        path = cls._kimi_launcher_path(name)
+        data = cls._launcher_text(name).encode("utf-8")
+        tmp = None
+        try:
+            with _USER_MCP_LOCK:
+                try:
+                    with open(path, "rb") as f:
+                        if f.read() == data:
+                            return path
+                except OSError:
+                    pass
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".gamachine-", suffix=".tmp")
+                with os.fdopen(fd, "wb") as f:
+                    f.write(data)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp, path)
+                tmp = None
+                if not harden_config_file(path):
+                    logger.warning("[KimiProvider] %s could not be made private.", path)
+                if os.name != "nt":
+                    os.chmod(path, 0o700)
+            return path
+        except OSError as e:
+            logger.warning("[KimiProvider] launcher %s could not be written: %s", path, e)
+            if tmp is not None:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+            return None
+
+    @staticmethod
+    def _real_command(argv) -> tuple:
+        """(command path, full command line) the launcher runs for this turn."""
+        command = argv[0]
+        if not os.path.isabs(command):
+            command = shutil.which(command) or command
+        argv = [command, *argv[1:]]
+        if sys.platform == "win32":
+            return command, subprocess.list2cmdline(argv)
+        return command, shlex.join(argv)
+
     def _register_mcp(self, launcher: str, workspace: str, backend_url: str):
-        """Brings $KIMI_CODE_HOME/mcp.json up to date and keeps this turn's
-        per-turn values for the spawn env."""
+        """Brings $KIMI_CODE_HOME/mcp.json and its launchers up to date and keeps
+        this turn's per-turn values for the spawn env."""
         from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
         from computer_use import registration as computer_reg
         from browser_use import registration as browser_reg
@@ -96,29 +178,30 @@ class KimiProvider(BaseCLIProvider):
 
         unity_url = unity_mcp_manager.mcp_url()
         env = {"WORKSPACE_PATH": workspace, "WORKSPACE": workspace,
-               "UNITYAI_URL": backend_url, connectors_reg.IDS_ENV: ""}
+               "UNITYAI_URL": backend_url, connectors_reg.IDS_ENV: "",
+               self._KIMI_TURN_ENV: "1"}
         if unity_url:
             env["UNITY_MCP_URL"] = unity_url
-        servers = {"unityai": self._kimi_entry([launcher], True),
-                   self._KIMI_UNITY_SERVER: self._kimi_entry(bridge_argv(), bool(unity_url))}
+        specs = [("unityai", [launcher], True),
+                 (self._KIMI_UNITY_SERVER, bridge_argv(), bool(unity_url))]
         for reg in (computer_reg, browser_reg, connectors_reg):
             entry = reg.stdio_entry()  # None while the user's switch is off
-            servers[reg.SERVER_NAME] = self._kimi_entry(reg.server_argv(), entry is not None)
+            specs.append((reg.SERVER_NAME, reg.server_argv(), entry is not None))
             if reg is connectors_reg and entry:
                 env.update({key: entry["env"][key] for key in
                             (connectors_reg.IDS_ENV, connectors_reg.ROOT_ENV) if key in entry["env"]})
+        servers = {}
+        for name, argv, enabled in specs:
+            exe_env, cmd_env = self._launcher_env_names(name)
+            env[exe_env], env[cmd_env] = self._real_command(argv)
+            path = self._write_launcher(name)
+            servers[name] = {"command": path or self._kimi_launcher_path(name), "args": [],
+                             "enabled": bool(enabled and path)}
         self._mcp_env = env
         try:
             self._write_user_mcp(servers)
         except Exception as e:  # the turn still runs, without Gamachine's MCP tools
             logger.warning("[KimiProvider] mcp.json could not be updated: %s", e)
-
-    @staticmethod
-    def _kimi_entry(argv, enabled: bool) -> dict:
-        command = argv[0]
-        exists = (os.path.isfile(command) if os.path.isabs(command)
-                  else shutil.which(command) is not None)
-        return {"command": command, "args": list(argv[1:]), "enabled": bool(enabled and exists)}
 
     @classmethod
     def _kimi_mcp_path(cls) -> str:
