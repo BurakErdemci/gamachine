@@ -94,12 +94,6 @@ _GIT_TIMEOUT_S = 10
 _SNAPSHOT_WAIT_S = 3
 
 
-def _forget_briefing(session) -> None:
-    """A turn that did not end normally may not have reached the model."""
-    import agent_guide as guides
-    guides.briefing_of(session).forget()
-
-
 def _say(language: str, tr: str, en: str) -> str:
     return en if language == "en" else tr
 
@@ -1455,11 +1449,9 @@ class AgyStreamSession(SaglayiciSahipligi):
                                  "session_id": self.session_id})
         except (asyncio.CancelledError, GeneratorExit):
             if not completed:
-                _forget_briefing(self)
                 await self._close_safely(preserve_resume=True)
             raise
         except Exception as exc:
-            _forget_briefing(self)
             if isinstance(exc, AgyWorkspaceError):
                 preserve_live_process = True
             else:
