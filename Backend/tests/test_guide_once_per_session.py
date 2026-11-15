@@ -580,6 +580,7 @@ def test_claude_exception_after_events_is_not_remembered(monkeypatch):
 def test_oneshot_raise_cancel_and_close_are_not_remembered(monkeypatch):
     turn, _, sessions = _oneshot(monkeypatch, "cursor", "chat-4")
     key = ("cursor", CID + 9)
+    turn.runner.context = HIST
     try:
         turn("hello")
         assert guide.briefing_of(sessions[key]).notes
@@ -604,6 +605,7 @@ def test_oneshot_raise_cancel_and_close_are_not_remembered(monkeypatch):
         assert guide.briefing_of(sessions[key]).notes == {}
         _, fresh = turn("after the cancel")
         assert fresh.count(MARKER) == 1 and guide.mode_note("en", "step", True) in fresh
+        assert HIST in fresh
 
         runner = turn.runner
         _FakeCLI.hang_next = True
@@ -692,3 +694,108 @@ def test_claude_handoff_history_is_resent_after_failed_turns(monkeypatch):
     assert session._handoff_pending is False
     _claude_turn(runner, "later")
     assert HIST not in messages[-1]
+
+
+# ── Round 3: busy hand-off, restarted Codex thread, cancel guard, flags ──────
+
+def test_claude_busy_with_background_delivery_consumes_the_handoff(monkeypatch):
+    from providers import claude_sdk_session as sdk
+
+    runner, session, messages = _claude_runner(monkeypatch, CID + 36, [])
+    handed, calls = [], {"n": 0}
+
+    async def stream(message, lock_timeout=None):
+        calls["n"] += 1
+        messages.append(message)
+        if calls["n"] == 1:
+            raise sdk.SessionBusyError("busy")
+        yield {"type": "done"}
+
+    async def hand(message):
+        handed.append(message)
+        return True
+
+    session.stream = stream
+    session.hand_to_running_turn = hand
+    session._active_tasks = {"bg": object()}
+    session.session_id = "live-session"
+    session._handoff_pending = True
+    runner.context = HIST
+    _claude_turn(runner, "first, busy, handed to the running turn")
+    assert handed and HIST in handed[0]
+    assert session._handoff_pending is False
+    _claude_turn(runner, "second")
+    assert HIST not in messages[-1]
+
+
+def test_codex_history_is_resent_when_a_restarted_thread_fails_its_first_turn(monkeypatch):
+    turn, sent = _codex_runner(monkeypatch, CID + 37, [
+        [{"type": "text", "content": "ok"}],
+        [{"type": "error", "message": "boom"}],
+        [{"type": "text", "content": "ok"}],
+        [{"type": "text", "content": "ok"}]])
+    turn.runner.context = HIST
+    live = {"v": True}
+    plain_stream = codex_session.CodexSession.stream
+
+    async def stream(session, message, image_paths=None):
+        live["v"] = True  # stream() (re)starts the app-server
+        async for event in plain_stream(session, message, image_paths):
+            yield event
+
+    monkeypatch.setattr(codex_session.CodexSession, "stream", stream)
+    monkeypatch.setattr(codex_session.CodexSession, "is_live", property(lambda self: live["v"]))
+    turn("first, normal")
+    live["v"] = False  # the app-server died between turns
+    turn("second, restarts the thread, then fails")
+    turn("third")
+    assert HIST in sent[1] and HIST in sent[2]
+    turn("fourth")
+    assert HIST not in sent[3]
+
+
+def test_oneshot_cancel_after_a_normal_turn_sends_history_to_the_fresh_session(monkeypatch):
+    turn, _, sessions = _oneshot(monkeypatch, "cursor", "chat-6")
+    turn.runner.context = HIST
+    try:
+        _, first = turn("hello")
+        assert HIST in first
+        _, second = turn("again")
+        assert HIST not in second
+        _FakeCLI.raise_next = asyncio.CancelledError()
+        try:
+            with pytest.raises(asyncio.CancelledError):
+                turn("cancelled")
+        finally:
+            _FakeCLI.raise_next = None
+        _, fresh = turn("after the cancel")
+        assert HIST in fresh
+    finally:
+        sessions.clear()
+
+
+def test_codex_failed_turn_puts_the_pending_handoff_back(monkeypatch):
+    turn, sent = _codex_runner(monkeypatch, CID + 38, [
+        [{"type": "text", "content": "ok"}], [{"type": "error", "message": "boom"}]])
+    turn.runner.context = HIST
+    turn("first, normal")
+    session = next(iter(codex_session._SESSIONS.values()))
+    session._handoff_pending = True
+    turn("second, fails")
+    assert HIST in sent[1] and session._handoff_pending is True
+    turn("retry")
+    assert HIST in sent[2] and session._handoff_pending is False
+    turn("later")
+    assert HIST not in sent[3]
+
+
+def test_claude_error_event_puts_the_pending_handoff_back(monkeypatch):
+    runner, session, messages = _claude_runner(
+        monkeypatch, CID + 39, [[{"type": "error", "message": "boom"}], [{"type": "done"}]])
+    session.session_id = "live-session"
+    session._handoff_pending = True
+    runner.context = HIST
+    _claude_turn(runner, "first, errors")
+    assert session._handoff_pending is True
+    _claude_turn(runner, "retry")
+    assert HIST in messages[-1] and session._handoff_pending is False

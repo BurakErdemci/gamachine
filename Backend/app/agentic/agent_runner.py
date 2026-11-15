@@ -3512,6 +3512,8 @@ class AgentRunner:
                     # the message joins the running turn or waits for it.
                     async for ev in self._claude_busy_with_background(session, message):
                         yield ev
+                    # The running turn took the message, transcript included.
+                    session._handoff_pending = False
                     cleanup_dir(_att_dir)
                     return
                 # The reset below would kill background tasks: the turn ends with
@@ -3771,7 +3773,6 @@ class AgentRunner:
         _handoff = getattr(session, "_handoff_pending", False)
         if _handoff:
             session._handoff_pending = False
-        _ctx_before = session._ctx_injected
         if getattr(self, "side_turn", None) is not None:
             # A dead or never-started app-server gets a brand-new thread on
             # this stream (start() only does thread/start), so the flag from
@@ -3857,7 +3858,9 @@ class AgentRunner:
                 # The thread may never have taken this turn (error, cancel, close):
                 # send guide and notes again.
                 _briefing.forget()
-                session._ctx_injected = _ctx_before
+                # A turn that injected the transcript leaves the flag False, also on a
+                # restarted thread; a live thread keeps True.
+                session._ctx_injected = not first_turn
                 session._handoff_pending = _handoff
             cleanup_dir(_att_dir)
 
