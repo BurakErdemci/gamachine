@@ -394,10 +394,6 @@ def test_effort_reaches_the_cli_only_for_levels_the_model_declares(model, level,
     assert _spawn_env(provider).get("KIMI_MODEL_THINKING_EFFORT") == expected
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 def test_a_failure_after_answer_text_is_an_error_and_keeps_the_text(run_kimi):
     # kimi's only failure signal is stderr + rc 1; a failed later step must not look finished.
     events = run_kimi([
@@ -427,3 +423,33 @@ def test_an_unrelated_login_url_in_an_error_is_not_a_missing_login(run_kimi):
 
     errors = [e for e in events if e["type"] == "error"]
     assert [e["code"] for e in errors] == ["kimi_failed"], events
+
+
+@pytest.mark.parametrize("message", [
+    "error: OAuth login expired. Send /login to login.",
+    'error: LLM not set, send "/login" to login',
+    "error: Authorization failed. Please check your API key (try /login).",
+    "error: Login required: Run /login to authenticate with the OAuth provider.",
+    "error: Run /login to refresh",
+])
+def test_kimis_own_login_messages_say_how_to_log_in(run_kimi, message):
+    events = run_kimi(['{"role":"meta","type":"system.version","version":"2.5.3"}'], [message], rc=1)
+    assert [e["code"] for e in events if e["type"] == "error"] == ["kimi_not_logged_in"], events
+
+
+@pytest.mark.parametrize("rc, resets", [(1, False), (2, True), (4, True), (137, True)])
+def test_a_failure_after_text_resets_the_session_like_the_generic_path(run_kimi, rc, resets):
+    # A killed or timed-out CLI can leave a half-written session; rc 1 is kimi's plain failure.
+    events = run_kimi([
+        '{"role":"meta","type":"system.version","version":"2.5.3"}',
+        '{"role":"assistant","content":"partial answer"}',
+    ], ["error: boom"], rc=rc)
+    errors = [e for e in events if e["type"] == "error"]
+    assert len(errors) == 1, events
+    assert bool(errors[0].get("reset_session")) is resets
+    assert any(e["type"] == "delta" and "partial answer" in e["text"] for e in events)
+
+
+
+if __name__ == "__main__":
+    unittest.main()

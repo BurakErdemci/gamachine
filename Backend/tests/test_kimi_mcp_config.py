@@ -305,8 +305,8 @@ def test_launcher_is_restored_when_missing_or_changed(home, tmp_path, monkeypatc
     _run(_provider(chat=1), _ws(tmp_path), home, monkeypatch)
     good = _kimi_files(home)
     path = _kimi_launcher(home, "gamachineBrowser")
-    with open(path, "wb") as f:
-        f.write(b"tampered")
+    with open(path, "ab") as f:  # an older or damaged launcher of ours (it names the marker)
+        f.write(b"rem tampered\r\n")
     os.remove(_kimi_launcher(home, "gamachineComputer"))
     _run(_provider(chat=1), _ws(tmp_path), home, monkeypatch)
     assert _kimi_files(home) == good
@@ -485,3 +485,181 @@ def test_users_non_ascii_text_stays_readable_in_the_file(home, tmp_path, monkeyp
     _run(_provider(chat=1), _ws(tmp_path), home, monkeypatch)
     text = (home / "mcp.json").read_text(encoding="utf-8")
     assert "Ünicode ✓ ş" in text and (chr(92) + "u0") not in text
+
+
+def _notices(events):
+    return [e for e in events if e.get("code") == "kimi_no_gamachine_tools"]
+
+
+def _no_temp_files(home):
+    return [str(p) for p in home.rglob(".gamachine-*.tmp")]
+
+
+def test_mcp_json_keeps_its_two_space_indent(home, tmp_path, monkeypatch):
+    home.mkdir()
+    (home / "mcp.json").write_text('{"mcpServers": {"mine": {"command": "m"}}}', encoding="utf-8")
+    _run(_provider(chat=1), _ws(tmp_path), home, monkeypatch)
+    assert (home / "mcp.json").read_text(encoding="utf-8").startswith('{\n  "mcpServers": {\n    "mine"')
+
+
+@pytest.mark.parametrize("damaged", [b"", b'{"mcpServers": {"unityai": {"comm'])
+def test_an_interrupted_backup_is_redone_and_never_trusted(home, tmp_path, monkeypatch, damaged):
+    # A backup cut off by a crash must not let the original be replaced: it counts as missing.
+    home.mkdir()
+    original = json.dumps({"mcpServers": {"unityai": {"command": "foreign-server"}}, "note": 1})
+    (home / "mcp.json").write_text(original, encoding="utf-8")
+    (home / "mcp.json.gamachine-backup").write_bytes(damaged)
+    _run(_provider(chat=1), _ws(tmp_path), home, monkeypatch)
+    assert (home / "mcp.json.gamachine-backup").read_text(encoding="utf-8") == original
+    assert _servers(home)["unityai"]["command"] == _kimi_launcher(home)
+    assert not _no_temp_files(home)
+
+
+def test_a_complete_earlier_backup_is_never_overwritten(home, tmp_path, monkeypatch):
+    home.mkdir()
+    earlier = json.dumps({"mcpServers": {"first": {"command": "f"}}})
+    (home / "mcp.json.gamachine-backup").write_text(earlier, encoding="utf-8")
+    (home / "mcp.json").write_text(json.dumps({"mcpServers": {"unityai": {"command": "foreign"}}}),
+                                   encoding="utf-8")
+    _run(_provider(chat=1), _ws(tmp_path), home, monkeypatch)
+    assert (home / "mcp.json.gamachine-backup").read_text(encoding="utf-8") == earlier
+    assert _servers(home)["unityai"]["command"] == _kimi_launcher(home)
+
+
+def test_a_backup_that_cannot_be_made_leaves_the_file_unchanged_and_says_so(home, tmp_path, monkeypatch):
+    home.mkdir()
+    original = json.dumps({"mcpServers": {"unityai": {"command": "foreign-server"}}})
+    (home / "mcp.json").write_text(original, encoding="utf-8")
+    (home / "mcp.json.gamachine-backup").mkdir()  # nothing can be written under that name
+    events, prompt = asyncio.run(_events(_provider(chat=1), _ws(tmp_path), home, monkeypatch))
+    assert (home / "mcp.json").read_text(encoding="utf-8") == original
+    assert len(_notices(events)) == 1 and "yedeklenemedi" in _notices(events)[0]["text"]
+    assert "mcp__unityai__save_file" not in prompt
+    assert not _no_temp_files(home)
+
+
+@pytest.mark.parametrize("name", ["gamachineBrowser", "gamachineUnityMCP"])
+def test_every_gamachine_prefixed_name_counts_as_ours_and_is_backed_up(home, tmp_path, monkeypatch, name):
+    home.mkdir()
+    original = json.dumps({"mcpServers": {name: {"command": "theirs"}}})
+    (home / "mcp.json").write_text(original, encoding="utf-8")
+    _run(_provider(chat=1), _ws(tmp_path), home, monkeypatch)
+    assert (home / "mcp.json.gamachine-backup").read_text(encoding="utf-8") == original
+    assert _servers(home)[name]["command"] == _kimi_launcher(home, name)
+
+
+def test_a_foreign_launcher_file_is_kept_as_a_backup_before_it_is_replaced(home, tmp_path, monkeypatch):
+    home.mkdir()
+    launcher = home / "gamachine" / os.path.basename(_kimi_launcher(home))
+    launcher.parent.mkdir()
+    mine = b"@echo off\r\nrem the user's own script\r\n"
+    launcher.write_bytes(mine)
+    spawn = _run(_provider(chat=1), _ws(tmp_path), home, monkeypatch)
+    assert (launcher.parent / (launcher.name + ".gamachine-backup")).read_bytes() == mine
+    assert b"GAMACHINE_KIMI_TURN" in launcher.read_bytes()
+    assert _servers(home)["unityai"]["enabled"] is True and spawn["argv"]
+    # Our own launcher, later replaced by a newer text, needs no backup of its own.
+    launcher.write_bytes(launcher.read_bytes() + b"rem old\r\n")
+    (launcher.parent / (launcher.name + ".gamachine-backup")).unlink()
+    _run(_provider(chat=2), _ws(tmp_path), home, monkeypatch)
+    assert not (launcher.parent / (launcher.name + ".gamachine-backup")).exists()
+
+
+def test_a_foreign_launcher_that_cannot_be_backed_up_is_left_alone_and_says_so(home, tmp_path, monkeypatch):
+    home.mkdir()
+    launcher = home / "gamachine" / os.path.basename(_kimi_launcher(home))
+    launcher.parent.mkdir()
+    mine = b"rem the user's own script\r\n"
+    launcher.write_bytes(mine)
+    (launcher.parent / (launcher.name + ".gamachine-backup")).mkdir()
+    events, _ = asyncio.run(_events(_provider(chat=1), _ws(tmp_path), home, monkeypatch))
+    assert launcher.read_bytes() == mine
+    assert len(_notices(events)) == 1 and "başlatıcı yazılamadı" in _notices(events)[0]["text"]
+    assert _servers(home)["unityai"]["enabled"] is False
+    assert not _no_temp_files(home)
+
+
+def test_a_launcher_that_cannot_be_written_is_reported_in_the_turn(home, tmp_path, monkeypatch):
+    home.mkdir()
+    (home / "gamachine").write_text("in the way", encoding="utf-8")
+    events, prompt = asyncio.run(_events(_provider(chat=3), _ws(tmp_path), home, monkeypatch))
+    assert len(_notices(events)) == 1 and "başlatıcı yazılamadı" in _notices(events)[0]["text"]
+    assert "mcp__unityai__save_file" not in prompt
+
+
+def test_a_failed_write_of_mcp_json_is_reported_and_leaves_no_temp_file(home, tmp_path, monkeypatch):
+    home.mkdir()
+    original = '{"mcpServers": {"mine": {"command": "m"}}}'
+    (home / "mcp.json").write_text(original, encoding="utf-8")
+    real = os.replace
+
+    def refuse(src, dst, *a, **k):
+        if os.path.basename(str(dst)) == "mcp.json":
+            raise PermissionError("injected")
+        return real(src, dst, *a, **k)
+
+    monkeypatch.setattr(os, "replace", refuse)
+    events, prompt = asyncio.run(_events(_provider(chat=3), _ws(tmp_path), home, monkeypatch))
+    assert (home / "mcp.json").read_text(encoding="utf-8") == original
+    assert len(_notices(events)) == 1 and "yazılamadı" in _notices(events)[0]["text"]
+    assert "mcp__unityai__save_file" not in prompt
+    assert not _no_temp_files(home)
+
+
+def test_a_lone_surrogate_in_the_users_file_is_written_escaped_not_lost(home, tmp_path, monkeypatch):
+    # UTF-8 cannot carry it, so the ensure_ascii=False write fails; the retry escapes it.
+    home.mkdir()
+    (home / "mcp.json").write_text('{"mcpServers": {"mine": {"command": "m", "env": {"K": "a\\ud800b ş"}}}}',
+                                   encoding="utf-8")
+    events, prompt = asyncio.run(_events(_provider(chat=1), _ws(tmp_path), home, monkeypatch))
+    assert not _notices(events)
+    assert _servers(home)["mine"]["env"]["K"] == "a\ud800b ş"
+    assert _servers(home)["unityai"]["enabled"] is True
+    assert not _no_temp_files(home)
+
+
+def test_every_file_is_private_before_it_takes_its_final_name(home, tmp_path, monkeypatch):
+    from tests.test_cli_read_only_marker import _assert_private
+
+    # Replace/link are the moments a file becomes visible; whatever is renamed must already be private.
+    home.mkdir()
+    original = json.dumps({"mcpServers": {"unityai": {"command": "foreign"}}})
+    (home / "mcp.json").write_text(original, encoding="utf-8")
+    (home / "gamachine").mkdir()
+    (home / "gamachine" / os.path.basename(_kimi_launcher(home))).write_bytes(b"rem foreign\r\n")
+    if sys.platform == "win32":
+        subprocess.run(["icacls", str(home), "/grant", "*S-1-5-32-545:(OI)(CI)R"],
+                       capture_output=True, check=True)
+    published = []
+    real_replace, real_link = os.replace, os.link
+
+    def replace(src, dst, *a, **k):
+        _assert_private(str(src))
+        published.append(os.path.basename(str(dst)))
+        return real_replace(src, dst, *a, **k)
+
+    def link(src, dst, *a, **k):
+        _assert_private(str(src))
+        published.append(os.path.basename(str(dst)))
+        return real_link(src, dst, *a, **k)
+
+    monkeypatch.setattr(os, "replace", replace)
+    monkeypatch.setattr(os, "link", link)
+    _run(_provider(chat=1), _ws(tmp_path), home, monkeypatch)
+    # the mcp.json backup, the launcher backup, the launchers and mcp.json itself
+    assert "mcp.json.gamachine-backup" in published and "mcp.json" in published
+    assert any(name.endswith(".gamachine-backup") and name != "mcp.json.gamachine-backup" for name in published)
+
+
+def test_a_double_quote_in_a_server_command_is_refused_and_the_entry_stays_off(home, tmp_path, monkeypatch):
+    from providers import codex_unitymcp_bridge
+
+    with pytest.raises(ValueError):
+        KimiProvider._real_command(["server", 'a"b'])
+    # A harmless stand-in for the Unity bridge command that holds a quote.
+    monkeypatch.setattr(codex_unitymcp_bridge, "bridge_argv", lambda: ["bridge-server", 'x"y'])
+    events, prompt = asyncio.run(_events(_provider(chat=1), _ws(tmp_path), home, monkeypatch))
+    assert len(_notices(events)) == 1 and "gamachineUnityMCP" in _notices(events)[0]["text"]
+    assert _servers(home)["gamachineUnityMCP"]["enabled"] is False
+    assert 'x"y' not in (home / "mcp.json").read_text(encoding="utf-8")
+    assert "mcp__unityai__save_file" not in prompt

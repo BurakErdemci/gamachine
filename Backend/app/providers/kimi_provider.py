@@ -5,7 +5,6 @@ import json
 import shlex
 import shutil
 import logging
-import subprocess
 import tempfile
 import threading
 from .cli_base import BaseCLIProvider
@@ -129,47 +128,97 @@ class KimiProvider(BaseCLIProvider):
         suffix = ".cmd" if sys.platform == "win32" else ""
         return os.path.join(os.path.dirname(cls._kimi_config_path()), "gamachine", name + suffix)
 
+    @staticmethod
+    def _write_private(path: str, data: bytes, replace: bool = True, executable: bool = False):
+        """Writes `data` to `path` through a temp file next to it that is written,
+        fsynced and made private BEFORE it takes the final name, so the visible
+        file is never readable by others and never half written. replace=False
+        links it into place and raises FileExistsError when `path` exists. The
+        temp file is gone on every exit."""
+        from .workspace_config import harden_config_file
+        directory = os.path.dirname(path)
+        os.makedirs(directory, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=directory, prefix=".gamachine-", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+                f.flush()
+                os.fsync(f.fileno())
+            if not harden_config_file(tmp):
+                logger.warning("[KimiProvider] %s could not be made private.", path)
+            if executable and os.name != "nt":
+                os.chmod(tmp, 0o700)
+            if replace:
+                os.replace(tmp, path)
+            else:
+                os.link(tmp, path)
+        finally:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+    @classmethod
+    def _backup_file(cls, path: str, is_complete):
+        """Copies `path` to `<path>.gamachine-backup`. An existing backup that
+        `is_complete(bytes)` accepts is never touched; one that is empty or cut
+        off counts as missing and is redone from the current file. Returns None
+        when a complete backup exists afterwards, else the error text."""
+        backup = path + ".gamachine-backup"
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+            try:
+                with open(backup, "rb") as f:
+                    old = f.read()
+            except FileNotFoundError:
+                old = None
+            if old is not None and is_complete(old):
+                return None
+            cls._write_private(backup, data, replace=old is not None)
+        except FileExistsError:
+            return None  # another writer made it first
+        except OSError as e:
+            return str(e)
+        return None
+
     @classmethod
     def _write_launcher(cls, name: str):
         """Writes the launcher for `name` (atomic, private, only when missing or
-        different); returns its path, or None when it could not be written."""
-        from .workspace_config import harden_config_file
+        different); returns its path, or None when it could not be written. A
+        file that is not one of ours is copied to `<name>.gamachine-backup` first."""
         path = cls._kimi_launcher_path(name)
         data = cls._launcher_text(name).encode("utf-8")
-        tmp = None
         try:
             with _USER_MCP_LOCK:
                 try:
                     with open(path, "rb") as f:
-                        if f.read() == data:
-                            return path
-                except OSError:
-                    pass
-                os.makedirs(os.path.dirname(path), exist_ok=True)
-                fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".gamachine-", suffix=".tmp")
-                with os.fdopen(fd, "wb") as f:
-                    f.write(data)
-                    f.flush()
-                    os.fsync(f.fileno())
-                os.replace(tmp, path)
-                tmp = None
-                if not harden_config_file(path):
-                    logger.warning("[KimiProvider] %s could not be made private.", path)
-                if os.name != "nt":
-                    os.chmod(path, 0o700)
+                        current = f.read()
+                except FileNotFoundError:
+                    current = None
+                if current == data:
+                    return path
+                if current is not None and cls._KIMI_TURN_ENV.encode() not in current:
+                    error = cls._backup_file(path, bool)
+                    if error:
+                        logger.warning("[KimiProvider] %s is not a Gamachine launcher and could "
+                                       "not be backed up (%s); left unchanged.", path, error)
+                        return None
+                    logger.warning("[KimiProvider] %s is not a Gamachine launcher; it is replaced, "
+                                   "the original is kept as %s.gamachine-backup", path, path)
+                cls._write_private(path, data, executable=True)
             return path
         except OSError as e:
             logger.warning("[KimiProvider] launcher %s could not be written: %s", path, e)
-            if tmp is not None:
-                try:
-                    os.unlink(tmp)
-                except OSError:
-                    pass
             return None
 
     @staticmethod
     def _real_command(argv) -> tuple:
-        """(command path, full command line) the launcher runs for this turn."""
+        """(command path, full command line) the launcher runs for this turn.
+        ValueError for a double quote in any part: no current argument has one,
+        and the cmd.exe line cannot carry it safely."""
+        if any('"' in part for part in argv):
+            raise ValueError("the command contains a double quote")
         command = argv[0]
         if not os.path.isabs(command):
             command = shutil.which(command) or command
@@ -205,7 +254,14 @@ class KimiProvider(BaseCLIProvider):
         failure = None
         for name, argv, enabled in specs:
             exe_env, cmd_env = self._launcher_env_names(name)
-            env[exe_env], env[cmd_env] = self._real_command(argv)
+            try:
+                env[exe_env], env[cmd_env] = self._real_command(argv)
+            except ValueError as e:
+                logger.warning("[KimiProvider] %s server is not registered: %s", name, e)
+                failure = failure or f"{name} sunucusunun komutu çift tırnak içeriyor"
+                servers[name] = {"command": self._kimi_launcher_path(name), "args": [],
+                                 "enabled": False}
+                continue
             path = self._write_launcher(name)
             if path is None and name == "unityai":
                 failure = f"başlatıcı yazılamadı ({self._kimi_launcher_path(name)})"
@@ -233,49 +289,32 @@ class KimiProvider(BaseCLIProvider):
         return os.path.normcase(os.path.dirname(os.path.abspath(command))) == os.path.normcase(folder)
 
     @staticmethod
-    def _backup_user_mcp(path: str):
-        """Copies the user's mcp.json once to `<path>.gamachine-backup`, never over
-        an existing backup. Returns None when a backup exists, else the error."""
-        from .workspace_config import harden_config_file
-        backup = path + ".gamachine-backup"
+    def _is_json_object(raw: bytes) -> bool:
         try:
-            with open(path, "rb") as src, open(backup, "xb") as dst:
-                dst.write(src.read())
-        except FileExistsError:
-            return None
-        except OSError as e:
-            return str(e)
-        if not harden_config_file(backup):
-            logger.warning("[KimiProvider] %s could not be made private.", backup)
-        return None
+            return isinstance(json.loads(raw.decode("utf-8-sig")), dict)
+        except ValueError:
+            return False
 
-    @staticmethod
-    def _write_mcp_json(path: str, data: dict) -> bool:
-        """Atomic write of the user's mcp.json (temp file + os.replace) that keeps
-        their non-ASCII text readable; a symlink is written through and the
-        file's permission bits are kept."""
-        import stat
-        target = os.path.realpath(path)
-        directory = os.path.dirname(target)
-        tmp = None
+    @classmethod
+    def _backup_user_mcp(cls, path: str):
+        """Keeps the user's mcp.json as `<path>.gamachine-backup`; None when a
+        complete backup exists (an earlier one is never overwritten), else the error."""
+        return cls._backup_file(path, cls._is_json_object)
+
+    @classmethod
+    def _write_mcp_json(cls, path: str, data: dict) -> bool:
+        """Atomic write of the user's mcp.json that keeps their non-ASCII text
+        readable (escaped only when it holds a lone surrogate, which UTF-8 cannot
+        carry); a symlink is written through."""
         try:
-            os.makedirs(directory, exist_ok=True)
-            fd, tmp = tempfile.mkstemp(dir=directory, prefix=".gamachine-", suffix=".tmp")
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-                f.flush()
-                os.fsync(f.fileno())
-            if os.name != "nt" and os.path.exists(target):
-                os.chmod(tmp, stat.S_IMODE(os.stat(target).st_mode))  # mkstemp made it 0600
-            os.replace(tmp, target)
+            payload = json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8")
+        except UnicodeEncodeError:
+            payload = json.dumps(data, indent=2).encode("ascii")
+        try:
+            cls._write_private(os.path.realpath(path), payload)
             return True
         except OSError as e:
             logger.warning("[KimiProvider] %s could not be written (%s)", path, e)
-            if tmp is not None:
-                try:
-                    os.unlink(tmp)
-                except OSError:
-                    pass
             return False
 
     def _write_user_mcp(self, ours: dict):
@@ -289,7 +328,6 @@ class KimiProvider(BaseCLIProvider):
 
         Returns None on success, else a short user-facing reason it failed."""
         from .agy_provider import _read_json_config
-        from .workspace_config import harden_config_file
         path = self._kimi_mcp_path()
         with _USER_MCP_LOCK:
             data = _read_json_config(path)
@@ -314,8 +352,6 @@ class KimiProvider(BaseCLIProvider):
             data["mcpServers"] = {**servers, **ours}
             if not self._write_mcp_json(path, data):
                 return f"{path} yazılamadı"
-            if not harden_config_file(os.path.realpath(path)):
-                logger.warning("[KimiProvider] %s could not be made private.", path)
             return None
 
     @staticmethod
@@ -566,7 +602,8 @@ class KimiProvider(BaseCLIProvider):
     # Startup errors the CLI prints when no usable login/model exists (kimi.exe
     # 2.5.3: requireConfiguredModel, AuthSummaryService.ensureReady, auth errors).
     _KIMI_LOGIN_MARKERS = (
-        "no model configured", "login required", "use /login", "no provider configured",
+        "no model configured", "login required", "use /login", "run /login", "send /login", "(try /login)",
+        "oauth login expired", "llm not set", "no provider configured",
         "has no credential configured", "no default model configured",
         "does not resolve to a configured provider",
     )
@@ -592,8 +629,11 @@ class KimiProvider(BaseCLIProvider):
                 return None  # an answer came: generic exit-code handling
             # rc 1 is kimi's only failure signal and the generic code reads it as
             # success, so a failure after the first step's text would look finished.
-            return {"type": "error", "code": "kimi_failed", "reason": "process_exit",
-                    "content": f"⚠️ Kimi Code turu yarıda kesildi (rc={returncode}): {detail}"}
+            event = {"type": "error", "code": "kimi_failed", "reason": "process_exit",
+                     "content": f"⚠️ Kimi Code turu yarıda kesildi (rc={returncode}): {detail}"}
+            if returncode != 1:
+                event["reset_session"] = True  # as the generic branch: a killed CLI can leave a half-written session
+            return event
         low = detail.lower()
         if "is not configured in config.toml" in low:
             # An empty home answers this too, so a missing login lands here first.
