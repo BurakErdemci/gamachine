@@ -7,6 +7,47 @@ Bu dosya kullanıcıya görünen değişiklikleri taşır. Tam geçmiş için `g
 > kullanıcının indirme anında gördüğü sayfa. Eski girdiler olduğu gibi bırakıldı —
 > geçmişi yarım çevirmek, tek dilde bırakmaktan da iki dilde bırakmaktan da kötü.
 
+## v4.0.1 — 15 November 2026
+
+A maintenance release on top of v4.0.0.
+
+### Providers
+- **Antigravity (agy): Gemini 4 models.** The Gemini 4 tiers are picked with the
+  effort selector next to the model, and Orchestrator (Carbon) is in the list. A
+  model your subscription does not include now says so ("your subscription does not
+  support this model") instead of showing agy's raw unknown-model error, in normal
+  and side turns. Saved Gemini tier choices move to the new selector by themselves.
+- **Kimi Code.** Gamachine now runs the current Kimi Code CLI (2.5.x): the command
+  line, the output it reads and the model names (`kimi-code/k3`,
+  `kimi-code/kimi-for-coding` and their variants) follow it, and an older saved
+  Kimi model moves to its new name. K3 models get Low/High/Max effort. Gamachine's
+  tools reach Kimi through Kimi's own `mcp.json`, next to your own servers, which
+  are kept; if Gamachine has to replace an entry under one of its names, your file
+  is first copied to `mcp.json.gamachine-backup`. Outside Gamachine these entries
+  stay silent. A turn that fails after Kimi has started answering now ends with an
+  error instead of looking finished, and "not logged in" and "model not
+  configured" get clear messages. Not yet tried with a logged-in Kimi account.
+- **Cursor.** While Cursor's agent was updating itself, Gamachine could pick the
+  half-unpacked update and fall back to a slower start path; it now uses only a
+  complete installed version.
+
+### Agent context
+- The agent guide is sent once per chat session (and again after the provider
+  compacts or loses its context), and the mode and Unity notes only when they
+  change, instead of on every message. This shortens every turn for Claude, Codex,
+  agy and the CLIs that resume a session.
+- When a turn ends with an error, is cancelled or is stopped, the next message
+  carries the guide, the notes and, on a first turn, the chat history again, so a
+  failed turn can no longer leave the agent without the step-mode rule or the
+  earlier conversation.
+
+### Video
+- A video dropped on the message box is attached like a picked one.
+- At most five videos per message, also for restored drafts and taken-back
+  messages.
+- Video notices appear in the chat's language, and the guide topic says
+  "captions" (the speech is not transcribed).
+
 ## v4.0.0 — 13 November 2026
 
 Gamachine 4 changes what the app is for. In v3 an agent wrote code and touched the
