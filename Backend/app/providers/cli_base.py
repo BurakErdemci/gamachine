@@ -166,6 +166,9 @@ class BaseCLIProvider(AIProvider):
         # Base ids take their tier from the effort picker (_AGY_EFFORT_LEVELS);
         # saved tiered ids migrate to the base id on read (AGY_MODEL_REPLACEMENTS).
         # Carbon slugs come from the agy changelog (not on the measured account).
+        # Neon slugs listed by `agy models` on agy 1.5.14 (21 Nov 2026).
+        "gemini-4-neon":                 "gemini-4-neon-high",
+        "gemini-4-orchestrator-neon":    "gemini-pro-orchestrator-neon",
         "gemini-4-carbon":               "gemini-4-carbon-high",
         "gemini-4-argon":                "gemini-4-argon-high",
         "gemini-4-hydrogen":             "gemini-4-hydrogen-high",
@@ -184,6 +187,7 @@ class BaseCLIProvider(AIProvider):
 
     # Base ids whose effort level picks the slug's tier suffix.
     _AGY_EFFORT_LEVELS = {
+        "gemini-4-neon": ("low", "medium", "high", "xhigh"),
         "gemini-4-carbon": ("low", "medium", "high"),
         "gemini-4-argon": ("low", "medium", "high"),
         "gemini-4-hydrogen": ("low", "medium", "high", "xhigh"),

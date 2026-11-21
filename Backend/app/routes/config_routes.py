@@ -496,7 +496,10 @@ def create_config_router(db):
         # Ids as listed by Codex's own model catalog (~/.codex/models_cache.json,
         # fetched 24 Sep 2026 by codex-cli 0.156.1: gpt-6-astra/sol/luna visible;
         # ids as listed by codex-cli 0.159.3 on 1 Oct 2026, gpt-6.1-sol added;
-        # gpt-6.1-terra seen in `codex debug models` on 27 Oct 2026).
+        # gpt-6.1-terra seen in `codex debug models` on 27 Oct 2026;
+        # gpt-6.2-astra/sol listed by codex-cli 0.171.0 on 21 Nov 2026).
+        {"id": "gpt-6.2-astra", "name": "GPT-6.2 Astra",  "provider": "subscription"},
+        {"id": "gpt-6.2-sol",   "name": "GPT-6.2 Sol",    "provider": "subscription"},
         {"id": "gpt-6-astra",   "name": "GPT-6 Astra",    "provider": "subscription"},
         {"id": "gpt-6.1-sol",   "name": "GPT-6.1 Sol",    "provider": "subscription"},
         {"id": "gpt-6.1-terra", "name": "GPT-6.1 Terra",  "provider": "subscription"},
@@ -547,6 +550,8 @@ def create_config_router(db):
                 {"id": "kimi-code/k3.1-pro",                  "name": "Kimi K3.1 Pro (CLI)",             "provider": "subscription"},
                 {"id": "kimi-code/kimi-for-coding",           "name": "Kimi For Coding (CLI)",           "provider": "subscription"},
                 {"id": "kimi-code/kimi-for-coding-highspeed", "name": "Kimi For Coding HighSpeed (CLI)", "provider": "subscription"},
+                {"id": "gemini-4-neon",                "name": "Gemini 4 Neon",               "provider": "subscription"},
+                {"id": "gemini-4-orchestrator-neon",   "name": "Orchestrator (Neon)",         "provider": "subscription"},
                 {"id": "gemini-4-carbon",              "name": "Gemini 4 Carbon",             "provider": "subscription"},
                 {"id": "gemini-4-argon",               "name": "Gemini 4 Argon",              "provider": "subscription"},
                 {"id": "gemini-4-hydrogen",            "name": "Gemini 4 Hydrogen",           "provider": "subscription"},

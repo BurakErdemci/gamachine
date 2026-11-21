@@ -22,6 +22,9 @@ AGY_SLUGS = {
     # Measured on agy 1.5.9 (14 Nov 2026).
     "gemini-4-hydrogen-low", "gemini-4-hydrogen-medium", "gemini-4-hydrogen-high",
     "gemini-4-hydrogen-xhigh", "gemini-pro-orchestrator-g1-pro",
+    # Measured on agy 1.5.14 (21 Nov 2026).
+    "gemini-4-neon-low", "gemini-4-neon-medium", "gemini-4-neon-high",
+    "gemini-4-neon-xhigh", "gemini-pro-orchestrator-neon",
     # Carbon is not on the measured account; slugs come from the agy 1.5.5/1.5.8 changelog.
     "gemini-4-carbon-low", "gemini-4-carbon-medium", "gemini-4-carbon-high",
     # Not on the measured account; --model also takes a display name (measured
@@ -29,6 +32,8 @@ AGY_SLUGS = {
     "Orchestrator (Carbon)",
 }
 APP_SLUGS = {
+    "gemini-4-neon": "gemini-4-neon-high",
+    "gemini-4-orchestrator-neon": "gemini-pro-orchestrator-neon",
     "gemini-4-argon": "gemini-4-argon-high",
     "gemini-4-carbon": "gemini-4-carbon-high",
     "gemini-4-hydrogen": "gemini-4-hydrogen-high",
@@ -227,6 +232,7 @@ def test_one_shot_spawn_passes_both_flags_and_closes(monkeypatch, fake_spawns):
 
 
 GEMINI_EFFORTS = {
+    "gemini-4-neon": ("low", "medium", "high", "xhigh"),
     "gemini-4-carbon": ("low", "medium", "high"),
     "gemini-4-argon": ("low", "medium", "high"),
     "gemini-4-hydrogen": ("low", "medium", "high", "xhigh"),
@@ -246,7 +252,8 @@ def test_gemini_base_id_effort_picks_the_tier_suffix(model, levels):
 
 
 @pytest.mark.parametrize("model", [
-    "gemini-4-orchestrator-argon", "gemini-4-orchestrator-carbon", "agy-gpt-oss-120b",
+    "gemini-4-orchestrator-argon", "gemini-4-orchestrator-carbon",
+    "gemini-4-orchestrator-neon", "agy-gpt-oss-120b",
 ])
 @pytest.mark.parametrize("level", ["low", "high", "xhigh", "auto", None])
 def test_fixed_slug_ids_ignore_the_effort_level(model, level):

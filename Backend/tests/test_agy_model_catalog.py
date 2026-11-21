@@ -126,6 +126,8 @@ def test_claude_caps_and_unselected_effort(model):
 
 
 @pytest.mark.parametrize("model,levels", [
+    ("gemini-4-neon", ["auto", "low", "medium", "high", "xhigh"]),
+    ("gemini-4-orchestrator-neon", ["auto"]),
     ("gemini-4-hydrogen", ["auto", "low", "medium", "high", "xhigh"]),
     ("gemini-4-carbon", ["auto", "low", "medium", "high"]),
     ("gemini-4-argon", ["auto", "low", "medium", "high"]),
