@@ -7,6 +7,18 @@ Bu dosya kullanıcıya görünen değişiklikleri taşır. Tam geçmiş için `g
 > kullanıcının indirme anında gördüğü sayfa. Eski girdiler olduğu gibi bırakıldı —
 > geçmişi yarım çevirmek, tek dilde bırakmaktan da iki dilde bırakmaktan da kötü.
 
+## v4.0.2 — 21 November 2026
+
+A model update on top of v4.0.1.
+
+### Providers
+- **Codex: GPT-6.2 Astra and GPT-6.2 Sol** are in the model list. They need
+  Codex CLI 0.171.0 or newer (`npm install -g @openai/codex`).
+- **Antigravity (agy): Gemini 4 Neon and Orchestrator (Neon).** Neon's Low, Medium,
+  High and XHigh levels are picked with the effort selector next to the model;
+  Orchestrator (Neon) plans with Neon and implements with Hydrogen. They need agy
+  1.5.14 or newer (`agy update`) and a paid Google AI plan.
+
 ## v4.0.1 — 15 November 2026
 
 A maintenance release on top of v4.0.0.
