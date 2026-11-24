@@ -78,7 +78,8 @@ Codex and agy are still handed unityMCP with `default_tools_approval_mode = "app
 ### 3. Terminal security
 - Safe (read-only) commands run directly; any command outside the whitelist shows an approval card
 - Attempts to write files via the terminal (`python3 -c "open().write()"`, `printf > path`, `echo > path`) are caught and routed to the DiffViewer
-- CLI built-in write tools (`Write`/`Edit`, agy's `write_to_file`, etc.) are disabled via `disallowedTools`/`disabledTools` → the model is forced onto the approved channel (`save_file` / `unityai`)
+- CLI built-in write tools (`Write`/`Edit`, etc.) are disabled via `disallowedTools` → the model is forced onto the approved channel (`save_file` / `unityai`)
+- agy ignores `disabledTools` (measured with agy 1.2.8) and runs with `--dangerously-skip-permissions`, so its gate is a PreToolUse hook that sees **every** built-in tool call (`.agents/hooks.json` matcher `.*`, since 4.0.3). In step and Safe Auto mode the hook is an allow-list: reads pass, the native writers (`write_file`/`edit_file` on agy 1.5.x, `write_to_file`/`replace_file_content` on 1.2.x) get an approval card, `run_command` passes only as a `unityai` bridge call (Safe Auto also lets routine commands through), `call_mcp_tool` is left to the Unity MCP server's own gate, and any other tool name is denied. v4.0.2 listed only the 1.2.x names, so agy 1.5.15's `write_file` wrote files with no card in step mode
 
 ### 4. Local token architecture (ephemeral)
 
@@ -120,7 +121,7 @@ it. Outside a Unity project nothing is refused.
 |---|---|
 | Claude Code | `Write`, `Edit`, `MultiEdit`, `NotebookEdit`; `Bash` and `PowerShell` commands |
 | Codex | file changes and commands in its approval requests |
-| agy | `write_to_file`, `replace_file_content`, `multi_replace_file_content`, `sed_file` and `run_command` (the agy hook), plus the `unityai` bridge |
+| agy | `write_file`, `edit_file`, `write_to_file`, `replace_file_content`, `multi_replace_file_content`, `sed_file` and `run_command` (the agy hook, which sees every built-in call), plus the `unityai` bridge |
 | unityai MCP (CLI agents) | `save_file`, `delete_file`, `bash` |
 | Cloud API / Ollama | `write_file`, `delete_file`, `run_command` |
 | Unity MCP server | every tool call (including `batch_execute` sub-calls) and `/api/command` — the `.meta` half only, because these tools are the route that makes Unity write YAML assets |

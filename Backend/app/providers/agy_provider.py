@@ -6,7 +6,8 @@ import shutil
 import logging
 from typing import Optional
 from .cli_base import BaseCLIProvider
-from agy_step_gate import (BALANCED_MODE, CLOSED_MODE, GATED_TOOLS, PS_UTF8_PREFIX, RUN_TOOL,
+from agy_step_gate import (ALL_TOOLS_MATCHER, BALANCED_MODE, CLOSED_MODE, GATED_TOOLS,
+                           NATIVE_WRITERS, PS_UTF8_PREFIX, RUN_TOOL,
                            SIDE_HOOK_MATCHERS, SIDE_MODE, STEP_GATE_HOOKS_FILE, STEP_GATE_KEY,
                            bare_word, write_state)
 
@@ -20,8 +21,10 @@ logger = logging.getLogger(__name__)
 # still lets write_to_file edit the workspace and refuses MCP calls, strict
 # refuses everything. A workspace PreToolUse hook does separate them (measured:
 # writes denied with our reason, call_mcp_tool untouched, even under
-# always-proceed). The hook shows approval cards for the two native writers;
-# other writes and shell commands still go through the unityai bridge.
+# always-proceed). The hook shows approval cards for the native writers
+# (write_file/edit_file on agy 1.5.x, write_to_file/replace_file_content on
+# 1.2.x); other writes and shell commands still go through the unityai bridge,
+# and a tool the gate does not know is denied in step and balanced.
 #
 # run_command is gated too: the hook (`backend agy-hook`, agy_step_gate.py)
 # allows only the exact unityai bridge call shapes and denies every other
@@ -30,6 +33,7 @@ logger = logging.getLogger(__name__)
 # The hook is installed in every approval mode; its state file says which one
 # is on (auto allows every call, balanced lets routine calls through), so a
 # flip reaches a running agy on its next tool call. See _write_step_gate.
+# The 1.2.x exact names; only a side question's hooks.json still lists them.
 STEP_GATE_TOOLS = GATED_TOOLS + (RUN_TOOL,)
 HOOK_TIMEOUT_SECONDS = 10
 # 10+150 s bridge budget plus margin; agy waited 165 s at timeout 200 in measurement.
@@ -37,15 +41,39 @@ NATIVE_WRITE_TIMEOUT_SECONDS = 180
 
 
 def step_gate_matchers(mode: Optional[str] = None) -> tuple:
-    """The hooks.json matchers of a child spawned in `mode`. Only a side
-    question's child gets the wide list (Burak, 27 Sep 2026): every other
-    child keeps exactly the step tools, so its behaviour and hook cost stay
-    as they were. agy reads hooks.json only at start; spawns are serialized
-    by the spawn section (BaseCLIProvider._AGY_LOCK), so each child gets the
-    file written just before it, and no main child starts while a side
-    question runs (agy_session.stream), so concurrent main children all
-    read these same matchers."""
-    return STEP_GATE_TOOLS + SIDE_HOOK_MATCHERS if mode == SIDE_MODE else STEP_GATE_TOOLS
+    """The hooks.json matchers of a child spawned in `mode`.
+
+    Every non-side child (auto, step, balanced) matches every tool: a list of
+    names let agy 1.5.15's write_file and edit_file write with no card in step
+    mode (24 Nov 2026), and a child spawned in auto keeps its hooks after a
+    flip to step, so auto needs the same matcher, and the secret and Unity
+    file rules that hold in auto see those writes too. Cost: one hook process
+    per tool call, about 0.22 s median through the .cmd shim (Windows dev
+    layout, 24 Nov 2026).
+    A side question's child keeps its list (Burak, 27 Sep 2026), unchanged.
+    agy reads hooks.json only at start; spawns are serialized by the spawn
+    section (BaseCLIProvider._AGY_LOCK), so each child gets the file written
+    just before it, and no main child starts while a side question runs
+    (agy_session.stream), so concurrent main children all read these same
+    matchers."""
+    return STEP_GATE_TOOLS + SIDE_HOOK_MATCHERS if mode == SIDE_MODE else (ALL_TOOLS_MATCHER,)
+
+
+def _matcher_timeout(matcher: str, mode: Optional[str]) -> int:
+    """A native write waits for its card inside the hook, so a matcher that
+    can match one gets the card's budget. A side child's entries keep the
+    timeouts they had (its hook denies every write at once)."""
+    if mode == SIDE_MODE:
+        native = matcher in ("write_to_file", "replace_file_content")
+    else:
+        native = matcher == ALL_TOOLS_MATCHER or matcher in NATIVE_WRITERS
+    return NATIVE_WRITE_TIMEOUT_SECONDS if native else HOOK_TIMEOUT_SECONDS
+
+
+def _gate_entries(command: str, mode: Optional[str]) -> list:
+    return [{"matcher": tool, "hooks": [{"type": "command", "command": command,
+                                         "timeout": _matcher_timeout(tool, mode)}]}
+            for tool in step_gate_matchers(mode)]
 
 # An agy branch whose unityai server had not started called send_chat_message
 # through call_mcp_tool on unityMCP, which raised a Unity approval card for an
@@ -373,10 +401,13 @@ class AgyProvider(BaseCLIProvider):
             "- Do NOT call list_dir / grep_search / view_file / invoke_subagent / schedule\n"
             "  unless the task genuinely requires it. No self-scheduling, no timers, no\n"
             "  probing the .system_generated / brain / transcript folders. Just do the task.\n\n"
+            "Create a file (or replace its whole content) with write_file, and change one\n"
+            "exact, unique snippet with edit_file. On an older agy without those tools:\n"
             "Use write_to_file and replace_file_content to create or edit files: in step\n"
             "mode they show an approval card and run only after explicit approval.\n"
             "Safe Auto allows routine writes; critical writes show the same card.\n"
-            "For an unverified replacement use write_to_file with the full content.\n"
+            "For an unverified replacement use write_file with the full content.\n"
+            "Any other built-in tool that changes or runs something is refused.\n"
             "For deletes and shell commands use run_command calling 'unityai' with its\n"
             "ABSOLUTE PATH; the save-file call below remains a supported fallback:\n"
             f"  {unityai_cli}\n\n"
@@ -494,12 +525,7 @@ class AgyProvider(BaseCLIProvider):
             command = self._step_gate_command()
         except OSError as e:
             raise AgyStepGateError(_gate_write_failed(_gate_dir(), e, step_mode)) from e
-        hooks[STEP_GATE_KEY] = {"PreToolUse": [
-            {"matcher": tool, "hooks": [{"type": "command", "command": command,
-                "timeout": NATIVE_WRITE_TIMEOUT_SECONDS if tool in ("write_to_file", "replace_file_content")
-                else HOOK_TIMEOUT_SECONDS}]}
-            for tool in step_gate_matchers(mode)
-        ]}
+        hooks[STEP_GATE_KEY] = {"PreToolUse": _gate_entries(command, mode)}
         if not guvenli_config_yaz(workspace, STEP_GATE_HOOKS_FILE, json.dumps(hooks, indent=2)):
             logger.error("[agy] %s could not be written; gate not installed", path)
             raise AgyStepGateError(_gate_write_failed(path, "güvenli yazma reddedildi", step_mode))
@@ -523,11 +549,7 @@ class AgyProvider(BaseCLIProvider):
                 return f"{state_path} beklenen modu ({want_mode}) göstermiyor"
             with open(path, encoding="utf-8-sig") as f:
                 entries = json.load(f)[STEP_GATE_KEY]["PreToolUse"]
-            want = [{"matcher": tool, "hooks": [{"type": "command", "command": command,
-                "timeout": NATIVE_WRITE_TIMEOUT_SECONDS if tool in ("write_to_file", "replace_file_content")
-                else HOOK_TIMEOUT_SECONDS}]}
-                    for tool in step_gate_matchers(mode)]
-            if entries != want:
+            if entries != _gate_entries(command, mode):
                 return f"{path} içindeki {STEP_GATE_KEY} kaydı beklenenden farklı"
             if not os.path.isfile(command):
                 return f"{command} bulunamadı"

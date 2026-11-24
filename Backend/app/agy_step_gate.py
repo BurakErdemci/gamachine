@@ -1,21 +1,27 @@
 """PreToolUse hook for agy (`backend agy-hook --state <file>`).
 
-agy runs this for its built-in file writers, run_command and
-send_command_input (see providers/agy_provider.py, _write_step_gate), and a
-side question's process also for every tool in SIDE_HOOK_MATCHERS. It
-reads the hook payload on stdin and prints {"decision": "allow"|"deny"}.
-A fifth state, "side", holds only while a read-only side question runs.
+agy runs this for EVERY built-in tool call: hooks.json matches ".*" (see
+providers/agy_provider.py, _write_step_gate). It reads the hook payload on
+stdin and prints {"decision": "allow"|"deny"}. A fifth state, "side", holds
+only while a read-only side question runs.
 
 It is installed in every approval mode: the state file's "mode" decides.
 "auto" allows every call, "step" applies the rules below, and "balanced"
 (Burak, 27 Sep 2026) allows what step allows plus the built-in writes and
-commands action_risk calls routine; the two native file writers ask for a
-card in step mode and for critical balanced calls. Other critical calls
-are denied with a pointer to the unityai bridge. In all three, the fixed Unity
+commands action_risk calls routine; the native file writers (NATIVE_WRITERS)
+ask for a card in step mode and for critical balanced calls. Other critical
+calls are denied with a pointer to the unityai bridge. In all three, the fixed Unity
 file rule (unity_file_guard: no .meta writes/deletes/moves, no raw writes to
 Unity YAML assets) is checked first and can only deny. A process spawned in
 auto must still be gated after a flip, and agy reads its hooks only at
 start, so the mode cannot live in hooks.json.
+
+Step and balanced are an allow-list (24 Nov 2026, after v4.0.2): agy 1.5.15
+writes with write_file and edit_file, names the hook only listed for 1.2.x
+builds, so both modes wrote files with no card. Now a call passes only if
+its tool is a known read (MAIN_READ_TOOLS), call_mcp_tool (the Unity MCP
+server gates its own calls) or a tool with its own rule below; every other
+name, and a payload without one, is denied.
 
 Why a top-level module and not providers/: importing anything under
 `providers` runs the package __init__, which imports every provider SDK
@@ -23,8 +29,8 @@ Why a top-level module and not providers/: importing anything under
 gated tool call. This file imports only the standard library.
 
 Fail closed: an unreadable state file or payload is a deny, and so is any
-tool in "side" that is not a proven read. A tool outside the step set in
-auto/step/balanced is allowed: before side questions no hook ran for it.
+tool in "side" that is not a proven read, and any tool in step/balanced that
+no rule here names.
 
 The run_command allow rule (measured 25 Sep 2026, agy 1.2.8): agy runs
 commands in Windows PowerShell 5.1 on Windows, and the unityai launcher there
@@ -65,12 +71,24 @@ import unity_file_guard  # stdlib-only, like this file
 import agy_native_approval  # stdlib-only approval bridge
 
 # Built-in agy tools that write files, plus send_command_input (it types
-# into a running process, e.g. a shell a unityai bash call started).
+# into a running process, e.g. a shell a unityai bash call started). agy
+# 1.5.15 writes with write_file (args Path, Content, Overwrite) and edits with
+# edit_file (Target, Replacement and a path key), measured 24 Nov 2026; the
+# rest are agy 1.2.x names. A side question's hooks.json still lists the
+# 1.2.x names exactly, as it did (its SIDE_HOOK_MATCHERS hold the new ones).
 GATED_TOOLS = (
     "write_to_file", "replace_file_content", "multi_replace_file_content",
     "sed_file", "notebook_edit", "send_command_input",
 )
+NATIVE_WRITERS = agy_native_approval.NATIVE_WRITERS
+WRITE_TOOLS = GATED_TOOLS + tuple(t for t in NATIVE_WRITERS if t not in GATED_TOOLS)
 RUN_TOOL = "run_command"
+# The one hooks.json matcher of a step/balanced/auto child. Measured 24 Nov
+# 2026 (agy 1.5.15): ".*" fires the hook for every built-in call and its deny
+# stops the call. Exact names beside it are left out: whether agy runs the
+# hook once per matching entry is unmeasured, and if it does a native write
+# would ask for its card twice.
+ALL_TOOLS_MATCHER = ".*"
 
 WRITE_REASON = ("Gamachine step mode: built-in file writes are blocked. Write files only "
                 "with the unityai bridge (unityai save-file), so an approval card is shown.")
@@ -149,6 +167,21 @@ SIDE_REASON = (
 SIDE_MESHY_REASON = (
     "Gamachine: this is a read-only side question; meshy calls cost credits and are "
     "refused here. Answer from the conversation.")
+# What step and balanced let through with no rule of its own: the side
+# question's reads, plus reads that only a main turn needs (web search, the
+# output of a command run_command already passed) and agy asking the user a
+# question. Anything else, a tool added in a later agy included, is denied.
+MAIN_READ_TOOLS = SIDE_READ_TOOLS | frozenset({
+    "search_web", "read_url_content", "command_status", "read_terminal",
+    "list_permissions", "ask_question",
+})
+UNKNOWN_TOOL_REASON = (
+    "Gamachine {mode}: the built-in tool {name!r} is not one the approval gate knows, so "
+    "it is blocked. Read with view_file, list_dir or grep_search; create or edit files "
+    "with write_file or edit_file (an approval card is shown when one is needed); delete, "
+    "move or run anything only through the unityai bridge, in exactly the form given in "
+    "your instructions.")
+_MODE_NAMES = {"step": "step mode", "balanced": "Safe Auto mode"}
 
 _SUBCOMMANDS = {
     # flag -> takes a value
@@ -319,10 +352,20 @@ def _deny(reason: str) -> dict:
     return {"decision": "deny", "reason": reason}
 
 
-# agy's file writers name their target in TargetFile, one variant in target_file
-# (read from the agy binary's tool schemas, 26 Sep 2026). notebook_edit takes
-# only .ipynb paths, so it can never name a protected Unity file.
-_FILE_WRITERS = ("write_to_file", "replace_file_content", "multi_replace_file_content", "sed_file")
+# agy 1.2.x file writers name their target in TargetFile, one variant in
+# target_file (read from the agy binary's tool schemas, 26 Sep 2026); agy
+# 1.5.15's write_file names it Path, and edit_file's path key was not recorded
+# (24 Nov 2026), so every usual path spelling counts as a target. A rule that
+# reads targets can only deny on one, so reading too many keys adds no allow.
+# notebook_edit takes only .ipynb paths, so it can never name a protected Unity file.
+_FILE_WRITERS = ("write_to_file", "replace_file_content", "multi_replace_file_content",
+                 "sed_file", "write_file", "edit_file")
+_TARGET_KEYS = agy_native_approval.PATH_KEYS
+
+
+def _write_targets(args: dict) -> list:
+    return [value for key, value in args.items()
+            if isinstance(key, str) and key.replace("_", "").lower() in _TARGET_KEYS]
 
 
 def _unity_file_refusal(raw: bytes):
@@ -344,11 +387,10 @@ def _unity_file_refusal(raw: bytes):
         cwd = args.get("Cwd") if isinstance(args.get("Cwd"), str) else ""
         return unity_file_guard.check_shell(args.get("CommandLine"), cwd or os.getcwd())
     if name in _FILE_WRITERS:
-        for key, value in args.items():
-            if isinstance(key, str) and key.replace("_", "").lower() == "targetfile":
-                refusal = unity_file_guard.check_write(value, os.getcwd())
-                if refusal is not None:
-                    return refusal
+        for value in _write_targets(args):
+            refusal = unity_file_guard.check_write(value, os.getcwd())
+            if refusal is not None:
+                return refusal
     return None
 
 
@@ -369,10 +411,9 @@ def _secret_refusal(raw: bytes, cwd: str):
     if name not in _FILE_WRITERS or not isinstance(args, dict):
         return None
     action_risk = _action_risk()
-    for key, value in args.items():
-        if isinstance(key, str) and key.replace("_", "").lower() == "targetfile":
-            if action_risk.gamachine_secret_target(value, cwd) is not None:
-                return action_risk.secret_refusal(value)
+    for value in _write_targets(args):
+        if action_risk.gamachine_secret_target(value, cwd) is not None:
+            return action_risk.secret_refusal(value)
     return None
 
 
@@ -406,9 +447,7 @@ def _balanced_risk(name: str, args, cwd: str):
         return action_risk.classify({"kind": "shell", "command": args.get("CommandLine"),
                                      "cwd": run_cwd, "workspace": workspace})
     if name in _FILE_WRITERS:
-        targets = [value for key, value in args.items()
-                   if isinstance(key, str) and key.replace("_", "").lower() == "targetfile"]
-        return action_risk.classify({"kind": "file_write", "paths": targets,
+        return action_risk.classify({"kind": "file_write", "paths": _write_targets(args),
                                      "cwd": cwd, "workspace": workspace})
     return action_risk.Risk(action_risk.CRITICAL, "unknown_action", name)
 
@@ -520,11 +559,14 @@ def decide(raw: bytes, state_path: str, windows: bool = None, cwd: str = None) -
         return _deny(FAIL_REASON)
     if not isinstance(name, str):
         return _deny(FAIL_REASON)
-    if name != RUN_TOOL and name not in GATED_TOOLS:
-        # Only a side process's hooks.json names more tools than these
-        # (SIDE_HOOK_MATCHERS). Outside a side turn such a call keeps the
-        # verdict it had when no hook ran for it: allowed.
+    if name in MAIN_READ_TOOLS:
         return {"decision": "allow"}
+    if name == MCP_CALL_TOOL:
+        # Unchanged from before the hook saw it: the Unity MCP server's own
+        # approval gate decides its calls, in every provider.
+        return {"decision": "allow"}
+    if name != RUN_TOOL and name not in WRITE_TOOLS:
+        return _deny(UNKNOWN_TOOL_REASON.format(mode=_MODE_NAMES[mode], name=name))
     if name == RUN_TOOL:
         try:
             command = call["args"]["CommandLine"]
@@ -538,21 +580,24 @@ def decide(raw: bytes, state_path: str, windows: bool = None, cwd: str = None) -
                 return {"decision": "allow"}
             return _balanced_deny("command", risk)
         return _deny(RUN_REASON)
+    if name in NATIVE_WRITERS:
+        # Before the routine check too: a routine write_file or edit_file with
+        # an argument nobody measured is refused, not waved through.
+        try:
+            agy_native_approval._normalized_args(call.get("args"), name)
+        except ValueError as error:
+            return _deny(str(error))
     if mode == BALANCED_MODE:
         risk = _balanced_risk(name, call.get("args"), cwd)
         if not risk.critical:
             return {"decision": "allow"}
-        if name not in ("write_to_file", "replace_file_content"):
+        if name not in NATIVE_WRITERS:
             return _balanced_deny("file write" if name in _FILE_WRITERS else "call", risk)
-    if name in ("write_to_file", "replace_file_content"):
+    if name in NATIVE_WRITERS:
         workspace = _hook_workspace(cwd)
         if not workspace:
             return _deny("Native approval requires a hook workspace.")
-        try:
-            agy_native_approval._normalized_args(call.get("args"))
-        except ValueError as error:
-            return _deny(str(error))
-        token = agy_native_approval.state_path.set(state_path)
+        token =agy_native_approval.state_path.set(state_path)
         try:
             allowed, reason = agy_native_approval.request_native_write(name, call.get("args"), workspace)
             return {"decision": "allow"} if allowed is True else _deny(reason)

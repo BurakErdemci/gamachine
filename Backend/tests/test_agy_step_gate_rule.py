@@ -250,9 +250,8 @@ class TestDecide(unittest.TestCase):
         self.assertEqual(self.decide({"toolCall": {"name": "run_command"}}), "deny")
         self.assertEqual(self.decide({"toolCall": {"name": "run_command", "args": {"CommandLine": 7}}}), "deny")
         self.assertEqual(self.decide({"toolCall": {"name": 7}}), "deny")
-        # Since side questions (Burak, 27 Sep 2026) a side child's hooks.json
-        # names more tools; outside "side" they keep the no-hook verdict.
-        self.assertEqual(self.decide({"toolCall": {"name": "some_new_tool"}}), "allow")
+        # Since 4.0.3 every tool reaches the hook and step is an allow-list.
+        self.assertEqual(self.decide({"toolCall": {"name": "some_new_tool"}}), "deny")
         gate.write_state(self.state, gate.SIDE_MODE, WIN_L)
         self.assertEqual(self.decide({"toolCall": {"name": "some_new_tool"}}), "deny")
 

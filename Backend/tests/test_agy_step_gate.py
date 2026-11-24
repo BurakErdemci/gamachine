@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 from agy_step_gate import bare_word
 from providers import agy_provider
-from providers.agy_provider import AgyProvider, AgyStepGateError, STEP_GATE_KEY, STEP_GATE_TOOLS
+from providers.agy_provider import AgyProvider, AgyStepGateError, STEP_GATE_KEY
 
 
 class TestAgyStepGate(unittest.TestCase):
@@ -42,11 +42,9 @@ class TestAgyStepGate(unittest.TestCase):
     def test_step_mode_denies_every_builtin_writer(self):
         self.assertTrue(AgyProvider()._write_step_gate(self.ws, step_mode=True))
         entries = self.read_hooks()[STEP_GATE_KEY]["PreToolUse"]
-        self.assertEqual([e["matcher"] for e in entries], [
-            "write_to_file", "replace_file_content", "multi_replace_file_content",
-            "sed_file", "notebook_edit", "send_command_input", "run_command"])
-        # MCP calls are gated by the server's approval gate, never here.
-        self.assertNotIn("call_mcp_tool", STEP_GATE_TOOLS)
+        # Every built-in call reaches the hook (4.0.3: agy 1.5's write_file was
+        # not in the old name list); the hook's allow-list decides.
+        self.assertEqual([e["matcher"] for e in entries], [".*"])
         command = entries[0]["hooks"][0]["command"]
         self.assertTrue(os.path.exists(command))
         self.assertNotIn('"', command)
@@ -107,7 +105,8 @@ class TestAgyStepGate(unittest.TestCase):
     def test_auto_mode_installs_the_hook_with_an_auto_state(self):
         self.assertTrue(AgyProvider()._write_step_gate(self.ws, step_mode=False))
         entries = self.read_hooks()[STEP_GATE_KEY]["PreToolUse"]
-        self.assertEqual([e["matcher"] for e in entries], list(STEP_GATE_TOOLS))
+        # The same matcher as step: a flip must reach every tool of this process.
+        self.assertEqual([e["matcher"] for e in entries], [".*"])
         self.assertEqual(self.read_state()["mode"], "auto")
         with open(os.path.join(self.ws, ".gitignore"), encoding="utf-8") as f:
             self.assertIn(".agents/hooks.json", f.read())

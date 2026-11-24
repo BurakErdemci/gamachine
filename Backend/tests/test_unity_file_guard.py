@@ -482,6 +482,10 @@ def test_agy_hook_refuses_in_every_mode(project, tmp_path, mode):
         ("replace_file_content", {"TargetFile": os.path.join(project, "Assets", "Main.unity")}),
         ("multi_replace_file_content", {"target_file": os.path.join(project, "Assets", "a.prefab")}),
         ("sed_file", {"TargetFile": meta}),
+        # agy 1.5.15's writers (measured 24 Nov 2026) name the target Path.
+        ("write_file", {"Path": meta, "Content": "x", "Overwrite": True}),
+        ("edit_file", {"Path": os.path.join(project, "Assets", "Main.unity"),
+                       "Target": "a", "Replacement": "b"}),
         ("run_command", {"CommandLine": "Remove-Item Assets/x.meta", "Cwd": project}),
     ]:
         out = call(name, args)

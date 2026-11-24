@@ -148,17 +148,17 @@ class TestSideHook(HookCase):
 
 
 class TestOtherModesUnchanged(HookCase):
-    """No behaviour change outside "side": the step tools keep their verdicts
-    (a 410-call differential against the previous hook found none), and a
-    tool only a side child's hooks.json names is allowed, as with no hook."""
+    """Side questions changed nothing outside "side": the step tools keep their
+    verdicts (a 410-call differential against the previous hook found none).
+    Tools beyond those are an allow-list in step and balanced since 4.0.3
+    (test_agy_gate_fail_closed.py); auto still allows them."""
 
-    def test_tools_only_the_side_matcher_names_are_allowed_outside_side(self):
+    def test_tools_only_the_side_matcher_names_are_allowed_in_auto(self):
         names = [n for n in gate.SIDE_HOOK_MATCHERS if n != ".*"] + sorted(gate.SIDE_READ_TOOLS)
-        for mode in ("auto", "step", gate.BALANCED_MODE):
-            gate.write_state(self.state, mode, LAUNCHER)
-            for name in names:
-                self.assertEqual(self.decide(call(name, {"ServerName": "meshy"}))["decision"],
-                                 "allow", (mode, name))
+        gate.write_state(self.state, "auto", LAUNCHER)
+        for name in names:
+            self.assertEqual(self.decide(call(name, {"ServerName": "meshy"}))["decision"],
+                             "allow", name)
 
     def test_step_tools_keep_their_verdicts(self):
         bridge = f'& "{LAUNCHER}" delete-file --path "a.txt"'
@@ -212,11 +212,11 @@ class TestSideHooksFile(unittest.TestCase):
         for listed in ("call_mcp_tool", "generate_image", "schedule", "invoke_subagent",
                        "send_message", "browser_click_element", ".*"):
             self.assertIn(listed, gate.SIDE_HOOK_MATCHERS)
-        # The next main child's spawn writes today's list back.
+        # The next main child's spawn writes the main matcher back.
         self.assertTrue(provider._write_step_gate(self.ws, step_mode=False))
-        self.assertEqual(self.matchers_and_mode(), (list(STEP_GATE_TOOLS), "auto"))
+        self.assertEqual(self.matchers_and_mode(), ([".*"], "auto"))
         self.assertTrue(provider._write_step_gate(self.ws, step_mode=True, mode="balanced"))
-        self.assertEqual(self.matchers_and_mode(), (list(STEP_GATE_TOOLS), "balanced"))
+        self.assertEqual(self.matchers_and_mode(), ([".*"], "balanced"))
 
     def test_side_state_name(self):
         self.assertEqual(agy_provider.gate_mode_name(mode=gate.SIDE_MODE), "side")

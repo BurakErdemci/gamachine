@@ -1,4 +1,4 @@
-"""Stdlib-only preview and approval bridge for agy's two native file writers."""
+"""Stdlib-only preview and approval bridge for agy's native file writers."""
 import contextvars
 import hashlib
 import json
@@ -19,7 +19,8 @@ state_path = contextvars.ContextVar("agy_native_state_path", default=None)
 POST_SECONDS = 10.0
 POLL_SECONDS = 150.0
 TOTAL_SECONDS = 165.0
-REPLACE_REASON = "Unverified replacement; use write_to_file with the full content."
+REPLACE_REASON = ("Unverified replacement; use write_file (write_to_file on older agy) "
+                  "with the full content.")
 
 
 class _WallTimeout(TimeoutError):
@@ -46,13 +47,37 @@ _ARG_NAMES = {name.replace("_", "").lower(): name for name in (
     "StartLine", "EndLine", "AllowMultiple")}
 
 
-def _normalized_args(args):
+# Every spelling a writer's target path may take, folded (case and "_").
+PATH_KEYS = frozenset({"targetfile", "path", "filepath", "file", "absolutepath", "targetpath"})
+# agy 1.5.15 (measured 24 Nov 2026): write_file sends exactly Path, Content and
+# Overwrite; edit_file sends Target, Replacement and a path key whose spelling
+# was not recorded. They map onto the agy 1.2.x names, and the preview treats
+# them as write_to_file and replace_file_content. Any other key is refused, not
+# skipped: an unmeasured flag (append, all occurrences, a line range) could make
+# agy write something other than what the card showed.
+_V15_ARG_NAMES = {
+    "write_file": {"path": "TargetFile", "content": "CodeContent", "overwrite": "Overwrite"},
+    "edit_file": {"target": "TargetContent", "replacement": "ReplacementContent",
+                  **{key: "TargetFile" for key in PATH_KEYS}},
+}
+_PREVIEW_AS = {"write_file": "write_to_file", "edit_file": "replace_file_content"}
+NATIVE_WRITERS = ("write_to_file", "replace_file_content") + tuple(_V15_ARG_NAMES)
+
+
+def _normalized_args(args, tool_name=None):
     """Fold native argument spellings, rejecting even equal duplicates."""
     if not isinstance(args, dict):
         raise ValueError("Missing or invalid native write arguments.")
+    strict = _V15_ARG_NAMES.get(tool_name)
     normalized = {}
     for key, value in args.items():
-        name = _ARG_NAMES.get(key.replace("_", "").lower()) if isinstance(key, str) else None
+        folded = key.replace("_", "").lower() if isinstance(key, str) else None
+        if strict is not None:
+            name = strict.get(folded)
+            if name is None:
+                raise ValueError(f"Unverified {tool_name} argument {key!r}: refused.")
+        else:
+            name = _ARG_NAMES.get(folded)
         if name is not None:
             if name in normalized:
                 raise ValueError(f"Duplicate spellings of {name}.")
@@ -185,12 +210,12 @@ def request_native_write(tool_name, args, workspace):
     deadline = time.monotonic() + TOTAL_SECONDS
     try:
         import action_risk  # stdlib-only; like agy_step_gate, only on a gated write
-        if tool_name not in ("write_to_file", "replace_file_content"):
+        if tool_name not in NATIVE_WRITERS:
             return False, "Unsupported native write tool."
         if not isinstance(workspace, str) or not workspace or not os.path.isabs(workspace):
             return False, "Missing or invalid hook workspace."
         workspace = os.path.realpath(workspace)
-        args = _normalized_args(args)
+        args = _normalized_args(args, tool_name)
         if not isinstance(args.get("TargetFile"), str) or not args["TargetFile"]:
             return False, "Missing or invalid TargetFile."
         raw_target = args["TargetFile"]
@@ -214,7 +239,7 @@ def request_native_write(tool_name, args, workspace):
         exists, data = _read_file(path)
         original = data.decode("utf-8")
         digest = hashlib.sha256(data).digest()
-        content = _preview(tool_name, args, original, exists)
+        content = _preview(_PREVIEW_AS.get(tool_name, tool_name), args, original, exists)
         result = _approval({"path": path, "content": content, "original": original}, workspace, deadline)
         if result.get("approved") is not True:
             return False, "Native file write was not explicitly approved."
