@@ -167,11 +167,15 @@ EN: dict[str, str] = {
     "Terminal.app açılamadı.": "Terminal.app could not be opened.",
     "Bu bir yan sohbet; bu işlem yan sohbete uygulanamaz.":
         "This is a side chat. This operation cannot be applied to it.",
-    ("Yan soru Antigravity (agy) ile kullanılamıyor: agy aynı anda tek bir tur "
-     "çalıştırıyor, yani yan soru ana sohbetin turunun bitmesini beklerdi. "
-     "Yan soru için başka bir model seç."):
-        "Side questions are unavailable with Antigravity (agy), which runs one turn at a time. "
-        "Choose another model for the side question.",
+    # providers/agy_session.SIDE_BUSY_MESSAGE, keyed by its exact text.
+    ("Yan soru şu an Antigravity (agy) ile kullanılamıyor: bir agy sohbetinin "
+     "turu sürüyor, ve agy'de yan soru salt okunur kalabilmek için yalnız hiçbir "
+     "agy turu çalışmazken başlar. Tur bitince yeniden sor ya da yan soru için "
+     "başka bir model seç."):
+        "Side questions are unavailable with Antigravity (agy) right now: an agy chat's "
+        "turn is running, and on agy a side question starts only while no agy turn runs, "
+        "so that it stays read-only. Ask again when the turn finishes, or choose another "
+        "model for the side question.",
     # API-loop auto-compaction (agentic/agent_runner.py `_before_request`)
     "🗜️ Bağlam dolmak üzere — eski turlar özetleniyor": "🗜️ Context almost full — summarising older turns",
     "🗜️ Eski turlar özetlendi, devam ediliyor": "🗜️ Older turns summarised, continuing",

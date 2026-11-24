@@ -1,7 +1,7 @@
 """A read-only side question on agy (Burak, 27 Sep 2026).
 
-agy runs one turn machine-wide. A side question now runs when no agy turn
-does, in its own session keyed by the side chat, with the hook's state file
+A side question runs only while no main agy turn runs in any chat, in its
+own session keyed by the side chat, with the hook's state file
 on "side" for exactly that turn; any other agy turn stops it. No real agy,
 CLI or model is started: processes are fakes, the state file lives in a
 temporary home.
@@ -223,6 +223,19 @@ class TestSideHooksFile(unittest.TestCase):
         self.assertEqual(agy_provider.gate_mode_name(mode="whatever"), "step")
 
 
+class _UnkillableProcess(FakeProcess):
+    """A child whose kill fails until told otherwise."""
+
+    def __init__(self):
+        super().__init__()
+        self.unkillable = True
+
+    def kill(self):
+        if self.unkillable:
+            raise PermissionError("fake: access denied")
+        super().kill()
+
+
 class TestSideTurn(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -264,6 +277,12 @@ class TestSideTurn(unittest.IsolatedAsyncioTestCase):
         agy_session._RETIRED.clear()
         agy_session._SIDE_TURN = None
         agy_session._SIDE_DONE = None
+        # A test that fails mid-turn must not leave a held chat lock or a
+        # registered main turn for the next one (side refusals read them).
+        agy_session._TURN_LOCKS.clear()
+        agy_session._MAIN_TURNS.clear()
+        agy_session._WORKSPACE_TURNS.clear()
+        agy_session._SHARED_TURNS.clear()
 
     def file_mode(self):
         try:
@@ -397,6 +416,37 @@ class TestSideTurn(unittest.IsolatedAsyncioTestCase):
         # Neither main child was spawned while the file still said "side".
         self.assertEqual(self.spawn_modes, ["side", "step", "step"])
         self.assert_back_to_published()
+
+    def surviving_closed_child(self):
+        """A closed (side) child whose kill fails, still tracked as gated, with
+        the state file denying it the way its close left it."""
+        survivor = _UnkillableProcess()
+        token = object()
+        agy_session._GATED_CHILDREN[token] = survivor
+        agy_session._RETIRED.add(token)
+        agy_provider.write_gate_state(mode=gate.SIDE_MODE)
+        return survivor
+
+    async def test_a_kept_child_turn_does_not_loosen_the_gate_beside_a_surviving_closed_child(self):
+        # Audit, 24 Nov 2026: in auto mode the next turn of another chat on
+        # its kept child rewrote the state file to "auto", and a side child
+        # that had survived its kill could run tools again.
+        self.mode = "auto"
+        main = agy_session.get_session(41, cwd=self.tmp.name)
+        first = await self.collect(main.stream("x", cwd=self.tmp.name))
+        self.assertEqual(first[-1]["type"], "done")
+        survivor = self.surviving_closed_child()
+        refused = await self.collect(main.stream("y", cwd=self.tmp.name))
+        self.assertEqual(self.file_mode(), gate.SIDE_MODE)
+        self.assertEqual(refused[-1]["type"], "error")
+        self.assertIn("Kapatılan bir agy süreci durdurulamadı", refused[-1]["message"])
+        self.assertEqual(len(self.processes[0].stdin.lines), 1)  # "y" never reached agy
+        # Once that child can be stopped, the next turn runs on the published mode.
+        survivor.unkillable = False
+        again = await self.collect(agy_session.get_session(41, cwd=self.tmp.name)
+                                   .stream("z", cwd=self.tmp.name))
+        self.assertEqual(again[-1]["type"], "done")
+        self.assertEqual(self.file_mode(), "auto")
 
     async def test_a_crashed_side_turn_restores_the_state_and_frees_the_lock(self):
         self.mode = "step"

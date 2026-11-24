@@ -30,10 +30,9 @@ _DRAIN_MAX_SECONDS = 0.5
 # Sent only when a turn really waits: behind an earlier turn of its own chat,
 # a sweep stopping its chat's idle child, or a stopped side question putting
 # the shared gate state back. Different chats' turns do not wait for each
-# other. `code` lets the UI use its own language; `detail` is the fallback for
-# a client that does not know the code. The wording of `detail` (and of the
-# UI's activity.agyQueued) still names another chat; its English lives in
-# error_i18n, so it changes together with that entry.
+# other. `code` lets the UI use its own language (activity.agyQueued); `detail`
+# is the fallback for a client that does not know the code. Its English lives
+# in error_i18n, keyed by this exact text, so the two change together.
 _QUEUED_EVENT = {"type": "status", "code": "agy_queued",
                  "detail": "Sırada — önceki agy işi bitince başlayacak"}
 _STARTED_EVENT = {"type": "status", "code": "agy_started", "detail": "Çalışıyor…"}
@@ -46,6 +45,8 @@ _AGY_IDLE_STOP_S = 900
 # A read-only side question on agy (Burak, 27 Sep 2026) runs only while no
 # main agy turn runs or waits in any chat (the "side" gate state is one file
 # every agy child reads), never queues, and gives way to any other agy turn.
+# SIDE_BUSY_MESSAGE reaches the user as is (stream error, the route's 409); its
+# English lives in error_i18n, keyed by this exact text.
 SIDE_TURN_TIMEOUT_S = 120
 SIDE_BUSY_MESSAGE = (
     "Yan soru şu an Antigravity (agy) ile kullanılamıyor: bir agy sohbetinin "
@@ -359,8 +360,11 @@ def changed_files(cwd: str, before: Optional[dict]) -> Optional[list]:
     return [path for path in {**before, **after} if before.get(path) != after.get(path)]
 
 
-def turn_summary(*, tools: dict, failed: int, files: Optional[list], language: str) -> str:
-    """What an unfinished turn had done: its steps and the files it left."""
+def turn_summary(*, tools: dict, failed: int, files: Optional[list], language: str,
+                 shared: bool = False) -> str:
+    """What an unfinished turn had done: its steps and the files it left.
+    `shared`: another chat's main turn ran in the same workspace meanwhile, so
+    the changed files are the workspace's, not provably this turn's."""
     lines = []
     steps = sum(tools.values())
     if steps:
@@ -377,8 +381,16 @@ def turn_summary(*, tools: dict, failed: int, files: Optional[list], language: s
         more = len(files) - _CHANGED_FILES_SHOWN
         if more > 0:
             shown += "\n" + _say(language, f"- … ve {more} dosya daha", f"- … and {more} more files")
-        lines.append(_say(language, "Bu turda çalışma klasöründe değişen dosyalar:",
-                          "Files this turn changed in the workspace:") + "\n" + shown)
+        if shared:
+            head = _say(language,
+                        "Bu tur sürerken çalışma klasöründe değişen dosyalar (aynı klasörde "
+                        "başka bir agy sohbeti de çalıştı; bir kısmı onun değişikliği olabilir):",
+                        "Files that changed in the workspace while this turn ran (another agy "
+                        "chat worked in the same folder, so some may be its changes):")
+        else:
+            head = _say(language, "Bu turda çalışma klasöründe değişen dosyalar:",
+                        "Files this turn changed in the workspace:")
+        lines.append(head + "\n" + shown)
     elif files is not None and steps:
         lines.append(_say(language, "Çalışma klasöründe commit edilmemiş yeni bir değişiklik yok.",
                           "It left no new uncommitted changes in the workspace."))
@@ -433,6 +445,30 @@ def _dedupe_tail(message: str, tail: str) -> str:
 _TURN_LOCKS: Dict[Hashable, list] = {}
 # One token per main (non-side) turn running or waiting, in any chat.
 _MAIN_TURNS: set = set()
+# Main turns past their workspace snapshot: workspace -> their tokens. A turn
+# whose time there overlapped another chat's lands in _SHARED_TURNS, since the
+# git comparison an unfinished turn reports (changed_files) cannot tell whose
+# write a changed file was (audit, 24 Nov 2026).
+_WORKSPACE_TURNS: Dict[str, set] = {}
+_SHARED_TURNS: set = set()
+
+
+def _enter_workspace(token, workspace: str) -> None:
+    others = _WORKSPACE_TURNS.setdefault(os.path.normcase(workspace), set())
+    if others:
+        _SHARED_TURNS.update(others)
+        _SHARED_TURNS.add(token)
+    others.add(token)
+
+
+def _leave_workspace(token, workspace: str) -> None:
+    key = os.path.normcase(workspace)
+    tokens = _WORKSPACE_TURNS.get(key)
+    if tokens is not None:
+        tokens.discard(token)
+        if not tokens:
+            _WORKSPACE_TURNS.pop(key, None)
+    _SHARED_TURNS.discard(token)
 
 
 def _turn_key(session) -> Hashable:
@@ -666,6 +702,22 @@ def _stop_retired_children() -> list:
     return survivors
 
 
+def _refuse_beside_retired_child() -> None:
+    """No agy turn starts while a closed child that could not be stopped still
+    runs: the one shared state file is all that stands between that child and
+    its tools, and a turn's gate write (a spawn's, or a kept child's resync)
+    would hand them back. Caller holds _gate_lock()."""
+    survivors = _stop_retired_children()
+    if survivors:
+        pids = ", ".join(str(getattr(p, "pid", "?")) for p in survivors)
+        raise AgyStepGateError(
+            f"Kapatılan bir agy süreci durdurulamadı (pid {pids}); o çalışırken "
+            "yeni bir agy süreci başlatılmadı, çünkü ikisi aynı onay kapısını "
+            "paylaşıyor. O süreci kapatın ya da uygulamayı yeniden başlatın, "
+            "sonra mesajınızı yeniden gönderin.",
+            code="agy_closed_child_alive", pids=pids)
+
+
 def _remove_gate_state() -> bool:
     """True when the state file is gone (a hook with no state file denies)."""
     from . import agy_provider
@@ -694,6 +746,15 @@ def _sync_gate_state() -> bool:
     """
     from . import agy_provider
     with _gate_lock():
+        if _stop_retired_children():
+            # A closed child survived its kill: the file was last written to
+            # deny it ("closed" or "side") or follows the mode it was closed
+            # in, and a rewrite now could loosen it (side -> auto, audit 24 Nov
+            # 2026). It is left as is: this only ever loosens toward the
+            # published mode, and a flip to step or balanced is written by
+            # tighten_gate_state before it is published.
+            logger.error("[agy] closed child still alive; gate state left as it is")
+            return True
         mode = _effective_gate_mode()
         try:
             if mode in ("balanced", SIDE_MODE):
@@ -1105,6 +1166,8 @@ class AgyStreamSession(SaglayiciSahipligi):
                 return ""
             # Self-healing before each turn on a kept process: a flip whose
             # rewrite failed must not carry into this turn.
+            with _gate_lock():
+                _refuse_beside_retired_child()
             if not _sync_gate_state():
                 await self._stop_process(force=True)
                 raise AgyStepGateError(_gate_write_failed(gate_state_path(), "yazılamadı"))
@@ -1138,15 +1201,7 @@ class AgyStreamSession(SaglayiciSahipligi):
             # gated from this write on: a flip to step before the spawn below
             # rewrites this file before step is published.
             with _gate_lock():
-                survivors = _stop_retired_children()
-                if survivors:
-                    pids = ", ".join(str(getattr(p, "pid", "?")) for p in survivors)
-                    raise AgyStepGateError(
-                        f"Kapatılan bir agy süreci durdurulamadı (pid {pids}); o çalışırken "
-                        "yeni bir agy süreci başlatılmadı, çünkü ikisi aynı onay kapısını "
-                        "paylaşıyor. O süreci kapatın ya da uygulamayı yeniden başlatın, "
-                        "sonra mesajınızı yeniden gönderin.",
-                        code="agy_closed_child_alive", pids=pids)
+                _refuse_beside_retired_child()
                 mode = _effective_gate_mode()
                 self._auto_approve = mode == "auto"
                 _GATED_CHILDREN[token] = None
@@ -1302,6 +1357,7 @@ class AgyStreamSession(SaglayiciSahipligi):
         failed_tools = 0
         turn_started = False
         workspace_before = None
+        entered_workspace = None
         # Side turns keep their 83a7c6b6 behaviour: no filter, no summary.
         replay = _ReplayFilter()
         replay_record = None
@@ -1374,6 +1430,8 @@ class AgyStreamSession(SaglayiciSahipligi):
                     self._stderr_tail = b""
                     # What the workspace held before this turn, for the files
                     # an unfinished turn reports; runs while the child starts.
+                    entered_workspace = workspace
+                    _enter_workspace(main_token, workspace)
                     snapshot = asyncio.ensure_future(asyncio.to_thread(workspace_state, workspace))
                 previous_process = self._active_process
                 instructions = await self._start(model, workspace, thinking_level)
@@ -1584,8 +1642,9 @@ class AgyStreamSession(SaglayiciSahipligi):
                     # After the close above, so agy no longer writes.
                     files = await asyncio.to_thread(
                         changed_files, os.path.abspath(cwd or self.cwd), workspace_before)
+                shared = main_token in _SHARED_TURNS
                 summary = turn_summary(tools=tool_counts, failed=failed_tools,
-                                       files=files, language=language)
+                                       files=files, language=language, shared=shared)
                 if limit:
                     code = "agy_turn_limit"
                     text = limit_message(limit, language=language, summary=summary,
@@ -1601,7 +1660,9 @@ class AgyStreamSession(SaglayiciSahipligi):
                 event = {"type": "error", "code": code, "message": text}
                 if limit:
                     event["limit"] = limit
-                if files:
+                if files and not shared:
+                    # The field claims the files as this turn's; a shared
+                    # workspace's list is only in the labelled message.
                     event["changed_files"] = files
                 yield _redact_event(event)
                 return
@@ -1641,6 +1702,8 @@ class AgyStreamSession(SaglayiciSahipligi):
                         done.set()
                     _drop_turn_lock(turn_key)
                     _MAIN_TURNS.discard(main_token)
+                    if entered_workspace is not None:
+                        _leave_workspace(main_token, entered_workspace)
 
 
 # Keep the public ownership type used by existing stop/lifecycle callers.
