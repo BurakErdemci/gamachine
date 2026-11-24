@@ -28,6 +28,10 @@ class ClaudeCodeProvider(BaseCLIProvider):
             "Edit",          # → mcp__unityai__save_file
             "MultiEdit",     # → mcp__unityai__save_file
             "NotebookEdit",
+            # Measured 24 Nov 2026 (claude 2.1.331, CLAUDE_CODE_USE_POWERSHELL_TOOL=1):
+            # the model wrote a file through PowerShell with no denial under
+            # bypassPermissions, because only the tools above were denied.
+            "PowerShell",
             # Every unityMCP tool that writes a .cs file, so all C# goes through
             # the approved mcp__unityai__save_file. Scripts are attached with
             # manage_gameobject/manage_components.

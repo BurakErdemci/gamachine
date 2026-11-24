@@ -444,6 +444,22 @@ def test_a_turn_without_registration_says_so_and_does_not_promise_the_tools(home
         (home / "mcp.json").write_text("{broken", encoding="utf-8")
     else:
         home.write_text("not a folder", encoding="utf-8")
+        # The deny rules cannot be written: the turn is refused, nothing spawns.
+        spawned = []
+
+        async def refused_turn():
+            async def fake_spawn(*argv, **kw):
+                spawned.append(argv)
+                raise RuntimeError("spawn intercepted")
+
+            monkeypatch.setattr("asyncio.create_subprocess_exec", fake_spawn)
+            return [e async for e in _provider(chat=3).analyze_code("prompt", cwd=str(_ws(tmp_path)))]
+
+        events = asyncio.run(refused_turn())
+        assert spawned == []
+        assert [(e["type"], e["content"]) for e in events] == [
+            ("error", KimiProvider._policy_refusal_message)], events
+        return
     events, prompt = asyncio.run(_events(_provider(chat=3), _ws(tmp_path), home, monkeypatch))
     notices = [e for e in events if e.get("code") == "kimi_no_gamachine_tools"]
     assert len(notices) == 1, events

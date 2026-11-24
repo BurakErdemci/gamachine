@@ -60,13 +60,18 @@ class KimiProvider(BaseCLIProvider):
     _KIMI_LEGACY_MARKER = "# >>> unity-architect managed (permission rules) >>>"
     _KIMI_NEWER_ALLOW_PATTERNS = ("mcp__gamachineComputer__*", "mcp__gamachineBrowser__*",
                                   "mcp__gamachineConnectors__*")
+    # kimi -p runs in "auto": every built-in that is not denied runs. These are
+    # the documented 2.5.x built-ins (reference/tools.md) that write, run a
+    # command or spawn work; the read tools stay open. A bare "*" pattern is
+    # not documented, so each tool is named.
+    _KIMI_DENY_PATTERNS = ("Write", "Edit", "Bash", "Agent", "AgentSwarm", "Skill",
+                           "CronCreate", "CronDelete", "TaskStop")
     _KIMI_PERMISSION_BLOCK = (
         "\n" + _KIMI_MANAGED_MARKER + "\n"
         "# Built-in yazma/shell araçları DENY (deny mutlak — --print/--yolo bunu ezmez).\n"
         "# Model dosya/shell işlemlerini yalnız mcp__unityai__* ile yapar → app onay kartı.\n"
-        '[[permission.rules]]\ndecision = "deny"\npattern = "Write"\n\n'
-        '[[permission.rules]]\ndecision = "deny"\npattern = "Edit"\n\n'
-        '[[permission.rules]]\ndecision = "deny"\npattern = "Bash"\n\n'
+        + "".join(f'[[permission.rules]]\ndecision = "deny"\npattern = "{tool}"\n\n'
+                  for tool in _KIMI_DENY_PATTERNS) +
         '[[permission.rules]]\ndecision = "allow"\npattern = "mcp__unityai__*"\n\n'
         '[[permission.rules]]\ndecision = "allow"\npattern = "mcp__gamachineComputer__*"\n\n'
         '[[permission.rules]]\ndecision = "allow"\npattern = "mcp__gamachineBrowser__*"\n\n'
@@ -106,6 +111,9 @@ class KimiProvider(BaseCLIProvider):
     # which is the name a user's own Unity MCP server would have.
     _KIMI_UNITY_SERVER = "gamachineUnityMCP"
     _KIMI_TURN_ENV = "GAMACHINE_KIMI_TURN"
+    _policy_refusal_message = (
+        "⚠️ Kimi'nin izin kuralları config.toml dosyasına yazılamadığı için işlem başlatılmadı. "
+        "~/.kimi-code/config.toml dosyasını (ya da KIMI_CODE_HOME klasörünü) kontrol edin.")
     _mcp_env = {}  # this turn's env for the MCP servers, set by _register_mcp
     _mcp_failure = None  # why this turn runs without Gamachine's MCP tools, if it does
 
@@ -282,6 +290,10 @@ class KimiProvider(BaseCLIProvider):
             logger.warning("[KimiProvider] mcp.json could not be updated: %s", e)
             failure = f"{type(e).__name__}: {e}"
         self._mcp_failure = failure
+        # False refuses the turn (cli_base): without the deny rules in config.toml
+        # kimi -p would run Agent, Skill, Cron* and the rest unasked.
+        if not self._write_kimi_permissions():
+            return False
 
     @classmethod
     def _kimi_mcp_path(cls) -> str:
@@ -368,34 +380,57 @@ class KimiProvider(BaseCLIProvider):
         cfg_home = os.environ.get("KIMI_CODE_HOME") or os.path.expanduser("~/.kimi-code")
         return os.path.join(cfg_home, "config.toml")
 
-    def _write_kimi_permissions(self):
+    def _kimi_permissions_confirmed(self, path: str) -> bool:
+        """True when config.toml, read back from disk, holds the current deny rules."""
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except Exception as e:
+            logger.warning(f"[KimiProvider] config.toml okunamadı: {e}")
+            return False
+        start = content.find(self._KIMI_MANAGED_MARKER)
+        if start >= 0:
+            end = content.find(self._KIMI_MANAGED_END, start)
+            return end >= 0 and (content[start:end + len(self._KIMI_MANAGED_END)]
+                                 == self._KIMI_PERMISSION_BLOCK.strip("\n"))
+        if self._KIMI_LEGACY_MARKER in content:
+            return all(f'"{pattern}"' in content for pattern in
+                       (*self._KIMI_DENY_PATTERNS, *self._KIMI_NEWER_ALLOW_PATTERNS))
+        return False
+
+    def _write_kimi_permissions(self) -> bool:
         """~/.kimi-code/config.toml'a deny/allow bloğunu idempotent EKLER (mevcut
-        içeriği korur — kullanıcının kendi provider/login ayarları bozulmaz)."""
+        içeriği korur — kullanıcının kendi provider/login ayarları bozulmaz).
+        True yalnız, kurallar dosyadan geri okunup doğrulandığında: aksi halde
+        tur başlamaz (kimi -p "auto" modunda, yasaklanmayan her araç çalışır)."""
         path = self._kimi_config_path()
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
         except OSError as e:
             logger.warning(f"[KimiProvider] config dizini oluşturulamadı: {e}")
-            return
+            return False
         try:
             with open(path, "r", encoding="utf-8") as f:
                 existing = f.read()
         except FileNotFoundError:
             existing = ""
         except Exception as e:
+            # Appending to a file that could not be read could duplicate the block.
             logger.warning(f"[KimiProvider] config.toml okunamadı: {e}")
-            existing = ""
+            return False
         start = existing.find(self._KIMI_MANAGED_MARKER)
         if start >= 0:
             # A block from an older build lacks the newer rules: replace it in
-            # place when its text differs; a block with no end marker is left alone.
+            # place when its text differs. A block with no end marker cannot be
+            # replaced safely, so the turn is refused.
             end = existing.find(self._KIMI_MANAGED_END, start)
             if end < 0:
-                return
+                logger.error(f"[KimiProvider] {path}: yönetilen blokta bitiş işaretçisi yok")
+                return False
             end += len(self._KIMI_MANAGED_END)
             current = self._KIMI_PERMISSION_BLOCK.strip("\n")
             if existing[start:end] == current:
-                return
+                return True
             tmp = None
             try:
                 # mkstemp makes the file 0600; config.toml can hold provider keys,
@@ -418,16 +453,18 @@ class KimiProvider(BaseCLIProvider):
                         os.unlink(tmp)
                     except OSError:
                         pass
-            return
+            return self._kimi_permissions_confirmed(path)
         to_write = self._KIMI_PERMISSION_BLOCK
         if self._KIMI_LEGACY_MARKER in existing:
-            # The old block stays; only the allow rules it predates are appended.
+            # The old block stays; only the rules it predates are appended.
             to_write = "".join(
-                f'\n[[permission.rules]]\ndecision = "allow"\npattern = "{pattern}"\n'
-                for pattern in self._KIMI_NEWER_ALLOW_PATTERNS
+                f'\n[[permission.rules]]\ndecision = "{decision}"\npattern = "{pattern}"\n'
+                for decision, patterns in (("deny", self._KIMI_DENY_PATTERNS),
+                                           ("allow", self._KIMI_NEWER_ALLOW_PATTERNS))
+                for pattern in patterns
                 if f'"{pattern}"' not in existing)
             if not to_write:
-                return  # zaten yazılı — idempotent
+                return True  # zaten yazılı — idempotent
             if existing and not existing.endswith("\n"):
                 to_write = "\n" + to_write
         try:
@@ -437,6 +474,7 @@ class KimiProvider(BaseCLIProvider):
             logger.info(f"[KimiProvider] permission.rules yazıldı: {path}")
         except Exception as e:
             logger.warning(f"[KimiProvider] config.toml yazılamadı: {e}")
+        return self._kimi_permissions_confirmed(path)
 
     def _turn_notices(self) -> list:
         if not self._mcp_failure:

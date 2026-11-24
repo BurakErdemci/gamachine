@@ -86,3 +86,17 @@ def test_the_cli_provider_gets_the_whole_ban(tmp_path, monkeypatch):
         cmd = ClaudeCodeProvider("claude-opus-5")._build_cmd("x", workspace=str(tmp_path))
     banned = set(cmd[cmd.index("--disallowedTools") + 1].split(","))
     assert set(DISALLOWED_UNITY_TOOLS) <= banned
+
+
+def test_the_cli_provider_denies_the_powershell_tool_too(tmp_path, monkeypatch):
+    """bypassPermissions runs every tool that is not denied; PowerShell wrote a
+    file on a machine with CLAUDE_CODE_USE_POWERSHELL_TOOL=1 (24 Nov 2026)."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    from providers.claude_provider import ClaudeCodeProvider
+    from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
+
+    with patch.object(unity_mcp_manager, "is_running", return_value=False):
+        cmd = ClaudeCodeProvider("claude-opus-5")._build_cmd("x", workspace=str(tmp_path))
+    banned = set(cmd[cmd.index("--disallowedTools") + 1].split(","))
+    assert {"PowerShell", "Bash", "Write", "Edit", "MultiEdit", "NotebookEdit"} <= banned

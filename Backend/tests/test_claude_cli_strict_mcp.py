@@ -117,7 +117,7 @@ def test_the_rest_of_the_command_is_unchanged(monkeypatch, tmp_path):
     i = argv.index("--disallowedTools")
     from providers.unity_script_tools import DISALLOWED_UNITY_TOOLS
     assert argv[i + 1] == ",".join(("Bash", "Write", "Edit", "MultiEdit", "NotebookEdit",
-                                    *DISALLOWED_UNITY_TOOLS))
+                                    "PowerShell", *DISALLOWED_UNITY_TOOLS))
     assert argv[:2] == ["claude", "--model"]
     assert argv[argv.index("--permission-mode") + 1] == "bypassPermissions"
     assert argv[-1] == "-p", "the prompt must stay on stdin, not in argv"

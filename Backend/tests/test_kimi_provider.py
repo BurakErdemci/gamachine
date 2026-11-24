@@ -536,3 +536,80 @@ def test_a_provider_speaks_english_until_the_runner_says_otherwise():
     from providers.kimi_provider import KimiProvider
 
     assert KimiProvider(binary_name="kimi-k3").language == "en"
+
+
+# ── The deny rules in config.toml gate every turn ───────────────────────────
+# kimi -p runs in "auto": a built-in that is not denied runs unasked. The rules
+# are the only gate, so a turn starts only when they are confirmed on disk.
+
+_DENIED = ["Write", "Edit", "Bash", "Agent", "AgentSwarm", "Skill",
+           "CronCreate", "CronDelete", "TaskStop"]
+_OLD_BLOCK = (
+    "# >>> gamachine managed (permission rules) >>>\n"
+    '[[permission.rules]]\ndecision = "deny"\npattern = "Write"\n\n'
+    '[[permission.rules]]\ndecision = "deny"\npattern = "Edit"\n\n'
+    '[[permission.rules]]\ndecision = "deny"\npattern = "Bash"\n\n'
+    '[[permission.rules]]\ndecision = "allow"\npattern = "mcp__unityai__*"\n'
+    "# <<< gamachine managed <<<")
+
+
+def _rules(toml_text):
+    import re
+    return re.findall(r'decision = "(\w+)"\npattern = "([^"]+)"', toml_text)
+
+
+def test_the_managed_block_denies_every_writing_running_or_spawning_builtin(tmp_path, monkeypatch):
+    from providers.kimi_provider import KimiProvider
+
+    monkeypatch.setenv("KIMI_CODE_HOME", str(tmp_path))
+    assert KimiProvider(binary_name="kimi-k3")._write_kimi_permissions() is True
+    rules = _rules((tmp_path / "config.toml").read_text(encoding="utf-8"))
+
+    assert {p for d, p in rules if d == "deny"} == set(_DENIED)
+    assert {p for d, p in rules if d == "allow"} == {
+        "mcp__unityai__*", "mcp__gamachineComputer__*",
+        "mcp__gamachineBrowser__*", "mcp__gamachineConnectors__*"}
+
+
+def test_a_block_with_the_old_rules_is_replaced_and_the_users_text_stays(tmp_path, monkeypatch):
+    from providers.kimi_provider import KimiProvider
+
+    monkeypatch.setenv("KIMI_CODE_HOME", str(tmp_path))
+    before, after = '[providers.kimi]\napi_key = "x"\n\n', "\n[ui]\ntheme = \"dark\"\n"
+    config = tmp_path / "config.toml"
+    config.write_text(before + _OLD_BLOCK + after, encoding="utf-8")
+
+    provider = KimiProvider(binary_name="kimi-k3")
+    assert provider._write_kimi_permissions() is True
+    first = config.read_text(encoding="utf-8")
+    assert provider._write_kimi_permissions() is True
+
+    assert config.read_text(encoding="utf-8") == first
+    assert first.startswith(before) and first.endswith(after)
+    assert first.count("# >>> gamachine managed") == 1
+    assert {p for d, p in _rules(first) if d == "deny"} == set(_DENIED)
+
+
+def _refused(run_kimi):
+    from providers.kimi_provider import KimiProvider
+
+    # A spawned stand-in CLI would answer with a final text.
+    events = run_kimi(['{"role":"assistant","content":"spawned"}'])
+    assert [e["type"] for e in events] == ["error"], events
+    assert events[0]["content"] == KimiProvider._policy_refusal_message
+
+
+def test_a_config_that_cannot_be_written_refuses_the_turn(run_kimi, tmp_path):
+    # config.toml is a directory: it can be neither read nor replaced.
+    (tmp_path / "kimi-home" / "config.toml").mkdir(parents=True)
+    _refused(run_kimi)
+
+
+def test_a_managed_block_without_its_end_marker_refuses_the_turn_and_is_left_alone(run_kimi, tmp_path):
+    config = tmp_path / "kimi-home" / "config.toml"
+    config.parent.mkdir(parents=True)
+    broken = "# >>> gamachine managed (permission rules) >>>\n" + _OLD_BLOCK.split("\n", 1)[1].rsplit("\n", 1)[0] + "\n"
+    config.write_text(broken, encoding="utf-8")
+
+    _refused(run_kimi)
+    assert config.read_text(encoding="utf-8") == broken
