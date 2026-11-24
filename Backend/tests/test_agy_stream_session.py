@@ -126,6 +126,19 @@ class TestAgyStreamSession(unittest.IsolatedAsyncioTestCase):
         session = session or agy_session.get_session(11)
         return [event async for event in session.stream(message, **kwargs)]
 
+    async def hold_chat(self, conversation_id=11):
+        """A turn of this chat blocked mid-stream (its stdin drain waits):
+        what a later turn of the same chat queues behind. Returns the task
+        and the event that lets it finish."""
+        release = asyncio.Event()
+        self.plans.insert(0, {"release": release})
+        count = len(self.processes)
+        task = asyncio.create_task(self.collect(agy_session.get_session(conversation_id)))
+        while len(self.processes) <= count:
+            await asyncio.sleep(0)
+        await self.processes[count].written.wait()
+        return task, release
+
     async def test_two_turns_share_process_conversation_and_keep_stdin_open(self):
         session = agy_session.get_session(11)
         first = await self.collect(session)
@@ -463,35 +476,30 @@ class TestAgyStreamSession(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(session._stderr_task)
         self.assertIsNone(agy_session.peek_session(11))
 
-    async def test_global_lock_covers_turn_but_not_idle_process_lifetime(self):
-        release = asyncio.Event()
-        self.plans = [{"release": release}, {}]
-        first = asyncio.create_task(self.collect(agy_session.get_session(11)))
-        while not self.processes:
-            await asyncio.sleep(0)
-        await self.processes[0].written.wait()
-        second = asyncio.create_task(self.collect(agy_session.get_session(12)))
-        await asyncio.sleep(0)
-        self.assertEqual(len(self.spawns), 1)
-        self.assertTrue(BaseCLIProvider._AGY_LOCK.locked())
+    async def test_chat_lock_covers_turn_but_not_idle_process_lifetime(self):
+        first, release = await self.hold_chat(11)
+        second = asyncio.create_task(self.collect(agy_session.get_session(11), "second"))
+        await asyncio.sleep(0.01)
+        self.assertFalse(second.done())
+        self.assertEqual(self.processes[0].stdin.drains, 1)  # never two turns at once
         release.set()
         await asyncio.wait_for(asyncio.gather(first, second), timeout=1)
-        self.assertEqual(len(self.spawns), 2)
+        self.assertEqual(self.processes[0].stdin.drains, 2)
+        self.assertEqual(len(self.spawns), 1)
         self.assertIsNone(self.processes[0].returncode)
-        self.assertFalse(BaseCLIProvider._AGY_LOCK.locked())
 
     async def test_lock_wait_is_subject_to_turn_time_limit(self):
-        await BaseCLIProvider._AGY_LOCK.acquire()
+        holder, release = await self.hold_chat(11)
         try:
             with patch.object(BaseCLIProvider, "_AGY_MAX_TOTAL", 0.02):
                 events = await self.collect()
         finally:
-            BaseCLIProvider._AGY_LOCK.release()
+            release.set()
+            await asyncio.wait_for(holder, timeout=1)
         self.assertEqual([event["type"] for event in events], ["status", "error"])
         self.assertEqual(events[0]["code"], "agy_queued")
         self.assertIn("timed out", events[1]["message"])
-        self.assertEqual(self.spawns, [])
-        self.assertFalse(BaseCLIProvider._AGY_LOCK.locked())
+        self.assertEqual(self.processes[0].stdin.drains, 1)
 
     async def test_cancel_while_stdin_drain_is_blocked_closes_process(self):
         self.plans = [{"release": asyncio.Event()}]
@@ -535,30 +543,38 @@ class TestAgyStreamSession(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[-1]["type"], "done")
 
     async def test_turn_lock_is_held_through_teardown_and_always_released(self):
-        session = agy_session.AgyStreamSession(-13, cwd=".")
+        session = agy_session.get_session(11)
         cleanup_started = asyncio.Event()
         allow_cleanup = asyncio.Event()
+        real_start = session._start
+        starts = 0
 
-        async def fail_start(*_args):
-            raise RuntimeError("original turn failure")
+        async def fail_first_start(*args):
+            nonlocal starts
+            starts += 1
+            if starts == 1:
+                raise RuntimeError("original turn failure")
+            return await real_start(*args)
 
         async def slow_close(*_args, **_kwargs):
             cleanup_started.set()
             await allow_cleanup.wait()
 
-        with patch.object(session, "_start", fail_start), \
+        with patch.object(session, "_start", fail_first_start), \
              patch.object(session, "close", slow_close):
             task = asyncio.create_task(self.collect(session))
             await asyncio.wait_for(cleanup_started.wait(), timeout=1)
-            queued = asyncio.create_task(self.collect(agy_session.get_session(11)))
-            await asyncio.sleep(0)
-            self.assertTrue(BaseCLIProvider._AGY_LOCK.locked())
+            # The chat's next turn waits for the teardown, not just the stream.
+            queued = asyncio.create_task(self.collect(session, "next"))
+            await asyncio.sleep(0.01)
+            self.assertFalse(queued.done())
             self.assertEqual(self.spawns, [])
             allow_cleanup.set()
             events = await asyncio.wait_for(task, timeout=1)
             queued_events = await asyncio.wait_for(queued, timeout=1)
 
         self.assertEqual(events, [{"type": "error", "message": "original turn failure"}])
+        self.assertEqual(queued_events[0]["code"], "agy_queued")
         self.assertEqual(queued_events[-1]["type"], "done")
         self.assertFalse(BaseCLIProvider._AGY_LOCK.locked())
 
@@ -588,20 +604,21 @@ class TestAgyStreamSession(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(BaseCLIProvider._AGY_LOCK.locked())
 
     async def test_closed_queued_session_cannot_spawn(self):
-        session = agy_session.get_session(11)
-        await BaseCLIProvider._AGY_LOCK.acquire()
-        task = asyncio.create_task(self.collect(session))
+        holder, release = await self.hold_chat(11)
+        task = asyncio.create_task(self.collect(agy_session.get_session(11)))
         await asyncio.sleep(0)
         await agy_session.close_session(11)
-        BaseCLIProvider._AGY_LOCK.release()
-        events = await task
+        release.set()
+        events = await asyncio.wait_for(task, timeout=1)
+        await asyncio.wait_for(holder, timeout=1)
         self.assertEqual(events[-1]["type"], "error")
-        self.assertEqual(self.spawns, [])
+        self.assertEqual(len(self.spawns), 1)  # the holder's child only
 
-    # Queued indicator: a turn waiting on another chat's agy turn says so once,
-    # then clears when it starts; a free lock says nothing.
-    def live_waiters(self):
-        waiters = getattr(BaseCLIProvider._AGY_LOCK, "_waiters", None) or ()
+    # Queued indicator: a turn waiting behind its own chat's earlier turn says
+    # so once, then clears when it starts; a free chat says nothing.
+    def live_waiters(self, conversation_id=11):
+        entry = agy_session._TURN_LOCKS.get(conversation_id)
+        waiters = (getattr(entry[0], "_waiters", None) or ()) if entry else ()
         return [waiter for waiter in waiters if not waiter.cancelled()]
 
     async def test_free_lock_emits_no_queued_status(self):
@@ -610,14 +627,9 @@ class TestAgyStreamSession(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[-1]["type"], "done")
 
     async def test_turn_waiting_on_held_lock_emits_queued_once_then_started(self):
-        release = asyncio.Event()
-        self.plans = [{"release": release}, {}]
-        first = asyncio.create_task(self.collect(agy_session.get_session(11)))
-        while not self.processes:
-            await asyncio.sleep(0)
-        await self.processes[0].written.wait()
+        first, release = await self.hold_chat(11)
 
-        second_stream = agy_session.get_session(12).stream("second chat")
+        second_stream = agy_session.get_session(11).stream("second turn")
         queued = await anext(second_stream)
         self.assertEqual(queued, {"type": "status", "code": "agy_queued",
                                   "detail": agy_session._QUEUED_EVENT["detail"]})
@@ -634,12 +646,13 @@ class TestAgyStreamSession(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(rest[-1]["type"], "done")
         self.assertNotIn("status", [event["type"] for event in rest])
-        self.assertEqual(len(self.spawns), 2)
+        self.assertEqual(len(self.spawns), 1)
+        self.assertEqual(self.processes[0].stdin.drains, 2)
         self.assertFalse(BaseCLIProvider._AGY_LOCK.locked())
 
     async def test_stop_while_queued_ends_turn_without_taking_the_lock(self):
         session = agy_session.get_session(11)
-        await BaseCLIProvider._AGY_LOCK.acquire()
+        holder, release = await self.hold_chat(11)
         try:
             stream = session.stream("hello")
             self.assertEqual((await anext(stream))["code"], "agy_queued")
@@ -650,24 +663,24 @@ class TestAgyStreamSession(unittest.IsolatedAsyncioTestCase):
                 await asyncio.sleep(0)
             self.assertEqual(len(self.live_waiters()), 1)
             await agy_session.close_session(11)
-            # The running turn still holds the lock; Stop must not wait for it.
+            # The holder's turn is still blocked; Stop must not wait for it.
             event = await asyncio.wait_for(pending, timeout=1)
+            self.assertFalse(holder.done())
             self.assertEqual(event, {"type": "error", "message": "agy session was stopped."})
             with self.assertRaises(StopAsyncIteration):
                 await anext(stream)
             await asyncio.sleep(0)
             self.assertEqual(self.live_waiters(), [])
-            self.assertTrue(BaseCLIProvider._AGY_LOCK.locked())  # still the holder's
         finally:
-            BaseCLIProvider._AGY_LOCK.release()
-        self.assertFalse(BaseCLIProvider._AGY_LOCK.locked())
-        self.assertEqual(self.spawns, [])
-        # The lock is usable again: a fresh turn runs to done.
+            release.set()
+            await asyncio.wait_for(holder, timeout=1)
+        self.assertEqual(len(self.spawns), 1)
+        # The chat's lock is usable again: a fresh turn runs to done.
         self.assertEqual((await self.collect(agy_session.get_session(11)))[-1]["type"], "done")
         self.assertFalse(BaseCLIProvider._AGY_LOCK.locked())
 
     async def test_abort_while_queued_leaves_no_waiter_or_lock(self):
-        await BaseCLIProvider._AGY_LOCK.acquire()
+        holder, release = await self.hold_chat(11)
         try:
             task = asyncio.create_task(self.collect(agy_session.get_session(11)))
             for _ in range(20):
@@ -681,9 +694,12 @@ class TestAgyStreamSession(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0)
             self.assertEqual(self.live_waiters(), [])
         finally:
-            BaseCLIProvider._AGY_LOCK.release()
-        self.assertFalse(BaseCLIProvider._AGY_LOCK.locked())
-        self.assertEqual(self.spawns, [])
+            release.set()
+        await asyncio.wait_for(holder, timeout=1)
+        self.assertEqual(len(self.spawns), 1)
+        # Nothing stranded: the chat's next turn starts at once.
+        events = await asyncio.wait_for(self.collect(agy_session.get_session(11)), timeout=1)
+        self.assertNotIn("status", [e["type"] for e in events])
 
     async def test_abandoned_acquire_that_already_won_releases_the_lock(self):
         lock = BaseCLIProvider._AGY_LOCK
@@ -716,9 +732,10 @@ class TestAgyStreamSession(unittest.IsolatedAsyncioTestCase):
         from agentic.agent_runner import AgentRunner
         runner = AgentRunner(provider_type="subscription", api_key="", model_name="gemini-3.8-flash",
                              conversation_id=11, workspace_path=".")
-        await BaseCLIProvider._AGY_LOCK.acquire()
-        asyncio.get_running_loop().call_later(0.01, BaseCLIProvider._AGY_LOCK.release)
+        holder, release = await self.hold_chat(11)
+        asyncio.get_running_loop().call_later(0.01, release.set)
         events = [event async for event in runner._run_agy_session("queued turn")]
+        await asyncio.wait_for(holder, timeout=1)
         self.assertEqual([e.type for e in events],
                          ["status", "status", "text", "turn_usage", "response", "done"])
         self.assertEqual([e.data["code"] for e in events[:2]], ["agy_queued", "agy_started"])

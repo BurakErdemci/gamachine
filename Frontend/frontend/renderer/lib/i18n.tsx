@@ -960,7 +960,7 @@ export const tr = {
   'activity.working': 'Çalışıyor…',
   'activity.thinking': '🧠 Düşünüyor…',
   'activity.writing': '✍️ Yazıyor…',
-  'activity.agyQueued': 'Sırada — başka bir agy sohbetinin turu bitince başlayacak',
+  'activity.agyQueued': 'Sırada — önceki agy işi bitince başlayacak',
   // Hafıza / özetleme
   'memory.usageTitle': 'Hafıza Kullanımı: %{yuzde} ({sayi} mesaj)\nTıkla ve özetle',
   'usage.estimateTitle': 'Yaklaşık doluluk: %{yuzde} ({sayi} mesaj).\nBu bir tahmin: yalnız yazışma metni sayılıyor, araç çıktıları ve sistem talimatı sayılmıyor.\nTıkla ve özetle.',
@@ -3082,7 +3082,7 @@ export const en: Record<keyof typeof tr, string> = {
   'activity.working': 'Working…',
   'activity.thinking': '🧠 Thinking…',
   'activity.writing': '✍️ Writing…',
-  'activity.agyQueued': "Queued — starts when another agy chat's turn finishes",
+  'activity.agyQueued': 'Queued — starts when the earlier agy work finishes',
   // Memory / compaction
   'memory.usageTitle': 'Memory usage: {yuzde}% ({sayi} messages)\nClick to summarize',
   'usage.estimateTitle': 'Roughly {yuzde}% full ({sayi} messages).\nThis is an estimate: only the conversation text is counted, not tool output or the system prompt.\nClick to summarize.',

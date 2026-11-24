@@ -27,11 +27,15 @@ _USAGE_KEYS = ("input_tokens", "output_tokens", "cache_read_tokens",
                "thinking_tokens", "total_tokens")
 _DRAIN_MAX_LINES = 200
 _DRAIN_MAX_SECONDS = 0.5
-# Turns are serialized machine-wide, so a second agy chat waits for another
-# chat's whole turn and looked frozen. `code` lets the UI use its own language;
-# `detail` is the fallback for a client that does not know the code.
+# Sent only when a turn really waits: behind an earlier turn of its own chat,
+# a sweep stopping its chat's idle child, or a stopped side question putting
+# the shared gate state back. Different chats' turns do not wait for each
+# other. `code` lets the UI use its own language; `detail` is the fallback for
+# a client that does not know the code. The wording of `detail` (and of the
+# UI's activity.agyQueued) still names another chat; its English lives in
+# error_i18n, so it changes together with that entry.
 _QUEUED_EVENT = {"type": "status", "code": "agy_queued",
-                 "detail": "Sırada — başka bir agy sohbetinin turu bitince başlayacak"}
+                 "detail": "Sırada — önceki agy işi bitince başlayacak"}
 _STARTED_EVENT = {"type": "status", "code": "agy_started", "detail": "Çalışıyor…"}
 logger = logging.getLogger(__name__)
 
@@ -39,13 +43,15 @@ logger = logging.getLogger(__name__)
 # stop_idle_children; the next message respawns it with the same resume id.
 _AGY_IDLE_STOP_S = 900
 
-# A read-only side question on agy (Burak, 27 Sep 2026) runs only while the
-# turn lock is free, never queues, and gives way to any other agy turn.
+# A read-only side question on agy (Burak, 27 Sep 2026) runs only while no
+# main agy turn runs or waits in any chat (the "side" gate state is one file
+# every agy child reads), never queues, and gives way to any other agy turn.
 SIDE_TURN_TIMEOUT_S = 120
 SIDE_BUSY_MESSAGE = (
-    "Yan soru Antigravity (agy) ile kullanılamıyor: agy aynı anda tek bir tur "
-    "çalıştırıyor, yani yan soru ana sohbetin turunun bitmesini beklerdi. "
-    "Yan soru için başka bir model seç."
+    "Yan soru şu an Antigravity (agy) ile kullanılamıyor: bir agy sohbetinin "
+    "turu sürüyor, ve agy'de yan soru salt okunur kalabilmek için yalnız hiçbir "
+    "agy turu çalışmazken başlar. Tur bitince yeniden sor ya da yan soru için "
+    "başka bir model seç."
 )
 _SIDE_STOP_MESSAGES = {
     "agy_side_preempted": {"tr": "Ana sohbet başladı, yan soru durduruldu.",
@@ -396,8 +402,8 @@ def limit_message(kind: str, *, language: str, summary: str, started: bool) -> s
                      f"The Antigravity turn reached its {span} time limit and was stopped.")
                 if started else
                 _say(language,
-                     f"Antigravity turu başlayamadı: başka bir agy sohbetinin turu {span} içinde bitmedi.",
-                     f"The Antigravity turn could not start: another agy chat's turn did not finish within {span}."))
+                     f"Antigravity turu başlayamadı: beklediği önceki agy işi {span} içinde bitmedi.",
+                     f"The Antigravity turn could not start: the earlier agy work it waited for did not finish within {span}."))
         tech = f"agy turn timed out after {BaseCLIProvider._AGY_MAX_TOTAL} seconds."
     tail = (_say(language,
                  "Sohbet korunuyor: \"devam et\" yazarsan Antigravity kaldığı yerden sürdürür.",
@@ -419,9 +425,44 @@ def _dedupe_tail(message: str, tail: str) -> str:
     return "\n".join(kept)
 
 
+# Turns of one chat never overlap; turns of different chats run at the same
+# time (24 Nov 2026: per-process --model/--effort, and nothing a turn streams
+# through is shared). key (_turn_key) -> [lock, holders]. An entry lives while
+# a turn of that chat runs or waits, or a sweep stops its child, and goes with
+# its last holder, so no lock outlives the event loop it was used on.
+_TURN_LOCKS: Dict[Hashable, list] = {}
+# One token per main (non-side) turn running or waiting, in any chat.
+_MAIN_TURNS: set = set()
+
+
+def _turn_key(session) -> Hashable:
+    """A chat's turn-lock key; a one-shot (< 0) is only ever its own chat."""
+    conversation_id = session.conversation_id
+    return conversation_id if conversation_id >= 0 else ("one-shot", id(session))
+
+
+def _hold_turn_lock(key: Hashable) -> asyncio.Lock:
+    """The chat's turn lock, counted as held until _drop_turn_lock(key)."""
+    entry = _TURN_LOCKS.get(key)
+    if entry is None:
+        entry = _TURN_LOCKS[key] = [asyncio.Lock(), 0]
+    entry[1] += 1
+    return entry[0]
+
+
+def _drop_turn_lock(key: Hashable) -> None:
+    entry = _TURN_LOCKS.get(key)
+    if entry is None:
+        return
+    entry[1] -= 1
+    if entry[1] <= 0:
+        _TURN_LOCKS.pop(key, None)
+
+
 def agy_turn_busy() -> bool:
-    """Is an agy turn running or waiting right now? (The side route's gate.)"""
-    return _turn_lock_busy(BaseCLIProvider._AGY_LOCK)
+    """Is a main agy turn running or waiting in any chat, or a side question
+    running? (The side route's gate; stream() checks the same.)"""
+    return bool(_MAIN_TURNS) or _SIDE_TURN is not None
 
 
 def _updater_env(platform: Optional[str] = None) -> Dict[str, str]:
@@ -450,7 +491,7 @@ def _switch_state() -> tuple:
 
 
 def _turn_lock_busy(lock: asyncio.Lock) -> bool:
-    """Would acquiring the agy turn lock wait? Mirrors Lock.acquire's fast path:
+    """Would acquiring this turn lock wait? Mirrors Lock.acquire's fast path:
     a just-released lock whose woken waiter has not run yet is still taken."""
     waiters = getattr(lock, "_waiters", None) or ()
     return lock.locked() or any(not waiter.cancelled() for waiter in waiters)
@@ -531,10 +572,12 @@ _GATED_CHILDREN: Dict[object, object] = {}
 # no new child (whose spawn writes that file) starts while one still runs; see
 # _stop_retired_children. Guarded by _gate_lock().
 _RETIRED: set = set()
-# The session whose side question holds the agy turn lock, else None. While
-# it is set every write of the state file writes SIDE_MODE, whatever the
-# approval mode: a flip during the side turn must not loosen it. Guarded by
-# _gate_lock(). _SIDE_DONE is set once that turn has released the lock.
+# The session whose side question is running, else None; no main agy turn
+# runs meanwhile (stream() checks _MAIN_TURNS before setting it, and a main
+# turn preempts it and waits for _SIDE_DONE). While it is set every write of
+# the state file writes SIDE_MODE, whatever the approval mode: a flip during
+# the side turn must not loosen it. Guarded by _gate_lock(). _SIDE_DONE is set
+# once that turn has put the state file back and released its chat's lock.
 _SIDE_TURN = None
 _SIDE_DONE: Optional[asyncio.Event] = None
 
@@ -548,8 +591,9 @@ def _effective_gate_mode() -> str:
 
 
 def _begin_side_turn(session) -> None:
-    """Called with the turn lock just taken; the side child's _start then
-    writes SIDE_MODE (spawn or resync) before its first stdin line."""
+    """Called with its chat's turn lock just taken and no main turn running;
+    the side child's _start then writes SIDE_MODE (spawn or resync) before
+    its first stdin line."""
     global _SIDE_TURN, _SIDE_DONE
     with _gate_lock():
         _SIDE_TURN = session
@@ -557,8 +601,8 @@ def _begin_side_turn(session) -> None:
 
 
 def _end_side_turn(session) -> None:
-    """Called before the turn lock is released: puts the state file back to
-    the mode published NOW (not the one before the turn: a flip to step
+    """Called before _SIDE_DONE is set, so no main turn writes the state file
+    before this: puts the state file back to the mode published NOW (not the one before the turn: a flip to step
     during the turn must not be undone by a stale auto)."""
     global _SIDE_TURN
     with _gate_lock():
@@ -573,13 +617,14 @@ def _end_side_turn(session) -> None:
         _sync_gate_state()
 
 
-async def _preempt_side_turn(requester) -> None:
+async def _preempt_side_turn(requester) -> Optional[asyncio.Event]:
     """Any other agy turn wins over a running side question (Burak, 27 Sep
-    2026): the side child is closed, and the caller then waits until that
-    turn has restored the state file and released the lock."""
+    2026): the side child is closed, and this waits up to 10 s for that turn
+    to put the state file back. Returns its _SIDE_DONE when it has not yet:
+    the caller must not touch the gate before it is set."""
     side, done = _SIDE_TURN, _SIDE_DONE
     if side is None or side is requester:
-        return
+        return None
     logger.info("[agy] side question conv=%s stopped for conv=%s",
                 side.conversation_id, getattr(requester, "conversation_id", None))
     side._side_preempted = True
@@ -588,7 +633,9 @@ async def _preempt_side_turn(requester) -> None:
         try:
             await asyncio.wait_for(done.wait(), timeout=10)
         except asyncio.TimeoutError:
-            logger.warning("[agy] preempted side question has not released the turn lock yet")
+            logger.warning("[agy] preempted side question has not put the gate state back yet")
+            return done
+    return None
 
 
 def _stop_retired_children() -> list:
@@ -792,8 +839,20 @@ class AgyStreamSession(SaglayiciSahipligi):
         super().kapandi_isaretle()
         self._closed_event.set()  # ends a turn queued in _acquire_turn_lock
 
+    async def _wait_side_done(self, done: asyncio.Event) -> bool:
+        """Wait for a preempted side turn to put the gate state back; False
+        when this session closed first."""
+        waiter = asyncio.ensure_future(done.wait())
+        closed = asyncio.ensure_future(self._closed_event.wait())
+        try:
+            await asyncio.wait({waiter, closed}, return_when=asyncio.FIRST_COMPLETED)
+            return done.is_set() and not self._kapandi
+        finally:
+            waiter.cancel()
+            closed.cancel()
+
     async def _acquire_turn_lock(self, lock: asyncio.Lock) -> bool:
-        """Wait for the global agy turn lock; False when the session closed first.
+        """Wait for this chat's turn lock; False when the session closed first.
 
         The acquire is its own task so Stop (close_session) can end a queued
         wait without cancelling the caller. Awaiting the lock directly kept a
@@ -1057,7 +1116,18 @@ class AgyStreamSession(SaglayiciSahipligi):
         provider = AgyProvider(binary_name=model)
         provider._resume_uuid = self.session_id
         command = provider._resolve_exec(provider._build_cmd(thinking_level=thinking_level, workspace=cwd))
-        # Configuration happens under the same global turn lock as execution.
+        # The spawn section: other chats' turns run beside this one, so the
+        # files every agy child reads (.mcp.json, the agy MCP registration and
+        # trusted workspaces, the gate state, .agents/hooks.json) are written
+        # and the child created one spawn at a time, each child after the
+        # files written for it. Never held across a turn's stream.
+        async with BaseCLIProvider._AGY_LOCK:
+            return await self._spawn(provider, command, model, cwd, switches)
+
+    async def _spawn(self, provider, command, model: str, cwd: str, switches) -> str:
+        if self._kapandi:
+            # Stopped while another chat's spawn held the section.
+            raise RuntimeError("agy session was stopped.")
         # These existing helpers are mocked by the fake-process tests.
         provider._write_mcp_config(cwd)
         provider._register_agy_workspace(cwd)
@@ -1198,9 +1268,11 @@ class AgyStreamSession(SaglayiciSahipligi):
                      language: str = "tr", thinking_level: str = "auto",
                      agent_guide: str = "") -> AsyncGenerator[dict, None]:
         """One turn. `side`: a read-only side question (Burak, 27 Sep 2026):
-        refused unless the turn lock is free, run with the state file on
-        SIDE_MODE, stopped after SIDE_TURN_TIMEOUT_S or when another agy turn
-        starts; `language` picks the text of those stop messages."""
+        refused while a main agy turn runs or waits in any chat, run with the
+        state file on SIDE_MODE, stopped after SIDE_TURN_TIMEOUT_S or when
+        another agy turn starts; `language` picks the text of those stop
+        messages. Turns of different chats run at the same time; turns of one
+        chat take its turn lock for the complete turn, not the process life."""
         self._last_used = time.monotonic()
         agent_guide = agent_guide or getattr(self, "agent_guide", "")
         if agent_guide and not side:
@@ -1212,16 +1284,12 @@ class AgyStreamSession(SaglayiciSahipligi):
                 agent_guide = guides.with_browser_use(agent_guide)
             if connectors_on:
                 agent_guide = guides.with_connectors(agent_guide)
-        # Global serialization covers the complete turn, not the process life.
         # A queued turn rechecks the closed flag before spawning or writing.
         completed = False
         preserve_live_process = False
         lock_acquired = False
         side_started = False
         self._side_preempted = False
-        # Released as the object it was acquired as, even if the class
-        # attribute is rebound meanwhile (tests patch it).
-        turn_lock = BaseCLIProvider._AGY_LOCK
         loop = asyncio.get_running_loop()
         tool_calls = set()
         tool_results = set()
@@ -1249,27 +1317,43 @@ class AgyStreamSession(SaglayiciSahipligi):
             streamed_text.append(text)
             return _redact_event({"type": "text", "content": text})
 
+        # Registered before the first await, so from here on a side question
+        # sees this main turn (agy_turn_busy) and a sweep leaves this chat's
+        # child alone (stop_idle_children); both go in the last finally.
+        turn_key = _turn_key(self)
+        turn_lock = _hold_turn_lock(turn_key)
+        main_token = None
         if not side:
-            await _preempt_side_turn(self)
+            main_token = object()
+            _MAIN_TURNS.add(main_token)
         try:
+            side_done = None if side else await _preempt_side_turn(self)
             async with asyncio.timeout(SIDE_TURN_TIMEOUT_S if side else BaseCLIProvider._AGY_MAX_TOTAL):
                 if side:
-                    if _turn_lock_busy(turn_lock):
+                    if agy_turn_busy() or _turn_lock_busy(turn_lock):
                         preserve_live_process = True
                         yield _redact_event({"type": "error", "code": "agy_side_busy",
                                              "message": SIDE_BUSY_MESSAGE})
                         return
                     # The lock is free, so this acquire takes Lock.acquire's
-                    # fast path and never suspends: a side turn never queues.
+                    # fast path and never suspends: a side turn never queues,
+                    # and no main turn can register between the check and
+                    # _begin_side_turn.
                     lock_acquired = await turn_lock.acquire()
                     _begin_side_turn(self)
                     side_started = True
                     queued = False
                 else:
-                    queued = _turn_lock_busy(turn_lock)
+                    # A side question still putting the shared state file back
+                    # would race this turn's gate write: wait for it first.
+                    side_pending = side_done is not None and not side_done.is_set()
+                    queued = side_pending or _turn_lock_busy(turn_lock)
                     if queued:
                         yield _redact_event(_QUEUED_EVENT)
-                    lock_acquired = await self._acquire_turn_lock(turn_lock)
+                    if side_pending and not await self._wait_side_done(side_done):
+                        lock_acquired = False
+                    else:
+                        lock_acquired = await self._acquire_turn_lock(turn_lock)
                 if not lock_acquired or self._kapandi:
                     yield _redact_event({"type": "error", "message": "agy session was stopped."})
                     return
@@ -1555,6 +1639,8 @@ class AgyStreamSession(SaglayiciSahipligi):
                         turn_lock.release()
                     if done is not None:
                         done.set()
+                    _drop_turn_lock(turn_key)
+                    _MAIN_TURNS.discard(main_token)
 
 
 # Keep the public ownership type used by existing stop/lifecycle callers.
@@ -1585,48 +1671,59 @@ async def stop_idle_children(now: Optional[float] = None) -> list:
     """Stop the process tree of every kept child idle for _AGY_IDLE_STOP_S.
 
     The sessions stay registered with their resume ids, so the next turn's
-    _start spawns a new child that resumes the conversation. Runs only while
-    no agy turn holds the global lock, and holds it so none starts mid-stop."""
-    lock = BaseCLIProvider._AGY_LOCK
-    if _turn_lock_busy(lock):
-        return []
-    # The lock is free, so this takes Lock.acquire's fast path and never waits.
-    await lock.acquire()
+    _start spawns a new child that resumes the conversation. A chat with a
+    turn running or waiting is skipped; for the others the sweep holds that
+    chat's turn lock while it checks and stops the child, so no turn of that
+    chat starts mid-stop (it waits, then respawns). Other chats' turns run on."""
     stopped = []
-    try:
-        now = time.monotonic() if now is None else now
-        for conversation_id, session in list(_SESSIONS.items()):
-            idle = now - session._last_used
-            if (conversation_id < 0 or session._kapandi or not session.is_live
-                    or idle < _AGY_IDLE_STOP_S):
-                continue
-            process = session._active_process
-            pid = getattr(process, "pid", None)
+    now = time.monotonic() if now is None else now
+    for conversation_id, session in list(_SESSIONS.items()):
+        idle = now - session._last_used
+        if (conversation_id < 0 or session._kapandi or not session.is_live
+                or idle < _AGY_IDLE_STOP_S):
+            continue
+        key = _turn_key(session)
+        if key in _TURN_LOCKS:
+            continue  # a turn of this chat runs or waits
+        lock = _hold_turn_lock(key)
+        try:
+            # A new lock nobody else holds: this acquire never waits.
+            await lock.acquire()
             try:
-                work = await asyncio.to_thread(process_tree.has_running_shell_work, pid)
-            except Exception:
-                work = None
-            if work is not False:
-                logger.info("[agy] idle stop skipped conv=%s pid=%s: %s", conversation_id, pid,
-                            "background work" if work else "process table unreadable")
-                continue
-            try:
-                await session._stop_process(force=True)
-            except Exception:
-                logger.exception("[agy] idle stop failed conv=%s pid=%s", conversation_id, pid)
-                continue
-            if process is not None and process.returncode is None:
-                # _reap_process has already dropped the reference, so the next
-                # turn would spawn a second child next to this live one.
-                logger.warning("[agy] idle stop could not end the child conv=%s pid=%s",
-                               conversation_id, pid)
-                continue
-            stopped.append(conversation_id)
-            logger.info("[agy] idle child stopped conv=%s pid=%s idle=%.0f min",
-                        conversation_id, pid, idle / 60)
-    finally:
-        lock.release()
+                if await _stop_idle_child(conversation_id, session, idle):
+                    stopped.append(conversation_id)
+            finally:
+                lock.release()
+        finally:
+            _drop_turn_lock(key)
     return stopped
+
+
+async def _stop_idle_child(conversation_id: int, session, idle: float) -> bool:
+    process = session._active_process
+    pid = getattr(process, "pid", None)
+    try:
+        work = await asyncio.to_thread(process_tree.has_running_shell_work, pid)
+    except Exception:
+        work = None
+    if work is not False:
+        logger.info("[agy] idle stop skipped conv=%s pid=%s: %s", conversation_id, pid,
+                    "background work" if work else "process table unreadable")
+        return False
+    try:
+        await session._stop_process(force=True)
+    except Exception:
+        logger.exception("[agy] idle stop failed conv=%s pid=%s", conversation_id, pid)
+        return False
+    if process is not None and process.returncode is None:
+        # _reap_process has already dropped the reference, so the next
+        # turn would spawn a second child next to this live one.
+        logger.warning("[agy] idle stop could not end the child conv=%s pid=%s",
+                       conversation_id, pid)
+        return False
+    logger.info("[agy] idle child stopped conv=%s pid=%s idle=%.0f min",
+                conversation_id, pid, idle / 60)
+    return True
 
 
 async def idle_stop_loop(interval: float = 60) -> None:

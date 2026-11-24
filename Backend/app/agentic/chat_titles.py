@@ -558,12 +558,11 @@ def _refuse_shell(spawn: List[str], cli: str) -> List[str]:
 # --disable-slash-commands (the 24 Jul "--model derails agy" note in
 # cli_base predates 1.2.11).
 #
-# No _AGY_LOCK: the lock serializes chat turns because every chat agy reads
-# and Gamachine rewrites per turn the same ~/.gemini settings file (the model
-# is picked there), the same MCP config and the workspace hooks.json of the
-# step gate. This process reads none of them: its home is an empty folder,
-# its model comes from --model, and its cwd holds only the agent file. The
-# lock would also make a title wait behind a chat turn of up to 30 minutes.
+# No _AGY_LOCK: that lock is chat agy's spawn section, under which Gamachine
+# writes the files a chat child reads at start (~/.gemini trusted workspaces,
+# the MCP config, the step gate's state file and workspace hooks.json). This
+# process reads none of them: its home is an empty folder, its model comes
+# from --model, and its cwd holds only the agent file.
 
 AGY_AGENT_NAME = "titler"
 AGY_AGENT_FILE = (

@@ -114,7 +114,11 @@ class BaseCLIProvider(AIProvider):
     # The chat's language ("tr" or "en"); the runner sets it per turn.
     language = "en"
 
-    # Serialize whole agy turns: live processes share the settings file.
+    # agy's spawn section (agy_session._start): the files every agy child
+    # reads at start (.mcp.json, the agy MCP registration and trusted
+    # workspaces, the gate state, .agents/hooks.json) are written and the
+    # child created one spawn at a time. Not a turn lock: the model goes per
+    # process via --model, and different chats' turns run at the same time.
     _AGY_LOCK = asyncio.Lock()
     # An agy turn is cut when the child is silent for _AGY_IDLE_LIMIT, and in
     # any case at _AGY_MAX_TOTAL. Measured 12 Nov 2026 (owner): both turns cut

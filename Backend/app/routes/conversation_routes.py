@@ -2072,9 +2072,10 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
         _main = chat_model.chat_model(db, user_id, main_id)
         provider_type, model_name = _main["provider_type"], _main["model_name"]
         if _is_agy_model(provider_type, model_name):
-            # agy runs one turn machine-wide: a side question runs only while
-            # no agy turn does (Burak, 27 Sep 2026); agy_session refuses the
-            # same way if one starts before the side turn takes the lock.
+            # A side question runs only while no agy turn runs in any chat
+            # (Burak, 27 Sep 2026): its read-only gate state is the one file
+            # every agy child reads. agy_session refuses the same way if a
+            # turn starts before the side turn begins.
             from providers import agy_session
             if agy_session.agy_turn_busy():
                 raise HTTPException(status_code=409, detail=_SIDE_AGY_REFUSED)

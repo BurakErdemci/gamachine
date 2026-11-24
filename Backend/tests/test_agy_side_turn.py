@@ -299,8 +299,19 @@ class TestSideTurn(unittest.IsolatedAsyncioTestCase):
 
     def assert_back_to_published(self):
         self.assertIsNone(agy_session._SIDE_TURN)
+        self.assertFalse(agy_session.agy_turn_busy())
         self.assertFalse(BaseCLIProvider._AGY_LOCK.locked())
         self.assertEqual(self.file_mode(), self.mode)
+
+    async def blocked_main_turn(self, conversation_id):
+        """A main turn of another chat, blocked mid-stream on its child."""
+        release = asyncio.Event()
+        self.plans.insert(0, {"release": release})
+        count = len(self.processes)
+        session = agy_session.get_session(conversation_id, cwd=self.tmp.name)
+        task = asyncio.create_task(self.collect(session.stream("ana", cwd=self.tmp.name)))
+        await asyncio.wait_for(self.wait_written(count), 5)
+        return task, release
 
     async def test_idle_agy_runs_the_side_turn_in_its_own_session_on_side_state(self):
         release = asyncio.Event()
@@ -331,21 +342,61 @@ class TestSideTurn(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.sent(self.processes[0])[1], runner.side_turn.text(full=False))
         self.assert_back_to_published()
 
-    async def test_side_turn_is_refused_while_any_agy_turn_holds_the_lock(self):
-        await BaseCLIProvider._AGY_LOCK.acquire()
+    async def test_side_turn_is_refused_while_any_chat_runs_a_main_agy_turn(self):
+        # Main turns of different chats run at the same time now; the "side"
+        # state is still one file every child reads, so a side question
+        # still needs every chat idle (Burak, 27 Sep 2026).
+        self.mode = "step"
+        main, release = await self.blocked_main_turn(MAIN_ID + 100)
         try:
-            agy_provider.write_gate_state(auto=True)
+            self.assertTrue(agy_session.agy_turn_busy())
             events = await self.collect(self.side_runner()._run_inner("q"))
             self.assertEqual([(e.type, e.data.get("code")) for e in events],
                              [("error", "agy_side_busy")])
             self.assertEqual(events[0].data["message"], agy_session.SIDE_BUSY_MESSAGE)
-            self.assertEqual(self.processes, [])
-            self.assertEqual(self.file_mode(), "auto")
+            self.assertEqual(len(self.processes), 1)  # the main child only
+            self.assertEqual(self.file_mode(), "step")  # never loosened to "side" under it
             self.assertIsNone(agy_session._SIDE_TURN)
-            self.assertTrue(agy_session.agy_turn_busy())
         finally:
-            BaseCLIProvider._AGY_LOCK.release()
+            release.set()
+        self.assertEqual((await asyncio.wait_for(main, 5))[-1]["type"], "done")
         self.assertFalse(agy_session.agy_turn_busy())
+        # With every chat idle, the side question runs.
+        events = await asyncio.wait_for(self.collect(self.side_runner()._run_inner("q")), 5)
+        self.assertEqual(events[-1].type, "done")
+        self.assertEqual(self.spawn_modes, ["step", "side"])
+        self.assert_back_to_published()
+
+    async def test_two_chats_preempting_a_side_turn_both_spawn_on_the_published_mode(self):
+        self.mode = "step"
+        self.plans = [{"turns": [[TURNS[0][0]]]}]  # the side child never answers
+        side = asyncio.create_task(self.collect(self.side_runner()._run_inner("q")))
+        await asyncio.wait_for(self.wait_written(0), 5)
+        self.assertEqual(self.file_mode(), "side")
+        # The side turn's own teardown (a second close that reaps its child)
+        # takes a while, so the file says "side" a little after the preempt.
+        side_session = agy_session.peek_session(SIDE_ID)
+        real_close, closes = side_session.close, 0
+
+        async def slow_teardown(**kwargs):
+            nonlocal closes
+            closes += 1
+            if closes > 1:
+                await asyncio.sleep(0.2)
+            await real_close(**kwargs)
+
+        side_session.close = slow_teardown
+        first = agy_session.get_session(MAIN_ID, cwd=self.tmp.name)
+        second = agy_session.get_session(MAIN_ID + 100, cwd=self.tmp.name)
+        results = await asyncio.wait_for(asyncio.gather(
+            self.collect(first.stream("bir", cwd=self.tmp.name)),
+            self.collect(second.stream("iki", cwd=self.tmp.name))), 5)
+        side_events = await asyncio.wait_for(side, 5)
+        self.assertEqual([e.data.get("code") for e in side_events], ["agy_side_preempted"])
+        self.assertEqual([events[-1]["type"] for events in results], ["done", "done"])
+        # Neither main child was spawned while the file still said "side".
+        self.assertEqual(self.spawn_modes, ["side", "step", "step"])
+        self.assert_back_to_published()
 
     async def test_a_crashed_side_turn_restores_the_state_and_frees_the_lock(self):
         self.mode = "step"

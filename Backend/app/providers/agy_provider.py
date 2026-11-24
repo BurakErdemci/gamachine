@@ -40,9 +40,11 @@ def step_gate_matchers(mode: Optional[str] = None) -> tuple:
     """The hooks.json matchers of a child spawned in `mode`. Only a side
     question's child gets the wide list (Burak, 27 Sep 2026): every other
     child keeps exactly the step tools, so its behaviour and hook cost stay
-    as they were. agy reads hooks.json only at start, and spawns are
-    serialized by the agy turn lock, so each child gets the file written
-    just before it."""
+    as they were. agy reads hooks.json only at start; spawns are serialized
+    by the spawn section (BaseCLIProvider._AGY_LOCK), so each child gets the
+    file written just before it, and no main child starts while a side
+    question runs (agy_session.stream), so concurrent main children all
+    read these same matchers."""
     return STEP_GATE_TOOLS + SIDE_HOOK_MATCHERS if mode == SIDE_MODE else STEP_GATE_TOOLS
 
 # An agy branch whose unityai server had not started called send_chat_message

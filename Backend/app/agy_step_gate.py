@@ -100,8 +100,8 @@ CLOSED_MODE = "closed"
 CLOSED_REASON = "Gamachine closed this agy session; no tool may run in it."
 
 # Written while a read-only side question runs on agy (Burak, 27 Sep 2026).
-# agy runs one turn machine-wide and the side turn holds that lock, so the one
-# shared state file can say "side" for exactly that turn. Only the tools
+# A side question runs only while no main agy turn runs or waits (agy_session
+# _MAIN_TURNS), so the one shared state file can say "side" for exactly that turn. Only the tools
 # below, and Unity MCP calls the ledger proves to be reads, are allowed; any
 # other call the hook sees is denied, so a tool nobody listed stays closed.
 SIDE_MODE = "side"

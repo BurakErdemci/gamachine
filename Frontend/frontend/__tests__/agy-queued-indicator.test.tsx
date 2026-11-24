@@ -1,6 +1,7 @@
 /**
- * agy turns are serialized machine-wide: a second agy chat waits for another
- * chat's whole turn and looked frozen. The backend now sends
+ * Different agy chats run their turns at the same time, but a turn can still
+ * wait (behind its own chat's earlier work, or a stopped side question) and
+ * then looked frozen. The backend sends
  * `status {code: 'agy_queued'}` while it waits and `status {code: 'agy_started'}`
  * when the turn starts; the chat's activity line shows the queued text and
  * drops it on start. The sidebar keeps its ordinary `running` status.

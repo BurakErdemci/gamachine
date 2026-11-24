@@ -346,7 +346,7 @@ def test_side_stream_refuses_agy_while_an_agy_turn_runs(env, monkeypatch):
     r = _stream(client, side)
     assert r.status_code == 409
     assert r.json()["detail"] == cr._SIDE_AGY_REFUSED
-    assert "agy aynı anda tek bir tur" in r.json()["detail"]
+    assert "hiçbir agy turu çalışmazken" in r.json()["detail"]
     assert _FakeRunner.last is None
     assert db.get_conversation_messages(side) == []
 

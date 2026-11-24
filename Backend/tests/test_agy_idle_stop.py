@@ -45,6 +45,19 @@ class _Harness(base.TestAgyStreamSession):
         self.assertTrue(session.is_live)
         return session
 
+    async def running_turn(self, session):
+        """Start the second fixture turn on a live session's child and leave
+        it blocked mid-stream; returns the task and the event that lets it
+        finish."""
+        process = session._active_process
+        release = asyncio.Event()
+        process.release = release
+        drains = process.stdin.drains
+        task = asyncio.create_task(self.collect(session, "running"))
+        while process.stdin.drains == drains:
+            await asyncio.sleep(0)
+        return task, release
+
 
 for _name in [n for n in dir(base.TestAgyStreamSession) if n.startswith("test_")]:
     setattr(_Harness, _name, None)
@@ -76,17 +89,22 @@ class TestIdleStop(_Harness):
         await self.collect(session)
         self.assertGreaterEqual(session._last_used, before)
 
-    async def test_nothing_is_stopped_while_a_turn_holds_the_lock(self):
-        session = await self.live_session()
-        await BaseCLIProvider._AGY_LOCK.acquire()
+    async def test_a_chat_with_a_running_turn_keeps_its_child_while_idle_ones_stop(self):
+        # Chats run their turns at the same time (24 Nov 2026), so a sweep
+        # must not wait for every chat to be idle, nor touch a running one.
+        idle = await self.live_session(11)
+        busy = await self.live_session(12)
+        turn, release = await self.running_turn(busy)
         try:
-            stopped = await agy_session.stop_idle_children(now=session._last_used + 5000)
+            stopped = await agy_session.stop_idle_children(
+                now=max(idle._last_used, busy._last_used) + 5000)
+            self.assertEqual(stopped, [11])
+            self.assertFalse(idle.is_live)
+            self.assertTrue(busy.is_live)
+            self.assertEqual(self.ended, [self.processes[0]])
         finally:
-            BaseCLIProvider._AGY_LOCK.release()
-        self.assertEqual(stopped, [])
-        self.assertEqual(self.ended, [])
-        self.assertTrue(session.is_live)
-        self.assertFalse(BaseCLIProvider._AGY_LOCK.locked())
+            release.set()
+        self.assertEqual((await asyncio.wait_for(turn, 1))[-1]["type"], "done")
 
     async def test_the_lock_is_released_after_a_sweep(self):
         session = await self.live_session()
@@ -175,13 +193,17 @@ class TestIdleStopRaces(_Harness):
     async def test_a_turn_waiting_for_the_lock_counts_as_recent_use(self):
         session = await self.live_session()
         clock = _Clock(1000.0)
-        await BaseCLIProvider._AGY_LOCK.acquire()
+        holder, release = await self.running_turn(session)
         with patch.object(agy_session, "time", clock):
             session._last_used = 0
             task = asyncio.create_task(self.collect(session, "queued"))
             await self.wait_until(lambda: session._last_used == clock.value)
-        BaseCLIProvider._AGY_LOCK.release()
-        await task
+        self.assertFalse(task.done())  # it waits behind the running turn
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        release.set()
+        await asyncio.wait_for(holder, 1)
 
     async def test_a_turn_arriving_during_a_sweep_waits_then_respawns_its_child(self):
         session = await self.live_session()
@@ -273,11 +295,20 @@ class TestIdleStopLoop(_Harness):
         with patch.object(agy_session.AgyStreamSession, "_stop_process", hanging_stop):
             task = asyncio.create_task(agy_session.idle_stop_loop(interval=0.01))
             await asyncio.wait_for(in_stop.wait(), timeout=5)
-            self.assertTrue(BaseCLIProvider._AGY_LOCK.locked())
+            # Mid-stop the sweep holds the chat's lock: its turn waits.
+            stream = session.stream("during the stop")
+            self.assertEqual((await asyncio.wait_for(anext(stream), 1))["code"], "agy_queued")
             task.cancel()
             with self.assertRaises(asyncio.CancelledError):
                 await task
-        self.assertFalse(BaseCLIProvider._AGY_LOCK.locked())
+
+        async def rest():
+            return [event async for event in stream]
+
+        # Released on cancel: the waiting turn starts and runs on the child.
+        events = await asyncio.wait_for(rest(), 1)
+        self.assertEqual(events[0]["code"], "agy_started")
+        self.assertEqual(events[-1]["type"], "done")
 
 
 class TestBackgroundWorkGuard(_Harness):

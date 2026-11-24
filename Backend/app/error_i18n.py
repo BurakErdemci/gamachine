@@ -69,8 +69,8 @@ EN: dict[str, str] = {
         "Application access can only be revoked from the app interface.",
     "İşlem durduruldu.": "Operation stopped.",
     "🛑 İşlem kullanıcı tarafından durduruldu.": "🛑 Operation stopped by the user.",
-    "Sırada — başka bir agy sohbetinin turu bitince başlayacak":
-        "Queued — will start when another agy chat finishes its turn",
+    "Sırada — önceki agy işi bitince başlayacak":
+        "Queued — starts when the earlier agy work finishes",
     "Çalışıyor…": "Working…",
     "Codex app-server süreci beklenmedik şekilde kapandı.": "The Codex app-server process exited unexpectedly.",
     "AI yanıt üretemedi.": "AI could not produce a response.",
