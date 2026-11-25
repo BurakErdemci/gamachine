@@ -853,16 +853,26 @@ class DatabaseManager:
             return message_id
 
     def queue_turn_input(self, conv_id: int, message_id: int, origin: str) -> None:
-        """Mark an already stored message as pending for the chat's next turn."""
+        """Mark an already stored message as pending for the chat's next turn;
+        nothing when the message (or its chat) is gone."""
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute('INSERT INTO turn_inputs (conversation_id, message_id, origin) '
-                         'VALUES (?, ?, ?)', (conv_id, message_id, origin))
+                         'SELECT ?, id, ? FROM messages WHERE id = ? AND conversation_id = ?',
+                         (conv_id, origin, message_id, conv_id))
             conn.commit()
 
     def count_turn_inputs(self, conv_id: int) -> int:
+        """Pending inputs whose message still exists."""
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
-            return conn.execute('SELECT COUNT(*) FROM turn_inputs WHERE conversation_id = ?',
+            return conn.execute('SELECT COUNT(*) FROM turn_inputs t JOIN messages m '
+                                'ON m.id = t.message_id WHERE t.conversation_id = ?',
                                 (conv_id,)).fetchone()[0]
+
+    def pending_turn_input_ids(self, conv_id: int) -> List[int]:
+        """Message ids of the chat's inputs still pending for a later turn."""
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            return [r[0] for r in conn.execute(
+                'SELECT message_id FROM turn_inputs WHERE conversation_id = ?', (conv_id,))]
 
     def claim_turn_inputs(self, conv_id: int) -> List[Dict[str, Any]]:
         """Take every pending input of the chat, in arrival order, at most once.
@@ -870,12 +880,24 @@ class DatabaseManager:
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute('BEGIN IMMEDIATE')
             rows = conn.execute(
-                'SELECT t.message_id, m.role, m.content, t.origin FROM turn_inputs t '
+                'SELECT t.message_id, m.role, m.content, t.origin, t.id FROM turn_inputs t '
                 'JOIN messages m ON m.id = t.message_id '
                 'WHERE t.conversation_id = ? ORDER BY t.id ASC', (conv_id,)).fetchall()
             conn.execute('DELETE FROM turn_inputs WHERE conversation_id = ?', (conv_id,))
             conn.commit()
-        return [{"message_id": r[0], "role": r[1], "content": r[2], "origin": r[3]} for r in rows]
+        return [{"message_id": r[0], "role": r[1], "content": r[2], "origin": r[3], "mark_id": r[4]}
+                for r in rows]
+
+    def restore_turn_inputs(self, conv_id: int, rows: List[Dict[str, Any]]) -> None:
+        """Put claimed inputs back under their old mark ids (so their order
+        holds) when their turn failed before it ran."""
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            for r in rows:
+                conn.execute(
+                    'INSERT OR IGNORE INTO turn_inputs (id, conversation_id, message_id, origin) '
+                    'SELECT ?, ?, id, ? FROM messages WHERE id = ? AND conversation_id = ?',
+                    (r["mark_id"], conv_id, r["origin"], r["message_id"], conv_id))
+            conn.commit()
 
     def save_turn_settings(self, conv_id: int, user_id: int, language: Optional[str],
                            ui_language: Optional[str], thinking_level: Optional[str],
@@ -1399,14 +1421,19 @@ class DatabaseManager:
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             # Keep boundary selection and replacement in the same write transaction.
             conn.execute('BEGIN IMMEDIATE')
+            # An input still pending for a later turn (turn_inputs) is neither
+            # summarised away nor overwritten: that turn has not answered it.
+            pending = ('id NOT IN (SELECT message_id FROM turn_inputs '
+                       'WHERE conversation_id = ?)')
             if through_id is None:
                 boundary = conn.execute(
-                    'SELECT MAX(id) FROM messages WHERE conversation_id = ?', (conv_id,)
+                    f'SELECT MAX(id) FROM messages WHERE conversation_id = ? AND {pending}',
+                    (conv_id, conv_id)
                 ).fetchone()[0]
             else:
                 boundary = conn.execute(
-                    'SELECT MAX(id) FROM messages WHERE conversation_id = ? AND id <= ?',
-                    (conv_id, through_id)
+                    f'SELECT MAX(id) FROM messages WHERE conversation_id = ? AND id <= ? AND {pending}',
+                    (conv_id, through_id, conv_id)
                 ).fetchone()[0]
                 if boundary is None:
                     logger.info(f"[Compact] Stale compaction skipped for conversation {conv_id} through {through_id}")
@@ -1419,8 +1446,8 @@ class DatabaseManager:
             content = f'📝 **Sohbet özetlendi.**\n\n{summary}'
             if boundary is not None:
                 conn.execute(
-                    'DELETE FROM messages WHERE conversation_id = ? AND id < ?',
-                    (conv_id, boundary)
+                    f'DELETE FROM messages WHERE conversation_id = ? AND id < ? AND {pending}',
+                    (conv_id, boundary, conv_id)
                 )
                 conn.execute(
                     "UPDATE messages SET role='assistant', content=?, smells_json='[]', "

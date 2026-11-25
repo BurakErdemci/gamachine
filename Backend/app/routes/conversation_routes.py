@@ -712,7 +712,7 @@ class _Accepted:
     stream of a turn that ends there."""
 
     def __init__(self, early=None, ticketed_wake=False, wake_notices=None, turn_message="",
-                 mail_note="", mail_depth=0, mail_rows=None, user_row=None):
+                 mail_note="", mail_depth=0, mail_rows=None, user_row=None, own_rows=None):
         self.early = early
         self.ticketed_wake = ticketed_wake
         self.wake_notices = wake_notices or []
@@ -721,6 +721,8 @@ class _Accepted:
         self.mail_depth = mail_depth
         self.mail_rows = mail_rows
         self.user_row = user_row
+        # The rows this turn's request stored as its input.
+        self.own_rows = own_rows or []
 
 
 class _TurnResponse(StreamingResponse):
@@ -1414,6 +1416,17 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
     # until the chat's next turn or its sessions close (agentic/turn_replies).
     _turn_reply_detached: Dict[int, int] = {}
 
+    # chat -> input rows of its HTTP turns accepted but not opened yet: an
+    # earlier turn opening first must not read them as already said.
+    _waiting_rows: Dict[int, set] = {}
+
+    def _forget_waiting(conv_id: int, rows) -> None:
+        waiting = _waiting_rows.get(conv_id)
+        if waiting is not None:
+            waiting.difference_update(rows)
+            if not waiting:
+                _waiting_rows.pop(conv_id, None)
+
     def _begin_turn_reply(conv_id: int, user_row_id: Optional[int]) -> None:
         if user_row_id is None:
             return
@@ -1950,6 +1963,7 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
         # outlive the chat; later writes for this id are ignored.
         turn_events.drop(conv_id)
         turn_runner.forget(conv_id)
+        _waiting_rows.pop(conv_id, None)
 
     async def _close_conversation_sessions(conv_id: int) -> None:
         # Canlı Claude/Codex session'ı varsa kapat (subprocess sızdırma önlemi).
@@ -1978,8 +1992,6 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
         wake_queue.reset(conv_id)
         _reply_owed.pop(conv_id, None)
         _abandon_detached_turn_reply(conv_id)
-        # Its sessions are gone, and with them any detached turn holding the chat.
-        turn_runner.end_detached(conv_id)
 
     @router.delete("/conversations/{conv_id}")
     async def delete_conversation(conv_id: int, x_session_token: str = Header(alias="X-Session-Token")):
@@ -2348,12 +2360,16 @@ Max 300 kelime. Türkçe yaz.
             return StreamingResponse(
                 localize_sse(_tag_sse_stream(accepted.early(), conv), turn.ui_language),
                 media_type="text/event-stream")
-        if accepted.user_row is not None:
-            def _requeue_input() -> None:
+        _waiting_rows.setdefault(conv, set()).update(accepted.own_rows)
+
+        def _abandoned() -> None:
+            _forget_waiting(conv, accepted.own_rows)
+            if accepted.user_row is not None:
                 # The window closed while this message waited: a background
-                # turn answers it instead of it going unanswered.
+                # turn answers it instead of it going unanswered (nothing is
+                # marked when the chat was deleted meanwhile).
                 db.queue_turn_input(conv, accepted.user_row, "user")
-            turn.on_abandon = _requeue_input
+        turn.on_abandon = _abandoned
         turn.queued_frame = _queued_frame(user_id, conv)
         frames = turn_runner.run_turn(turn, lambda t: _turn_stream(t, accepted))
         return _TurnResponse(turn, localize_sse(_tag_sse_stream(frames, conv), turn.ui_language),
@@ -2405,12 +2421,7 @@ Max 300 kelime. Türkçe yaz.
         db.add_turn_input(conv_id, "user" if origin == "user" else "system", text, origin)
 
     def _has_pending_inputs(conv_id: int) -> bool:
-        n = db.count_turn_inputs(conv_id)
-        return type(n) is int and n > 0
-
-    def _claim_inputs(conv_id: int) -> List[dict]:
-        rows = db.claim_turn_inputs(conv_id)
-        return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+        return db.count_turn_inputs(conv_id) > 0
 
     def _store_background_error(turn: turn_runner.TurnInput) -> None:
         # Nobody may be watching a backend-started turn: the chat keeps a row.
@@ -2423,10 +2434,19 @@ Max 300 kelime. Türkçe yaz.
 
     async def _turn_stream(turn: turn_runner.TurnInput, accepted: Optional[_Accepted]):
         """A whole turn as SSE frames, opened once its caller holds the gate."""
+        claimed: List[dict] = []
         try:
-            stream = _open_turn(turn, accepted)
+            stream = _open_turn(turn, accepted, claimed)
         except Exception:
             logger.exception("[turn-gate] conv=%s turn not opened", turn.conversation_id)
+            if claimed:
+                # Nothing ran on them: they wait for the chat's next turn.
+                try:
+                    db.restore_turn_inputs(turn.conversation_id, claimed)
+                    turn.claimed = False
+                except Exception:
+                    logger.exception("[turn-gate] conv=%s claimed inputs not restored",
+                                     turn.conversation_id)
             turn.open_failed = True
             if accepted is not None:
                 _end_turn_reply(turn.conversation_id, accepted.user_row, None, "error")
@@ -2474,6 +2494,7 @@ Max 300 kelime. Türkçe yaz.
         mail_rows: Optional[List[dict]] = None
         # The user row this turn began with (agentic/turn_replies); wakes have none.
         _turn_user_row: Optional[int] = None
+        _wake_row: Optional[int] = None
 
         if ticketed_wake:
             # Consecutive-wake safety valve: a wake starts a turn, a turn can
@@ -2528,8 +2549,8 @@ Max 300 kelime. Türkçe yaz.
                 _wake_text = wake_queue.notice_turn_text(wake_notices)
                 if _wake_text:
                     turn_message = _wake_text
-                db.add_message(turn.conversation_id, "system",
-                               _wake_text or turn.message)
+                _wake_row = db.add_message(turn.conversation_id, "system",
+                                           _wake_text or turn.message)
         else:
             # A real user message CANCELS pending mail wakes: the human is back
             # in the loop and decides the next step. Queued notes stay in the
@@ -2551,15 +2572,19 @@ Max 300 kelime. Türkçe yaz.
 
         return _Accepted(ticketed_wake=ticketed_wake, wake_notices=wake_notices,
                          turn_message=turn_message, mail_note=mail_note, mail_depth=mail_depth,
-                         mail_rows=mail_rows, user_row=_turn_user_row)
+                         mail_rows=mail_rows, user_row=_turn_user_row,
+                         own_rows=[r for r in (_turn_user_row, _wake_row) if r is not None])
 
-    def _open_turn(turn: turn_runner.TurnInput, accepted: Optional[_Accepted]):
-        """Open one turn of a chat with its gate held: pending inputs, history,
-        the runner. Returns its `stream()`, or None when there is nothing to run."""
+    def _open_turn(turn: turn_runner.TurnInput, accepted: Optional[_Accepted],
+                   claimed: List[dict]):
+        """Open one turn of a chat with its gate held: pending inputs (claimed
+        into `claimed`), history, the runner. Returns its `stream()`, or None
+        when there is nothing to run."""
         from agentic import wake_queue
 
         conv = turn.conversation_id
         if turn.http:
+            _forget_waiting(conv, accepted.own_rows)
             user_id = turn.user_id
             if db.get_conversation_owner(conv) is None:
                 # Deleted while this turn waited: nothing runs, nothing is stored.
@@ -2598,10 +2623,12 @@ Max 300 kelime. Türkçe yaz.
         # This turn's own input rows. Inputs are stored when accepted, so a
         # row stored later (the previous turn's answer) may follow them; the
         # history readers below take the LAST row as the turn's own input.
-        _own_ids = [_turn_user_row] if _turn_user_row is not None else []
+        _own_ids = list(accepted.own_rows) if accepted is not None else []
         if turn.origin != "wake" and not (turn.http and _is_slash_command(turn_message)):
-            carried = _claim_inputs(conv)
+            carried = list(db.claim_turn_inputs(conv))
+            claimed.extend(carried)
             turn.claimed = True
+            _own_ids += [r["message_id"] for r in carried]
         if not turn.http:
             if not carried:
                 return None
@@ -2611,7 +2638,6 @@ Max 300 kelime. Türkçe yaz.
             turn.origin = origins.pop() if len(origins) == 1 else "background"
             turn_message = "\n\n".join(r["content"] for r in carried)
             _turn_user_row = next((r["message_id"] for r in carried if r["role"] == "user"), None)
-            _own_ids = [r["message_id"] for r in carried]
             _begin_turn_reply(conv, _turn_user_row)
             carried = []
 
@@ -2649,9 +2675,19 @@ Max 300 kelime. Türkçe yaz.
             # provider'ın ilk turunda enjekte edilir (agent_runner switch'te session'ı resetler).
             memory = db.get_memory(turn.conversation_id)
             history_messages = db.get_conversation_messages(turn.conversation_id)
-            if _own_ids and isinstance(history_messages, list):
-                history_messages = ([m for m in history_messages if m.get("id") not in _own_ids]
-                                    + [m for m in history_messages if m.get("id") in _own_ids])
+            if isinstance(history_messages, list):
+                # Inputs are stored when accepted, so this turn's own rows need
+                # not be last, and rows of later turns (still pending, or of
+                # HTTP turns still waiting) may already be there. History is
+                # everything else, then one empty row in place of this turn's
+                # input: both readers drop the LAST row as the current input.
+                if mail_note:
+                    _own_ids += [m.get("id") for m in history_messages
+                                 if m.get("role") == "system" and m.get("content") == mail_note][-1:]
+                _skip = (set(_own_ids) | set(db.pending_turn_input_ids(conv))
+                         | _waiting_rows.get(conv, set()))
+                history_messages = ([m for m in history_messages if m.get("id") not in _skip]
+                                    + [{"id": None, "role": "user", "content": ""}])
             context_summary = _build_handoff_context(
                 memory, history_messages,
                 history_header=mailbox.MAIL_WAKE_HISTORY_HEADER if mail_note else None)

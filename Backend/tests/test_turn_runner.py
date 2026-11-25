@@ -331,8 +331,13 @@ async def test_two_idle_requests_open_one_after_the_other(db, router):
     await _frames(r1)
     _Runner.script = [("response", {"content": "R2"}), DONE]
     await _frames(r2)
+    # The first turn does not read the second, still waiting, message as said.
+    first, second = _Runner.kwargs
+    assert "iki" not in first["context"]
+    assert all("iki" not in t["text"] for t in first["api_history"])
     # The second turn opened after the first answer was stored.
-    assert "R1" in _Runner.kwargs[1]["context"]
+    assert "R1" in second["context"] and "bir" in second["context"]
+    assert any("R1" in t["text"] for t in second["api_history"])
     assert _Runner.max_running == 1
 
 
@@ -507,3 +512,142 @@ async def test_a_busy_gate_holds_wake_offers(db, router):
     _Runner.hold.set()
     await _idle(cid)
     assert blocked(cid) is None
+
+
+# ── turn 3: claims, history and deletion ────────────────────────────────
+def _flaky_turn_model(monkeypatch, fail_on_call: int):
+    real = cr.chat_model.turn_model
+    calls = []
+
+    def flaky(*a, **kw):
+        calls.append(1)
+        if len(calls) == fail_on_call:
+            raise RuntimeError("config read failed")
+        return real(*a, **kw)
+
+    monkeypatch.setattr(cr.chat_model, "turn_model", flaky)
+
+
+async def test_a_background_turn_that_fails_after_claiming_keeps_its_input(db, router, monkeypatch):
+    cid = _chat(db)
+    _flaky_turn_model(monkeypatch, 1)
+    turn_runner.start_background_turn(cid, "görev A")
+    await _idle(cid)
+    # Restored, retried: answered once, stored once.
+    assert _Runner.messages == ["görev A"]
+    assert [c for _, c in _rows(db, cid)].count("görev A") == 1
+    assert db.count_turn_inputs(cid) == 0
+
+
+async def test_inputs_carried_by_a_user_turn_that_fails_to_open_are_kept(db, router, monkeypatch):
+    cid = _chat(db)
+    db.add_turn_input(cid, "system", "bekleyen sonuç", "background")
+    _flaky_turn_model(monkeypatch, 2)   # 1st call: the queued frame; 2nd: the opening
+    frames = await _http_turn(router, cid, "bir")
+    assert frames[-1]["type"] == "error"
+    await _idle(cid)
+    assert _Runner.messages == ["bekleyen sonuç"]
+
+
+async def test_a_wake_turn_that_waited_sees_the_previous_answer(db, router):
+    cid = _chat(db)
+    _Runner.hold = asyncio.Event()
+    _Runner.script = ["hold", ("response", {"content": "ILK CEVAP"}), DONE]
+    first = asyncio.create_task(_http_turn(router, cid, "soru bir"))
+    await asyncio.sleep(0.02)
+    wake_queue.issue_ticket(cid, ["tasks_done|derleme"])
+    wake = asyncio.create_task(_http_turn(router, cid, "x", origin="wake"))
+    await asyncio.sleep(0.02)
+    _Runner.hold.set()
+    await asyncio.gather(first, wake)
+    kw = _Runner.kwargs[1]
+    assert "ILK CEVAP" in kw["context"]
+    assert any("ILK CEVAP" in t["text"] for t in kw["api_history"])
+
+
+async def test_the_first_of_two_waiting_messages_does_not_see_the_second(db, router):
+    cid = _chat(db)
+    _Runner.hold = asyncio.Event()
+    _Runner.script = ["hold", ("response", {"content": "C"}), DONE]
+    turn_runner.start_background_turn(cid, "arka plan")
+    await asyncio.sleep(0.02)
+    one = asyncio.create_task(_http_turn(router, cid, "BIRINCI-MESAJ"))
+    await asyncio.sleep(0.01)
+    two = asyncio.create_task(_http_turn(router, cid, "IKINCI-MESAJ"))
+    await asyncio.sleep(0.01)
+    turn_runner.start_background_turn(cid, "SONRAKI-SONUC")
+    _Runner.hold.set()
+    await asyncio.gather(one, two)
+    await _idle(cid)
+    first = _Runner.kwargs[1]
+    assert _Runner.messages[1] == "BIRINCI-MESAJ\n\nSONRAKI-SONUC"
+    assert "IKINCI-MESAJ" not in first["context"]
+    assert all("IKINCI-MESAJ" not in t["text"] for t in first["api_history"])
+    assert "BIRINCI-MESAJ" in _Runner.kwargs[2]["context"]
+
+
+async def test_a_deleted_chat_whose_waiting_window_closes_leaves_nothing(db, router):
+    cid = _chat(db)
+    _Runner.hold = asyncio.Event()
+    _Runner.script = ["hold", ("response", {"content": "C"}), DONE]
+    first = asyncio.create_task(_http_turn(router, cid, "bir"))
+    await asyncio.sleep(0.02)
+    second = asyncio.create_task(_http_turn(router, cid, "iki"))
+    await asyncio.sleep(0.02)
+    await _endpoint(router, "/conversations/{conv_id}")(conv_id=cid, x_session_token="")
+    second.cancel()
+    await asyncio.gather(second, return_exceptions=True)
+    _Runner.hold.set()
+    await asyncio.gather(first, return_exceptions=True)
+    await _idle(cid)
+    await asyncio.sleep(0.05)
+    with sqlite3.connect(db.db_path) as c:
+        assert c.execute("SELECT COUNT(*) FROM turn_inputs WHERE conversation_id = ?",
+                         (cid,)).fetchone()[0] == 0
+    assert not turn_runner.background_errors(cid) and not turn_runner._TASKS
+    assert _Runner.messages == ["bir"]
+
+
+@pytest.mark.parametrize("delete", ["single", "family"])
+def test_deleting_a_chat_removes_its_pending_inputs_and_settings(db, delete):
+    cid = _chat(db)
+    keep = _chat(db)
+    for c in (cid, keep):
+        db.add_turn_input(c, "system", "sonuç", "background")
+        db.save_turn_settings(c, 1, "en", None, "high", "high", True)
+    if delete == "single":
+        db.delete_conversation(cid)
+    else:
+        db.delete_conversation_family(cid)
+    with sqlite3.connect(db.db_path) as c:
+        for table in ("turn_inputs", "turn_settings"):
+            counts = dict(c.execute(f"SELECT conversation_id, COUNT(*) FROM {table} "
+                                    "GROUP BY conversation_id").fetchall())
+            assert counts == {keep: 1}, table
+
+
+async def test_compaction_keeps_an_input_still_pending_for_a_later_turn(db, router, monkeypatch):
+    cid = _chat(db)
+    _Runner.hold = asyncio.Event()
+    _Runner.script = ["hold", ("response", {"content": "A-CEVAP"}), DONE]
+    first = asyncio.create_task(_http_turn(router, cid, "soru bir"))
+    await asyncio.sleep(0.02)
+    turn_runner.start_background_turn(cid, "ONEMLI SONUC")
+    wake_queue.issue_ticket(cid, ["tasks_done|derleme"])
+    wake = asyncio.create_task(_http_turn(router, cid, "x", origin="wake"))
+    await asyncio.sleep(0.02)
+    orig_run = _Runner.run
+
+    async def run(self, message):
+        if "derleme" in message:
+            # An API turn's auto-compaction through the last row it was given.
+            hist = self.kw["api_history"]
+            self.compaction_store("OZET", hist[-1]["id"] if hist else None)
+        async for ev in orig_run(self, message):
+            yield ev
+
+    monkeypatch.setattr(_Runner, "run", run)
+    _Runner.hold.set()
+    await asyncio.gather(first, wake)
+    await _idle(cid)
+    assert any("ONEMLI SONUC" in m for m in _Runner.messages)

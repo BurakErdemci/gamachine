@@ -406,3 +406,65 @@ def test_start_without_executor_refuses_loudly(monkeypatch):
     with pytest.raises(RuntimeError):
         turn_runner.start_background_turn(1, "x")
     assert turn_runner.start_background_turn(1, "  ") == "ignored"
+
+
+async def test_an_unheard_end_reported_while_the_stream_closes_is_not_lost(fake):
+    # The SDK turn can end during the stream's closing (its context read),
+    # before the turn body marks itself detached: that end must still count.
+    async def closing(turn):
+        try:
+            yield DONE
+            await asyncio.Event().wait()
+        finally:
+            turn_runner.end_detached(26)
+            turn.detached = True
+
+    frames = turn_runner.run_turn(_user(26), closing)
+    await frames.__anext__()
+    await frames.aclose()
+    assert not turn_runner.busy(26)
+    assert turn_runner.start_background_turn(26, "next") == "started"
+    await _idle(26)
+
+
+async def test_a_waiting_wake_turn_does_not_take_a_detached_hold(fake):
+    ran = []
+
+    async def body(turn):
+        ran.append(turn.origin)
+        if turn.message == "hello":
+            try:
+                yield DONE
+                await asyncio.Event().wait()
+            finally:
+                turn.detached = True
+        else:
+            yield DONE
+
+    user = turn_runner.run_turn(_user(27), body)
+    await user.__anext__()
+    wake = turn_runner.TurnInput(conversation_id=27, message="w", origin="wake")
+    task = asyncio.create_task(_drain(turn_runner.run_turn(wake, body)))
+    await asyncio.sleep(0.01)
+    await user.aclose()    # window closed; the provider turn runs on
+    await asyncio.sleep(0.02)
+    assert ran == ["user"] and turn_runner.busy(27)
+    # A user message arriving now may take it over, ahead of the wake turn,
+    # which then runs after it.
+    assert await asyncio.wait_for(_drain(turn_runner.run_turn(_user(27, "next"), body)), 1) == [DONE]
+    await asyncio.wait_for(task, 1)
+    assert ran == ["user", "user", "wake"]
+
+
+async def test_a_wake_turn_waiting_on_a_detached_hold_runs_when_it_ends(fake):
+    async def detaching(turn):
+        turn.detached = True
+        yield DONE
+
+    await _drain(turn_runner.run_turn(_user(28), detaching))
+    wake = turn_runner.TurnInput(conversation_id=28, message="w", origin="wake")
+    task = asyncio.create_task(_drain(turn_runner.run_turn(wake, fake)))
+    await asyncio.sleep(0.02)
+    assert not task.done()
+    turn_runner.end_detached(28)
+    assert await asyncio.wait_for(task, 1) == [DONE]

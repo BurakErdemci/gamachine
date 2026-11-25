@@ -98,21 +98,26 @@ Executor = Callable[[TurnInput], AsyncIterator[str]]
 
 
 class _Waiter:
-    __slots__ = ("loop", "fut", "handed")
+    __slots__ = ("loop", "fut", "handed", "takeover")
 
-    def __init__(self, loop):
+    def __init__(self, loop, takeover: bool):
         self.loop = loop
         self.fut = loop.create_future()
         self.handed = False
+        # A real user message, which may take a detached turn's hold over.
+        self.takeover = takeover
 
 
 class _Gate:
-    __slots__ = ("busy", "loop", "detached", "timer", "failed_opens", "waiters")
+    __slots__ = ("busy", "loop", "detached", "end_seen", "timer", "failed_opens", "waiters")
 
     def __init__(self):
         self.busy = False
         self.loop = None
         self.detached = False
+        # The provider reported the end of its unheard turn before the turn's
+        # stream finished closing (the hold was not taken yet).
+        self.end_seen = False
         self.timer = None
         self.failed_opens = 0
         self.waiters: Deque[_Waiter] = deque()
@@ -172,7 +177,7 @@ def _pending(conv_id: int) -> bool:
     if _HAS_PENDING is None:
         return False
     try:
-        return _HAS_PENDING(conv_id) is True
+        return bool(_HAS_PENDING(conv_id))
     except Exception:
         logger.exception("[turn-gate] conv=%s pending inputs not read", conv_id)
         return False
@@ -182,7 +187,24 @@ def _take(g: _Gate, loop) -> None:
     """Make the caller the gate's owner; caller holds _LOCK."""
     if g.timer is not None:
         g.timer.cancel()
-    g.busy, g.loop, g.detached, g.timer = True, loop, False, None
+    g.busy, g.loop, g.detached, g.timer, g.end_seen = True, loop, False, None, False
+
+
+def _hand(g: _Gate, takeover_only: bool = False) -> bool:
+    """Hand the gate to the first live waiter (a takeover waiter if asked);
+    caller holds _LOCK."""
+    for w in list(g.waiters):
+        if w.fut.done() or w.loop.is_closed():
+            g.waiters.remove(w)  # cancelled while waiting
+            continue
+        if takeover_only and not w.takeover:
+            continue
+        g.waiters.remove(w)
+        w.handed = True
+        g.loop, g.end_seen = w.loop, False
+        w.loop.call_soon_threadsafe(_resolve, w)
+        return True
+    return False
 
 
 def _resolve(w: _Waiter) -> None:
@@ -201,13 +223,7 @@ def _release(conv_id: int) -> None:
         if g.timer is not None:
             g.timer.cancel()
         g.detached, g.timer = False, None
-        while g.waiters:
-            w = g.waiters.popleft()
-            if w.fut.done() or w.loop.is_closed():
-                continue  # cancelled while waiting
-            w.handed = True
-            g.loop = w.loop
-            w.loop.call_soon_threadsafe(_resolve, w)
+        if _hand(g):
             return
         if (not _SHUTTING_DOWN and g.failed_opens < MAX_FAILED_OPENS
                 and g.loop is not None and not g.loop.is_closed() and _pending(conv_id)):
@@ -228,9 +244,12 @@ def _hold_detached(conv_id: int) -> None:
         if g is None or not g.busy:
             return
         live = g.loop is not None and not g.loop.is_closed()
-        if g.waiters or not live:
-            hold = False  # a waiting HTTP turn may take a detached turn over anyway
+        if g.end_seen or not live:
+            hold = False  # its provider turn already ended
+        elif _hand(g, takeover_only=True):
+            return  # a waiting user message takes it over, as it may at entry
         else:
+            # Wake and other waiters wait for the provider turn's end.
             g.detached, hold = True, True
             g.timer = g.loop.call_later(DETACHED_HOLD_MAX_S, end_detached, conv_id)
     if not hold:
@@ -238,10 +257,15 @@ def _hold_detached(conv_id: int) -> None:
 
 
 def end_detached(conv_id: int) -> None:
-    """A detached provider turn of this chat ended (or was stopped): free the chat."""
+    """A provider turn of this chat that no stream hears ended (or was
+    stopped): free the chat. An end that arrives while the turn's stream is
+    still closing is remembered, so the hold is never taken for it."""
     with _LOCK:
         g = _GATES.get(conv_id)
-        if g is None or not g.detached:
+        if g is None or not g.busy:
+            return
+        if not g.detached:
+            g.end_seen = True
             return
     _release(conv_id)
 
@@ -314,10 +338,12 @@ async def run_turn(turn: TurnInput, executor: Executor) -> AsyncIterator[str]:
     w = None
     with _LOCK:
         g = _gate(conv)
-        if not g.busy or (turn.origin == "user" and g.detached and not g.waiters):
+        takeover = turn.http and turn.origin == "user"
+        if not g.busy or (takeover and g.detached
+                          and not any(w.takeover for w in g.waiters)):
             _take(g, loop)
         else:
-            w = _Waiter(loop)
+            w = _Waiter(loop, takeover)
             g.waiters.append(w)
     if w is not None:
         try:
