@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const nodeRequire = createRequire(import.meta.url)
 const keygen = nodeRequire('../scripts/update-keygen.js')
-const { signRelease } = nodeRequire('../scripts/sign-release.js')
+const { signRelease, parseArgs } = nodeRequire('../scripts/sign-release.js')
 
 let dir: string
 let repo: string
@@ -137,7 +137,7 @@ describe('sign-release', () => {
   const PASS = 'correct horse battery'
   const manifest = (version: string) => `version: ${version}\nfiles:\n  - url: a.exe\n    sha512: AAAABBBBCCCCDDDD==\npath: a.exe\nsha512: AAAABBBBCCCCDDDD==\n`
 
-  function rig(opts: { tag?: string; draft?: boolean; version?: string; publicKeys?: string[] } = {}) {
+  function rig(opts: { tag?: string; draft?: boolean; version?: string; publicKeys?: string[]; assets?: string[] } = {}) {
     const { publicKey, privateKey } = generateKeyPairSync('ed25519', {
       publicKeyEncoding: { type: 'spki', format: 'pem' },
       privateKeyEncoding: { type: 'pkcs8', format: 'pem', cipher: 'aes-256-cbc', passphrase: PASS },
@@ -152,9 +152,12 @@ describe('sign-release', () => {
     const gh = (args: string[]) => {
       calls.push(args)
       if (args[1] === 'list') return JSON.stringify([{ tagName: opts.tag ?? 'v1.2.3', isDraft: opts.draft ?? true }])
+      const assets = opts.assets ?? ['latest.yml', 'latest-mac.yml']
+      if (args[1] === 'view') return JSON.stringify({ assets: assets.map((name) => ({ name })) })
       if (args[1] === 'download') {
         const into = args[args.indexOf('--dir') + 1]
-        for (const n of ['latest.yml', 'latest-mac.yml']) writeFileSync(path.join(into, n), manifest(opts.version ?? '1.2.3'))
+        const patterns = args.filter((_a, i) => args[i - 1] === '--pattern')
+        for (const n of assets.filter((a) => patterns.includes(a))) writeFileSync(path.join(into, n), manifest(opts.version ?? '1.2.3'))
       }
       if (args[1] === 'upload') for (const f of args.filter((a) => a.endsWith('.sig'))) uploads[path.basename(f)] = readFileSync(f, 'utf8')
       return ''
@@ -162,7 +165,7 @@ describe('sign-release', () => {
     const deps = { gh, promptHidden: vi.fn(async () => PASS), publicKeys: opts.publicKeys ?? [publicKey], log: vi.fn(), tmpDir: scratch }
     return { keyPath, calls, uploads, deps, publicKey, scratch }
   }
-  const run = (r: ReturnType<typeof rig>, keyPath = r.keyPath, tag = 'v1.2.3') => signRelease(tag, keyPath, r.deps)
+  const run = (r: ReturnType<typeof rig>, keyPath = r.keyPath, tag = 'v1.2.3', opts = {}) => signRelease(tag, keyPath, r.deps, opts)
 
   it('signs both manifests of a draft, verifies against the embedded keys and uploads the signatures', async () => {
     const r = rig()
@@ -173,6 +176,28 @@ describe('sign-release', () => {
     }
     expect(r.calls.at(-1)).toContain('--clobber')
     expect(readdirSync(r.scratch)).toEqual([])
+  })
+
+  it('without the flag a draft missing latest-mac.yml is refused, never silently skipped', async () => {
+    const r = rig({ assets: ['latest.yml'] })
+    await expect(run(r)).rejects.toThrow(/latest-mac\.yml is missing/)
+    expect(r.calls.some((c) => c[1] === 'upload')).toBe(false)
+  })
+
+  it('--skip-mac-manifest signs latest.yml only, once latest-mac.yml is gone from the draft', async () => {
+    const r = rig({ assets: ['latest.yml', 'Gamachine-1.2.3-arm64.dmg'] })
+    await expect(run(r, r.keyPath, 'v1.2.3', { skipMacManifest: true })).resolves.toBe(true)
+    expect(Object.keys(r.uploads)).toEqual(['latest.yml.sig'])
+    expect(r.deps.log).toHaveBeenCalledWith(expect.stringContaining('macOS builds will not see v1.2.3'))
+    for (const left of [['latest.yml', 'latest-mac.yml'], ['latest.yml', 'latest-mac.yml.sig']]) {
+      const stale = rig({ assets: left })
+      await expect(run(stale, stale.keyPath, 'v1.2.3', { skipMacManifest: true })).rejects.toThrow(/delete latest-mac\.yml/)
+      expect(stale.calls.some((c) => c[1] === 'upload')).toBe(false)
+      expect(stale.deps.promptHidden).not.toHaveBeenCalled()
+    }
+    expect(parseArgs(['v4.0.4', '/k.pem', '--skip-mac-manifest'])).toEqual({ tag: 'v4.0.4', keyPath: '/k.pem', skipMacManifest: true })
+    expect(parseArgs(['v4.0.4', '/k.pem'])).toMatchObject({ skipMacManifest: false })
+    expect(() => parseArgs(['v4.0.4', '/k.pem', '--skip-mac'])).toThrow(/unknown option/)
   })
 
   it('refuses an unencrypted private key before asking for a passphrase', async () => {
