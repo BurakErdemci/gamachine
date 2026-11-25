@@ -33,6 +33,50 @@ def run(coro):
     return asyncio.run(coro)
 
 
+# Loopback ports of the fakes a test started; every other HTTP target fails the test.
+_ALLOWED_PORTS: set = set()
+
+
+@pytest.fixture(autouse=True)
+def port_guard(monkeypatch):
+    """No HTTP call of this process may leave for an unstubbed target. localhost:8000 is the owner's
+    live app, and a turn-2 fixture once reached it through an unstubbed group. Covers httpx (backend,
+    mail and browser-settings calls) and http.client (the Unity MCP bridge); the spawned servers get
+    the fakes' URLs in their entry env. A blocked call raises and is recorded, and the test fails at
+    teardown even if product code swallowed the error."""
+    import http.client
+    import httpx
+    blocked = []
+
+    def check(host, port):
+        if host != "127.0.0.1" or port not in _ALLOWED_PORTS:
+            blocked.append(f"{host}:{port}")
+            raise OSError(f"test port guard: HTTP to {host}:{port} is not a fake of this test")
+
+    real_async_send, real_send = httpx.AsyncClient.send, httpx.Client.send
+    real_connect = http.client.HTTPConnection.connect
+
+    async def async_send(self, request, *args, **kwargs):
+        check(request.url.host, request.url.port)
+        return await real_async_send(self, request, *args, **kwargs)
+
+    def send(self, request, *args, **kwargs):
+        check(request.url.host, request.url.port)
+        return real_send(self, request, *args, **kwargs)
+
+    def connect(self):
+        check(self.host, self.port)
+        return real_connect(self)
+
+    monkeypatch.setattr(httpx.AsyncClient, "send", async_send)
+    monkeypatch.setattr(httpx.Client, "send", send)
+    monkeypatch.setattr(http.client.HTTPConnection, "connect", connect)
+    yield blocked
+    _ALLOWED_PORTS.clear()
+    if blocked:
+        pytest.fail(f"HTTP left for unstubbed targets: {sorted(set(blocked))}")
+
+
 @pytest.fixture(autouse=True)
 def clean_state(monkeypatch):
     approval_mode._reset_for_tests()
@@ -42,6 +86,19 @@ def clean_state(monkeypatch):
     yield
     script_tool._BRIDGES.clear()
     approval_mode._reset_for_tests()
+
+
+def test_port_guard_blocks_the_default_backend_url(port_guard):
+    import httpx
+
+    async def probe():
+        async with httpx.AsyncClient(timeout=1.0) as client:
+            await client.get("http://localhost:8000/browser/settings")
+
+    with pytest.raises(OSError, match="test port guard"):
+        run(probe())
+    assert port_guard == ["localhost:8000"]
+    port_guard.clear()  # the block itself is what this test expects
 
 
 # ── a fake Unity MCP server ──────────────────────────────────────────────────
@@ -102,6 +159,7 @@ class FakeUnity:
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}/mcp"
+        _ALLOWED_PORTS.add(self.server.server_address[1])
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
     def close(self):
@@ -501,6 +559,7 @@ class FakeBackend:
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
+        _ALLOWED_PORTS.add(self.server.server_address[1])
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
     def paths(self, method=None):

@@ -153,7 +153,7 @@ def test_codex_guide_follows_desired_computer_use_only_on_first_turn(
 
     asyncio.run(scenario())
     desired = enabled and not read_only
-    expected = guide.with_computer_use(original) if desired else original
+    expected = guide.with_script_tool(guide.with_computer_use(original) if desired else original)
     assert messages == [expected + "\n\nfirst", "second", expected + "\n\nnew thread"]
     assert all(option["computer_use"] is desired for option in options)
     assert current._agent_guide == original

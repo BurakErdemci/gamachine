@@ -3779,6 +3779,8 @@ class AgentRunner:
                 _session_guide = agent_guide.with_browser_use(_session_guide)
             if desired_connectors[0]:
                 _session_guide = agent_guide.with_connectors(_session_guide)
+            # Codex mounts the unityai server, which serves run_script.
+            _session_guide = agent_guide.with_script_tool(_session_guide)
         # The thread holds the guide from its first turn until a compaction
         # (codex_session forgets it there) or a new thread on a dead app-server.
         _briefing = agent_guide.briefing_of(session)

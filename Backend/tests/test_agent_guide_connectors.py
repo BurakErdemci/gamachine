@@ -181,12 +181,12 @@ def test_codex_guide_flag_and_rebuild_follow_the_connectors_set(monkeypatch, rea
     on = (("blender",), ROOT)
     if read_only:
         assert [o["connectors"] for o in options] == [((), "")] * 3
-        assert closed == [] and messages[0] == original + "\n\nfirst"
+        assert closed == [] and messages[0] == guide.with_script_tool(original) + "\n\nfirst"
     else:
         assert [o["connectors"] for o in options] == [on, on, ((), "")]
         assert closed == [CHAT]
-        assert messages == [guide.with_connectors(original) + "\n\nfirst", "second",
-                            original + "\n\nswitched off"]
+        assert messages == [guide.with_script_tool(guide.with_connectors(original)) + "\n\nfirst", "second",
+                            guide.with_script_tool(original) + "\n\nswitched off"]
 
 
 def test_codex_thread_config_adds_connectors_unless_read_only(monkeypatch, ready):

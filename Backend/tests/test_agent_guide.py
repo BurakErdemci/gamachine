@@ -282,7 +282,7 @@ def test_agy_guide_and_hint_only_on_a_new_process_not_on_a_kept_one():
             lines = harness.processes[0].stdin.lines
             first = json.loads(lines[0])["message"]["content"]
             second = json.loads(lines[1])["message"]["content"]
-            assert first == GUIDE + "\n\nPATCHED_HINT\n" + "first"
+            assert first == guide.with_script_tool(GUIDE) + "\n\nPATCHED_HINT\n" + "first"
             assert first.count(MARKER) == 1 and first.count("PATCHED_HINT") == 1
             assert second == "second"
         finally:
@@ -352,10 +352,10 @@ def test_codex_only_first_turn_of_each_thread_includes_guide(monkeypatch, contex
         await collect(current._run_codex_session("new thread"))
     asyncio.run(scenario())
     assert [message.count(MARKER) for message in messages] == [1, 0, 1]
-    assert messages[0].startswith(GUIDE) and messages[0].index(MARKER) < messages[0].index("first")
+    assert messages[0].startswith(guide.with_script_tool(GUIDE)) and messages[0].index(MARKER) < messages[0].index("first")
     assert messages[0].endswith(context or "first")
     assert messages[1] == "second"
-    assert messages[2].startswith(GUIDE) and messages[2].index(MARKER) < messages[2].index("new thread")
+    assert messages[2].startswith(guide.with_script_tool(GUIDE)) and messages[2].index(MARKER) < messages[2].index("new thread")
     assert messages[2].endswith(context or "new thread")
 
 

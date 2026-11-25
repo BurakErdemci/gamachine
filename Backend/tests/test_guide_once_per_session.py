@@ -164,6 +164,8 @@ def test_agy_guide_and_notes_once_per_process_and_again_on_a_new_one():
     from . import test_agy_stream_session as fixture
 
     composed = guide.compose("en", project_open=True, unity_state="connected")
+    # agy mounts the unityai server, so its guide carries the run_script line.
+    sent = guide.with_script_tool(composed)
 
     async def scenario():
         harness = fixture.TestAgyStreamSession()
@@ -186,13 +188,13 @@ def test_agy_guide_and_notes_once_per_process_and_again_on_a_new_one():
                 return contents[-1]
 
             notes = (("unity", "U1"), ("mode", "M1"))
-            assert await turn("first", notes, model="gemini-4-argon") == composed + "\n\nU1\n\nM1\n\nfirst"
+            assert await turn("first", notes, model="gemini-4-argon") == sent + "\n\nU1\n\nM1\n\nfirst"
             changed = (("unity", "U2"), ("mode", "M1"))
             assert await turn("second", changed, model="gemini-4-argon") == "U2\n\nsecond"
             assert len(harness.processes) == 1
             respawned = await turn("third", changed, model="gemini-3.8-flash")
             assert len(harness.processes) == 2
-            assert respawned == composed + "\n\nU2\n\nM1\n\nthird"
+            assert respawned == sent + "\n\nU2\n\nM1\n\nthird"
             assert await turn("fourth", changed, model="gemini-3.8-flash") == "fourth"
         finally:
             await harness.asyncTearDown()
