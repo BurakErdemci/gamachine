@@ -188,3 +188,43 @@ async def test_read_only_session_denies_script_batch_with_batch_message(tmp_path
     assert ev is None
     assert isinstance(res, PermissionResultDeny)
     assert "batch_execute refused" in res.message
+
+
+def test_chaining_reference_and_non_identifier_tool_names_are_refused():
+    b1 = {
+        "commands": [
+            {"tool": "manage_gameobject", "params": {"action": "create", "name": "manage_script"}},
+            {
+                "tool": "batch_execute",
+                "params": {
+                    "commands": [
+                        {"tool": "$[0].data.name", "params": {"action": "create", "path": "Assets/A.cs"}},
+                    ]
+                },
+            },
+        ]
+    }
+    assert batch_carries_script_write(b1) is True
+    assert batch_carries_script_write({"commands": [{"tool": "$[0].data.name", "params": {}}]}) is True
+    assert batch_carries_script_write({"commands": [{"tool": "manage-script", "params": {}}]}) is True
+    assert batch_carries_script_write({"commands": [{"tool": "manage script", "params": {}}]}) is True
+
+
+def test_duplicate_folded_params_keys_are_refused():
+    payload = {"commands": [{"tool": "manage_gameobject", "params": {}, "Params": {}}]}
+    assert batch_carries_script_write(payload) is True
+
+
+def test_script_tool_without_params_or_with_none_params_is_refused():
+    assert batch_carries_script_write({"commands": [{"tool": "delete_script"}]}) is True
+    assert batch_carries_script_write({"commands": [{"tool": "delete_script", "params": None}]}) is True
+
+
+async def test_balanced_mode_allows_routine_batch_without_card(tmp_path, reset_approval_mode):
+    approval_mode.set_mode("balanced")
+    s = _mk_session(cwd=str(tmp_path), auto_approve=False, approval_timeout=2.0)
+    payload = {"commands": [{"tool": "manage_gameobject", "params": {"action": "create", "name": "A"}}]}
+    res, ev = await _drive_gate(s, "mcp__unityMCP__batch_execute", payload, approve=False)
+    assert ev is None
+    assert isinstance(res, PermissionResultAllow)
+

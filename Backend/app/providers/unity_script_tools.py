@@ -14,6 +14,7 @@ four aliases reaching the same writes.
 the chat (SDK) path, since a nested command can carry a script writer.
 """
 
+import re
 from collections.abc import Mapping
 from typing import Any, Optional
 
@@ -32,6 +33,7 @@ CLI_DISALLOWED_UNITY_TOOLS = DISALLOWED_UNITY_TOOLS + ("mcp__unityMCP__batch_exe
 
 _UNITY_PREFIX = "mcp__unityMCP__"
 _UNITY_MAX_DEPTH = 8
+_PLAIN_TOOL_RE = re.compile(r"[A-Za-z0-9_]+")
 
 
 def _fold(key: Any) -> Optional[str]:
@@ -57,6 +59,9 @@ def batch_carries_script_write(args: Any, _depth: int = 0) -> bool:
             return True
         tool = tools[0]
         bare = tool[len(_UNITY_PREFIX):] if tool.startswith(_UNITY_PREFIX) else tool
+        # Refuse non-identifier tool names: the editor resolves "$[i]" references inside nested commands before dispatch.
+        if not _PLAIN_TOOL_RE.fullmatch(bare):
+            return True
         if bare in UNITY_SCRIPT_WRITE_TOOLS:
             return True
         if bare == "batch_execute":
