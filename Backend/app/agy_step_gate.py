@@ -602,82 +602,116 @@ def _reads_only_decision(raw: bytes) -> dict:
     return _deny(UNKNOWN_STATE_REASON)
 
 
-def decide(raw: bytes, state_path: str, windows: bool = None, cwd: str = None) -> dict:
+def _replace_with_retry(src: str, dst: str, budget_s: float = 2.0) -> None:
+    """Replace dst with src, retrying on Windows sharing violations (PermissionError)."""
+    deadline = time.monotonic() + budget_s
+    while True:
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.01)
+
+
+def _read_json_with_retry(path: str, budget_s: float = 0.5):
+    """Read and decode JSON from path, retrying transient sharing/half-visible errors."""
+    deadline = time.monotonic() + budget_s
+    while True:
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except FileNotFoundError:
+            raise
+        except (PermissionError, json.JSONDecodeError):
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.01)
+
+
+def _decide(raw: bytes, state_path: str, windows: bool = None, cwd: str = None) -> tuple:
     windows = (sys.platform == "win32") if windows is None else windows
     cwd = os.getcwd() if cwd is None else cwd
     try:
-        with open(state_path, encoding="utf-8") as f:
-            state = json.load(f)
+        state = _read_json_with_retry(state_path)
         mode = state["mode"]
         launcher = state["launcher"]
     except Exception:
-        return _deny(FAIL_REASON)
+        return _deny(FAIL_REASON), None
     if mode == SIDE_MODE:
-        return _side_decision(raw)
+        return _side_decision(raw), mode
     if mode == CLOSED_MODE:
-        return _deny(CLOSED_REASON)
+        return _deny(CLOSED_REASON), mode
     if mode not in ("auto", BALANCED_MODE):
-        return _reads_only_decision(raw)
+        return _reads_only_decision(raw), mode
     base = _agy_workspace(raw)
     refusal = _unity_file_refusal(raw, base)
     if refusal is not None:
-        return _deny(refusal.message)
+        return _deny(refusal.message), mode
     secret = _secret_refusal(raw, cwd, base)
     if secret is not None:
-        return _deny(secret)
+        return _deny(secret), mode
     if mode == "auto":
-        return {"decision": "allow"}
+        return {"decision": "allow"}, mode
     try:
         call = json.loads(raw.decode("utf-8"))["toolCall"]
         name = call["name"]
     except Exception:
-        return _deny(FAIL_REASON)
+        return _deny(FAIL_REASON), mode
     if not isinstance(name, str):
-        return _deny(FAIL_REASON)
+        return _deny(FAIL_REASON), mode
     if name in MAIN_READ_TOOLS:
-        return {"decision": "allow"}
+        return {"decision": "allow"}, mode
     if name == MCP_CALL_TOOL:
         # Unchanged from before the hook saw it: the Unity MCP server's own
         # approval gate decides its calls, in every provider.
-        return {"decision": "allow"}
+        return {"decision": "allow"}, mode
     if name != RUN_TOOL and name not in WRITE_TOOLS:
-        return _deny(UNKNOWN_TOOL_REASON.format(name=name))
+        return _deny(UNKNOWN_TOOL_REASON.format(name=name)), mode
     if name == RUN_TOOL:
         try:
             command = call["args"]["CommandLine"]
         except Exception:
-            return _deny(FAIL_REASON)
+            return _deny(FAIL_REASON), mode
         if unityai_command_allowed(command, launcher, windows):
-            return {"decision": "allow"}
+            return {"decision": "allow"}, mode
         risk = _balanced_risk(name, call.get("args"), cwd)
         if not risk.critical:
-            return {"decision": "allow"}
-        return _balanced_deny("command", risk)
+            return {"decision": "allow"}, mode
+        return _balanced_deny("command", risk), mode
     if name in NATIVE_WRITERS:
         # Before the routine check too: a routine write_file or edit_file with
         # an argument nobody measured is refused, not waved through.
         try:
             agy_native_approval._normalized_args(call.get("args"), name)
         except ValueError as error:
-            return _deny(str(error))
+            return _deny(str(error)), mode
     risk = _balanced_risk(name, call.get("args"), cwd, base)
     if not risk.critical:
-        return {"decision": "allow"}
+        return {"decision": "allow"}, mode
     if name not in NATIVE_WRITERS:
-        return _balanced_deny("file write" if name in _FILE_WRITERS else "call", risk)
+        return _balanced_deny("file write" if name in _FILE_WRITERS else "call", risk), mode
     workspace = _hook_workspace(cwd)
     if not workspace:
-        return _deny("Native approval requires a hook workspace.")
+        return _deny("Native approval requires a hook workspace."), mode
     if not base and any(_needs_base(t) for t in _write_targets(call.get("args"))):
         # The card would have to guess which file agy writes.
-        return _deny(RELATIVE_WRITE_REASON)
+        return _deny(RELATIVE_WRITE_REASON), mode
     token = agy_native_approval.state_path.set(state_path)
     try:
         allowed, reason = agy_native_approval.request_native_write(
             name, call.get("args"), workspace, base=base or workspace)
-        return {"decision": "allow"} if allowed is True else _deny(reason)
+        return ({"decision": "allow"} if allowed is True else _deny(reason)), mode
     finally:
         agy_native_approval.state_path.reset(token)
+
+
+def decide(raw: bytes, state_path: str, windows: bool = None, cwd: str = None) -> dict:
+    return _decide(raw, state_path, windows=windows, cwd=cwd)[0]
+
+
+_ORIGINAL_DECIDE = decide
 
 
 # One decision per tool call (audit H1, 25 Nov 2026). A call that several
@@ -734,17 +768,12 @@ def _prune_calls(folder: str, now: float) -> None:
 
 def _read_decision(path: str):
     try:
-        with open(path, encoding="utf-8") as f:
-            text = f.read()
+        decision = _read_json_with_retry(path)
     except FileNotFoundError:
         return False
+    except json.JSONDecodeError as err:
+        return None if err.doc == "" else False
     except OSError:
-        return None
-    if not text:
-        return None
-    try:
-        decision = json.loads(text)
-    except ValueError:
         return None
     if not isinstance(decision, dict) or decision.get("decision") not in ("allow", "deny"):
         return False
@@ -753,8 +782,7 @@ def _read_decision(path: str):
 
 def _state_mode(state_path: str):
     try:
-        with open(state_path, encoding="utf-8") as f:
-            return json.load(f)["mode"]
+        return _read_json_with_retry(state_path)["mode"]
     except Exception:
         return None
 
@@ -766,23 +794,28 @@ def _twin_decision(claim: str, state_path: str) -> dict:
         if decision is False:
             return _deny(FAIL_REASON)  # pruned or garbled: nothing to share
         if decision is not None:
-            if decision["decision"] == "allow" and _state_mode(state_path) not in (
-                    "auto", BALANCED_MODE, SIDE_MODE):
-                # Closed (or broken) since the first run decided.
-                return _deny(FAIL_REASON)
-            return decision
+            out = {k: v for k, v in decision.items() if k != "mode"}
+            if decision["decision"] == "allow":
+                recorded_mode = decision.get("mode")
+                current_mode = _state_mode(state_path)
+                if (current_mode not in ("auto", BALANCED_MODE, SIDE_MODE)
+                        or recorded_mode is None or current_mode != recorded_mode):
+                    # Closed, broken, or tightened since the first run decided.
+                    return _deny(FAIL_REASON)
+            return out
         if time.monotonic() >= deadline:
             return _deny(FAIL_REASON)
         time.sleep(_TWIN_POLL_SECONDS)
 
 
-def _record_decision(claim: str, decision: dict) -> None:
+def _record_decision(claim: str, decision: dict, mode=None) -> None:
     folder = os.path.dirname(claim)
+    record = {**decision, "mode": mode if mode is not None else decision.get("mode")}
     fd, tmp = tempfile.mkstemp(dir=folder, prefix=".call-", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(decision, f)
-        os.replace(tmp, claim)
+            json.dump(record, f)
+        _replace_with_retry(tmp, claim)
     except Exception:
         try:
             os.unlink(tmp)
@@ -809,12 +842,17 @@ def decide_once(raw: bytes, state_path: str, windows: bool = None, cwd: str = No
         # a looser decision).
         return decide(raw, state_path, windows=windows, cwd=cwd)
     os.close(fd)
+    mode = None
     try:
-        decision = decide(raw, state_path, windows=windows, cwd=cwd)
+        if decide is _ORIGINAL_DECIDE:
+            decision, mode = _decide(raw, state_path, windows=windows, cwd=cwd)
+        else:
+            decision = decide(raw, state_path, windows=windows, cwd=cwd)
+            mode = _state_mode(state_path)
     except Exception:
         decision = _deny(FAIL_REASON)
     try:
-        _record_decision(claim, decision)
+        _record_decision(claim, decision, mode)
     except Exception:
         # A twin then times out and denies.
         pass
@@ -828,7 +866,7 @@ def write_state(path: str, mode: str, launcher: str, workspace=None) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump({"mode": mode, "launcher": launcher, "workspace": workspace}, f)
-        os.replace(tmp, path)
+        _replace_with_retry(tmp, path)
     except Exception:
         try:
             os.unlink(tmp)

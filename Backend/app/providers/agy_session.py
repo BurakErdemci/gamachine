@@ -715,14 +715,22 @@ def _refuse_beside_retired_child() -> None:
 def _remove_gate_state() -> bool:
     """True when the state file is gone (a hook with no state file denies)."""
     from . import agy_provider
-    try:
-        os.remove(agy_provider.gate_state_path())
-        return True
-    except FileNotFoundError:
-        return True
-    except OSError:
-        logger.error("[agy] gate state could not be removed", exc_info=True)
-        return False
+    path = agy_provider.gate_state_path()
+    deadline = time.monotonic() + 2.0
+    while True:
+        try:
+            os.remove(path)
+            return True
+        except FileNotFoundError:
+            return True
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                logger.error("[agy] gate state could not be removed", exc_info=True)
+                return False
+            time.sleep(0.01)
+        except OSError:
+            logger.error("[agy] gate state could not be removed", exc_info=True)
+            return False
 
 
 def _sync_gate_state() -> bool:
