@@ -2,14 +2,16 @@
 /**
  * Signs the update manifests of a DRAFT GitHub release on the owner's own PC.
  *
- *   node scripts/sign-release.js <tag> <encrypted-key-path>
+ *   node scripts/sign-release.js <tag> <encrypted-key-path> [--skip-mac-manifest]
  *
  * Downloads latest.yml and latest-mac.yml with the gh CLI, signs each with the
  * Ed25519 private key (passphrase asked, hidden), uploads <name>.sig back to the
  * draft. Each signature is first verified against the public keys embedded in
  * main/helpers/update-keys.ts and a manifest whose version differs from the tag
  * is refused; nothing is uploaded otherwise. Publishing the release stays a manual step.
- * See docs/releasing.md.
+ * --skip-mac-manifest signs latest.yml only, for a release Mac builds must not see as an
+ * update (v4.0.4: 4.0.0-4.0.3 crash installing it through Squirrel); latest-mac.yml must
+ * already be deleted from the draft. See docs/releasing.md.
  */
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -47,17 +49,26 @@ function verifies(bytes, signatureB64, publicKeys) {
   });
 }
 
-async function signRelease(tag, keyPath, io = {}) {
+const SKIP_MAC = '--skip-mac-manifest';
+
+async function signRelease(tag, keyPath, io = {}, opts = {}) {
   const run = io.gh || gh;
   const ask = io.promptHidden || promptHidden;
   const publicKeys = io.publicKeys || embeddedPublicKeys();
   const log = io.log || console.log;
 
-  if (!tag || !keyPath) throw new Error('usage: node scripts/sign-release.js <tag> <encrypted-key-path>');
+  if (!tag || !keyPath) throw new Error(`usage: node scripts/sign-release.js <tag> <encrypted-key-path> [${SKIP_MAC}]`);
   const releases = JSON.parse(run(['release', 'list', '--repo', REPO, '--limit', '100', '--json', 'tagName,isDraft']));
   const release = releases.find((r) => r.tagName === tag);
   if (!release) throw new Error(`release ${tag} not found`);
   if (!release.isDraft) throw new Error(`release ${tag} is already published; refusing to sign it`);
+  const manifests = opts.skipMacManifest ? MANIFESTS.filter((m) => m !== 'latest-mac.yml') : MANIFESTS;
+  if (opts.skipMacManifest) {
+    const assets = JSON.parse(run(['release', 'view', tag, '--repo', REPO, '--json', 'assets'])).assets.map((a) => a.name);
+    const left = assets.filter((n) => n === 'latest-mac.yml' || n === 'latest-mac.yml.sig');
+    if (left.length) throw new Error(`${SKIP_MAC}: delete ${left.join(' and ')} from the draft first; nothing signed`);
+    log(`${SKIP_MAC}: latest-mac.yml is not signed; macOS builds will not see ${tag} as an update`);
+  }
 
   const keyText = fs.readFileSync(checkKeyLocation(keyPath), 'utf8');
   if (!keyText.includes('-----BEGIN ENCRYPTED PRIVATE KEY-----')) throw new Error('the private key must be an encrypted PKCS#8 PEM (made by update-keygen.js); refusing an unencrypted key');
@@ -66,9 +77,9 @@ async function signRelease(tag, keyPath, io = {}) {
 
   const dir = fs.mkdtempSync(path.join(io.tmpDir || os.tmpdir(), 'gamachine-sign-'));
   try {
-    run(['release', 'download', tag, '--repo', REPO, '--dir', dir, ...MANIFESTS.flatMap((m) => ['--pattern', m])]);
+    run(['release', 'download', tag, '--repo', REPO, '--dir', dir, ...manifests.flatMap((m) => ['--pattern', m])]);
     const sigFiles = [];
-    for (const name of MANIFESTS) {
+    for (const name of manifests) {
       const file = path.join(dir, name);
       if (!fs.existsSync(file)) throw new Error(`${name} is missing from the release`);
       const bytes = fs.readFileSync(file);
@@ -85,17 +96,30 @@ async function signRelease(tag, keyPath, io = {}) {
       sigFiles.push(sigFile);
     }
     run(['release', 'upload', tag, '--repo', REPO, '--clobber', ...sigFiles]);
-    MANIFESTS.forEach((name) => log(`${name}.sig uploaded; verified against update-keys.ts`));
+    manifests.forEach((name) => log(`${name}.sig uploaded; verified against update-keys.ts`));
     return true;
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
 
-module.exports = { signRelease, verifies, embeddedPublicKeys };
+// Positional <tag> <key>, plus the one flag; anything else is refused rather than ignored.
+function parseArgs(argv) {
+  const flags = argv.filter((a) => a.startsWith('--'));
+  const unknown = flags.filter((f) => f !== SKIP_MAC);
+  if (unknown.length) throw new Error(`unknown option ${unknown.join(' ')}`);
+  const [tag, keyPath, ...extra] = argv.filter((a) => !a.startsWith('--'));
+  if (extra.length) throw new Error(`unexpected argument ${extra.join(' ')}`);
+  return { tag, keyPath, skipMacManifest: flags.includes(SKIP_MAC) };
+}
+
+module.exports = { signRelease, verifies, embeddedPublicKeys, parseArgs };
 
 if (require.main === module) {
-  signRelease(process.argv[2], process.argv[3]).then(
+  Promise.resolve().then(() => {
+    const args = parseArgs(process.argv.slice(2));
+    return signRelease(args.tag, args.keyPath, {}, { skipMacManifest: args.skipMacManifest });
+  }).then(
     (ok) => process.exit(ok ? 0 : 1),
     (e) => {
       console.error(`sign-release: ${e.message}`);
