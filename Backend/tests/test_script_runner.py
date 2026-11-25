@@ -271,6 +271,28 @@ def test_long_output_is_capped_and_saved_in_full(runtime, procs, tmp_path):
     assert "x" * 20000 in full and "line 299" in full
 
 
+@pytest.mark.parametrize("code", ["while (true) {}", "await tools.hang({});"])
+def test_runner_exits_when_its_stdin_closes_even_in_a_busy_loop(runtime, code):
+    """What the OS does when the parent dies; a busy loop never returns to the event loop (audit L-04)."""
+    import json
+    runner = script_tool.runner_path()
+    proc = subprocess.Popen([*runtime, str(runner)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, cwd=str(runner.parent), env=script_tool._child_env(),
+                            creationflags=script_tool._creationflags())
+    try:
+        proc.stdin.write((json.dumps({"type": "start", "code": code, "tools": ["hang"],
+                                      "limits": {"wallMs": 600000}}) + "\n").encode())
+        proc.stdin.flush()
+        time.sleep(1.5)
+        proc.stdin.close()
+        proc.wait(timeout=5)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+            pytest.fail("the runner outlived its closed stdin")
+
+
 def test_unavailable_runtime_is_a_clear_error(monkeypatch):
     monkeypatch.setattr(script_tool, "find_runtime", lambda: None)
     result = run(script_tool.execute("return 1", []))

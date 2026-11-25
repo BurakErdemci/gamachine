@@ -26,7 +26,13 @@ behind the VM.
 
 `kind` is one of `syntax`, `thrown`, `timeout`, `memory`, `call_timeout` (with `callId`),
 `call_limit`, `protocol`, `internal`. A refusal that must end the script is the parent's decision:
-it kills the runner. When stdin closes the runner exits at once, so it cannot outlive its parent.
+it kills the runner. When stdin closes the runner exits at once, so it cannot outlive its parent:
+stdin is read on a worker thread (hence `--allow-worker`), which flags the closed pipe in shared
+memory, and QuickJS's interrupt handler checks that flag, so even a busy loop ends.
+
+Output lines leave in one write per event-loop turn, and the final `done`/`error` line in the same
+write as the calls before it, so the host sees a call the script did not await together with the
+script's end and does not start it.
 
 Limits (defaults; the parent sends its own): `wallMs` 600000, `memoryBytes` 64 MiB, `stackBytes`
 256 KiB, `callTimeoutMs` 300000, `maxCalls` 200, `maxLogBytes` 1 MiB. The wall clock is enforced

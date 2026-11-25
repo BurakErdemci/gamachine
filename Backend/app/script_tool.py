@@ -24,6 +24,7 @@ import asyncio
 import itertools
 import json
 import logging
+import math
 import os
 import secrets
 import shutil
@@ -58,6 +59,8 @@ MEMORY_BYTES = 64 * 1024 * 1024
 MAX_PARALLEL_CALLS = 8
 # The runner enforces the wall clock itself; this is the margin before the host kills it anyway.
 KILL_GRACE_S = 5.0
+# Closing helpers and the runner after a run, even when the caller was cancelled.
+CLEANUP_TIMEOUT_S = 20.0
 RUNS_DIR = (".gamachine", "script-runs")
 
 # Turkish text of the Unity MCP server's refusal (unity-mcp/Server/src/transport/approval_gate.py).
@@ -102,15 +105,59 @@ class ToolGroup(Protocol):
     async def call(self, name: str, args: dict) -> Outcome: ...
 
 
+def _finite_float(text: str):
+    value = float(text)
+    return value if math.isfinite(value) else None
+
+
 def parse_tool_text(text: str) -> Any:
-    """A tool's text result as the script sees it: parsed JSON when it is JSON, else the text."""
+    """A tool's text result as the script sees it: parsed JSON when it is JSON, else the text.
+
+    NaN, Infinity and overflowing numbers (Newtonsoft writes them) become null: the runner speaks
+    strict JSON, and a bare NaN on its stdin ended the whole script (audit C-01)."""
     stripped = text.strip()
     if stripped[:1] in ("{", "[", '"') or stripped in ("true", "false", "null") or _is_number(stripped):
         try:
-            return json.loads(stripped)
+            return json.loads(stripped, parse_constant=lambda _: None, parse_float=_finite_float)
         except ValueError:
             pass
     return text
+
+
+def json_safe(value: Any) -> Any:
+    """`value` with every non-finite float replaced by None (strict JSON for the runner)."""
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {k: json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe(v) for v in value]
+    return value
+
+
+def in_thread(fn: Callable, *args) -> "asyncio.Future":
+    """Runs a blocking call on a daemon thread and returns a future for it. Not asyncio.to_thread:
+    a bridge call cannot be cancelled and may block for its own 240 s deadline, and the default
+    executor's threads are joined when the event loop shuts down."""
+    loop = asyncio.get_running_loop()
+    future = loop.create_future()
+
+    def settle(ok, value):
+        if not future.done():
+            future.set_result(value) if ok else future.set_exception(value)
+
+    def work():
+        try:
+            value, ok = fn(*args), True
+        except BaseException as exc:  # noqa: BLE001 - handed to the awaiting task
+            value, ok = exc, False
+        try:
+            loop.call_soon_threadsafe(settle, ok, value)
+        except RuntimeError:  # the loop is gone; nobody waits any more
+            pass
+
+    threading.Thread(target=work, daemon=True, name="run-script-blocking").start()
+    return future
 
 
 def _is_number(text: str) -> bool:
@@ -242,7 +289,7 @@ class UnityMCPGroup:
         if client is None:
             self.note = "Unity MCP is not running, so no Unity tools were available"
             return []
-        specs, failure = await asyncio.to_thread(client.list_tools)
+        specs, failure = await in_thread(client.list_tools)
         if failure:
             self.note = f"Unity tools unavailable: {failure}"
         return [s for s in specs if s.name not in self._hidden]
@@ -257,7 +304,7 @@ class UnityMCPGroup:
         client = await self._get_client()
         if client is None:
             return Outcome.error("Unity MCP is not running")
-        return await asyncio.to_thread(client.call, name, args)
+        return await in_thread(client.call, name, args)
 
 
 # ── stdio MCP servers (browser, connectors, mail) ───────────────────────────
@@ -266,6 +313,7 @@ class UnityMCPGroup:
 # only start it when the script makes one.
 _STDIO_LISTS: dict = {}
 STDIO_START_TIMEOUT_S = 60.0
+STDIO_CLOSE_TIMEOUT_S = 10.0
 
 
 def _entry_key(entry: dict) -> str:
@@ -285,6 +333,7 @@ class _StdioClient:
         self._ready = asyncio.Event()
         self._stop = asyncio.Event()
         self._task = None
+        self._init_scope = None
 
     async def start(self):
         self._task = asyncio.create_task(self._run())
@@ -297,11 +346,17 @@ class _StdioClient:
             raise RuntimeError(f"{self.params.command}: {self._error or 'did not start'}")
 
     async def _run(self):
+        import anyio
         from mcp import ClientSession
         from mcp.client.stdio import stdio_client
         try:
             async with stdio_client(self.params) as (read, write), ClientSession(read, write) as session:
-                await session.initialize()
+                # aclose() cancels this scope when the child never answers initialize, so the
+                # child is ended by stdio_client's own exit instead of waiting out the close timeout.
+                with anyio.CancelScope() as self._init_scope:
+                    await session.initialize()
+                if self._init_scope.cancel_called or self._stop.is_set():
+                    return
                 self.session = session
                 self._ready.set()
                 await self._stop.wait()
@@ -312,12 +367,22 @@ class _StdioClient:
             self._ready.set()
 
     async def aclose(self):
+        """Lets the child task leave `stdio_client` on its own (which ends the child process).
+
+        Shielded: the MCP SDK cancels a request with an anyio scope, which re-cancels every await
+        here; and never via wait_for, which cancels the task it waits on mid-exit (audit L-01).
+        """
+        import anyio
         self._stop.set()
-        if self._task is not None:
-            try:
-                await asyncio.wait_for(self._task, 10)
-            except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
-                self._task.cancel()
+        if self._init_scope is not None:
+            self._init_scope.cancel()
+        task = self._task
+        if task is None or task.done():
+            return
+        with anyio.move_on_after(STDIO_CLOSE_TIMEOUT_S, shield=True):
+            await asyncio.wait({task})
+        if not task.done():
+            task.cancel()
 
 
 def mcp_result_outcome(name: str, result: Any, stop_marks: Sequence[str] = ()) -> Outcome:
@@ -357,13 +422,19 @@ class StdioServerGroup:
         self._stop_marks = tuple(stop_marks)
         self._client: Optional[_StdioClient] = None
         self._names: Optional[frozenset] = None
+        self._start_lock = asyncio.Lock()
         self.note: Optional[str] = None
 
     async def _session(self):
-        if self._client is None or self._client.session is None:
-            self._client = _StdioClient(self._entry)
-            await self._client.start()
-        return self._client.session
+        # One start at a time: parallel first calls each started a client, and the one replaced
+        # in self._client was never closed (audit, parallel calls after cached discovery).
+        async with self._start_lock:
+            if self._client is None or self._client.session is None:
+                if self._client is not None:
+                    await self._client.aclose()
+                self._client = _StdioClient(self._entry)
+                await self._client.start()
+            return self._client.session
 
     async def list_tools(self) -> list[ToolSpec]:
         key = _entry_key(self._entry)
@@ -466,11 +537,12 @@ def _permission_flags(version: tuple, runner_dir: Path) -> list[str]:
     """Node's permission model as a second wall: the host process may read only the runner folder,
     and cannot write files or start processes. Electron 34 (Node 20) knows only the experimental
     spelling with a wildcard; Node 23.5+ renamed it (measured both, 25 Nov 2026)."""
+    # --allow-worker: the runner reads stdin on a worker thread (see runner.mjs).
     major, minor = version
     if major > 23 or (major == 23 and minor >= 5):
-        return ["--permission", f"--allow-fs-read={runner_dir}"]
+        return ["--permission", f"--allow-fs-read={runner_dir}", "--allow-worker"]
     if major >= 20:
-        return ["--experimental-permission", f"--allow-fs-read={runner_dir}{os.sep}*"]
+        return ["--experimental-permission", f"--allow-fs-read={runner_dir}{os.sep}*", "--allow-worker"]
     return []
 
 
@@ -504,6 +576,8 @@ class CallRecord:
     tool: str
     status: str = "running"  # ok | error | refused | timeout | unfinished
     reason: str = ""
+    unawaited: bool = False  # still running when the script returned
+    started: bool = False  # the tool itself was called (its effect may land)
 
 
 @dataclass
@@ -549,8 +623,13 @@ async def execute(code: str, groups: Sequence[ToolGroup], *, timeout_s: Optional
                   max_timeout_s: float = MAX_TIMEOUT_S) -> ScriptResult:
     started = time.monotonic()
     cap = max(1.0, min(float(MAX_TIMEOUT_S), float(max_timeout_s)))
+    if timeout_s is not None and (isinstance(timeout_s, bool) or not isinstance(timeout_s, (int, float))):
+        return ScriptResult("error", "invalid", timeout_refusal(timeout_s, cap))
     wall_s = float(cap if timeout_s is None else timeout_s)
-    wall_s = max(1.0, min(cap, wall_s))
+    wall_s = max(1.0, min(cap, wall_s)) if math.isfinite(wall_s) else cap
+    # One clock for the whole run: tool discovery, the script and the wait for its last calls
+    # (audit L-02: a Unity MCP that accepted and never answered held discovery for 240 s).
+    wall_end = started + wall_s
     runner = runner_path()
     argv_prefix = runtime if runtime is not None else await asyncio.to_thread(find_runtime)
     if argv_prefix is None or not runner.is_file():
@@ -559,22 +638,59 @@ async def execute(code: str, groups: Sequence[ToolGroup], *, timeout_s: Optional
         return ScriptResult("error", "unavailable", f"run_script is unavailable here: {what}. "
                             "Make the tool calls directly instead.")
 
-    table, notes = await _collect_tools(groups)
-    run_limits = {"wallMs": int(wall_s * 1000), "memoryBytes": MEMORY_BYTES,
-                  "callTimeoutMs": CALL_TIMEOUT_S * 1000, "maxCalls": MAX_CALLS, **(limits or {})}
-    result = ScriptResult("error", notes=notes)
+    result = ScriptResult("error")
     calls: list[CallRecord] = result.calls
-
+    proc: Optional[subprocess.Popen] = None
+    tasks: dict = {}
     try:
-        proc = subprocess.Popen(
-            [*argv_prefix, str(runner)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, cwd=str(runner.parent), env=_child_env(),
-            creationflags=_creationflags())
-    except OSError as exc:
-        await _close_groups(groups)
-        result.kind, result.message = "unavailable", f"run_script could not start its sandbox: {exc}"
-        return result
+        try:
+            table, notes = await asyncio.wait_for(_collect_tools(groups), max(0.1, wall_end - time.monotonic()))
+        except asyncio.TimeoutError:
+            result.kind = "timeout"
+            result.message = (f"finding the tools took longer than the {wall_s:g} s limit (a tool server did "
+                              "not answer); the script did not start")
+            return result
+        result.notes = notes
+        left_ms = max(1000, int((wall_end - time.monotonic()) * 1000))
+        run_limits = {"wallMs": left_ms, "memoryBytes": MEMORY_BYTES,
+                      "callTimeoutMs": CALL_TIMEOUT_S * 1000, "maxCalls": MAX_CALLS, **(limits or {})}
+        try:
+            proc = subprocess.Popen(
+                [*argv_prefix, str(runner)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, cwd=str(runner.parent), env=_child_env(),
+                creationflags=_creationflags())
+        except OSError as exc:
+            result.kind, result.message = "unavailable", f"run_script could not start its sandbox: {exc}"
+            return result
+        await _drive(proc, code, table, run_limits, result, tasks, wall_end + KILL_GRACE_S)
+        if proc.poll() is None:
+            _kill(proc)  # no call can start any more while the last ones are waited for
+        _drop_unstarted(tasks)
+        if result.kind not in ("timeout", "call_timeout") and tasks:
+            await _settle(tasks, result, wall_end)
+        else:
+            _note_unawaited(result)
+    finally:
+        # Shielded: the MCP SDK cancels a request with an anyio scope that re-cancels every await,
+        # which left helper servers running (audit L-01).
+        import anyio
+        with anyio.move_on_after(CLEANUP_TIMEOUT_S, shield=True):
+            for task in list(tasks):
+                task.cancel()
+            if proc is not None:
+                _kill(proc)
+            await _close_groups(groups)
+        result.seconds = time.monotonic() - started
+    for record in calls:
+        if record.status == "running":
+            record.status = "unfinished"
+            record.reason = record.reason or "still running when the run ended; it may still take effect"
+    return result
 
+
+async def _drive(proc, code, table, run_limits, result, tasks: dict, deadline: float) -> None:
+    """Talks to the runner until it reports done or error (or the deadline passes)."""
+    calls = result.calls
     loop = asyncio.get_running_loop()
     inbox: asyncio.Queue = asyncio.Queue()
     stderr_tail: list = []
@@ -587,9 +703,18 @@ async def execute(code: str, groups: Sequence[ToolGroup], *, timeout_s: Optional
             pass
 
     def read_stdout():
+        # Lines that arrive in one read are handed over as one batch: the runner writes a call and
+        # the final line together, and the call must not start before the final line is seen.
+        pending = b""
         try:
-            for raw in proc.stdout:
-                post(raw)
+            fd = proc.stdout.fileno()
+            while True:
+                chunk = os.read(fd, 65536)
+                if not chunk:
+                    break
+                *lines, pending = (pending + chunk).split(b"\n")
+                if lines:
+                    post(lines)
         except (OSError, ValueError):
             pass
         post(None)
@@ -606,7 +731,7 @@ async def execute(code: str, groups: Sequence[ToolGroup], *, timeout_s: Optional
     threading.Thread(target=read_stderr, daemon=True, name="run-script-err").start()
 
     def write_line(obj) -> None:
-        data = (json.dumps(obj, ensure_ascii=False, default=str) + "\n").encode("utf-8")
+        data = (json.dumps(json_safe(obj), ensure_ascii=False, default=str, allow_nan=False) + "\n").encode("utf-8")
         with write_lock:
             try:
                 proc.stdin.write(data)
@@ -615,11 +740,11 @@ async def execute(code: str, groups: Sequence[ToolGroup], *, timeout_s: Optional
                 pass
 
     slots = asyncio.Semaphore(MAX_PARALLEL_CALLS)
-    tasks: set = set()
 
     async def relay(record: CallRecord, msg_id: int, args: dict) -> None:
         group = table.get(record.tool)
         async with slots:
+            record.started = True
             try:
                 outcome = (await group.call(record.tool, args) if group is not None
                            else Outcome.error(f"no tool named {record.tool}"))
@@ -636,66 +761,102 @@ async def execute(code: str, groups: Sequence[ToolGroup], *, timeout_s: Optional
             record.status, record.reason = "refused", outcome.message
             inbox.put_nowait({"type": "_stop", "tool": record.tool, "message": outcome.message})
 
-    deadline = started + wall_s + KILL_GRACE_S
-    try:
-        await asyncio.to_thread(write_line, {"type": "start", "code": code, "tools": sorted(table),
-                                             "limits": run_limits})
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                result.kind, result.message = "timeout", f"script ran past its {wall_s:g} s limit"
-                break
-            try:
-                item = await asyncio.wait_for(inbox.get(), remaining)
-            except asyncio.TimeoutError:
-                continue
-            if item is None:
-                tail = "".join(stderr_tail).strip()[-800:]
-                result.kind = "crashed"
-                result.message = "the sandbox exited without a result" + (f": {tail}" if tail else "")
-                break
-            if isinstance(item, (bytes, bytearray)):
+    def forget(task):
+        tasks.pop(task, None)
+
+    await asyncio.to_thread(write_line, {"type": "start", "code": code, "tools": sorted(table),
+                                         "limits": run_limits})
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            result.kind, result.message = "timeout", f"script ran past its {run_limits['wallMs'] / 1000:g} s limit"
+            return
+        try:
+            item = await asyncio.wait_for(inbox.get(), remaining)
+        except asyncio.TimeoutError:
+            continue
+        if item is None:
+            tail = "".join(stderr_tail).strip()[-800:]
+            result.kind = "crashed"
+            result.message = "the sandbox exited without a result" + (f": {tail}" if tail else "")
+            return
+        batch = item if isinstance(item, list) else [item]
+        for raw in batch:
+            if isinstance(raw, (bytes, bytearray)):
                 try:
-                    msg = json.loads(item.decode("utf-8", "replace"))
+                    msg = json.loads(raw.decode("utf-8", "replace"))
                 except ValueError:
                     continue
             else:
-                msg = item
-            kind = msg.get("type") if isinstance(msg, dict) else None
-            if kind == "call":
-                record = CallRecord(len(calls) + 1, str(msg.get("tool")))
-                calls.append(record)
-                args = msg.get("args") if isinstance(msg.get("args"), dict) else {}
-                task = asyncio.create_task(relay(record, msg.get("id"), args))
-                tasks.add(task)
-                task.add_done_callback(tasks.discard)
-            elif kind == "log":
-                result.logs.append(str(msg.get("text", "")))
-            elif kind == "done":
-                result.status, result.kind = "ok", ""
-                result.value, result.has_value = msg.get("value"), not msg.get("undefined")
-                break
-            elif kind == "error":
-                result.kind, result.message = str(msg.get("kind") or "thrown"), str(msg.get("message") or "")
-                # Runner call ids count calls in the order it sent them, as `calls` does.
-                late = msg.get("callId")
-                if type(late) is int and 0 < late <= len(calls) and calls[late - 1].status == "running":
-                    calls[late - 1].status, calls[late - 1].reason = "timeout", "no answer in time"
-                break
-            elif kind == "_stop":
-                result.kind = "refused"
-                result.message = f"{msg['tool']} was refused, so the script was ended there: {msg['message']}"
-                break
-    finally:
-        for task in list(tasks):
+                msg = raw
+            if _handle(msg, result, calls, tasks, relay, forget):
+                return
+
+
+def _handle(msg, result: ScriptResult, calls: list, tasks: dict, relay, forget) -> bool:
+    """One runner message; True when it ends the run."""
+    kind = msg.get("type") if isinstance(msg, dict) else None
+    if kind == "call":
+        record = CallRecord(len(calls) + 1, str(msg.get("tool")))
+        calls.append(record)
+        args = msg.get("args") if isinstance(msg.get("args"), dict) else {}
+        task = asyncio.create_task(relay(record, msg.get("id"), args))
+        tasks[task] = record
+        task.add_done_callback(forget)
+    elif kind == "log":
+        result.logs.append(str(msg.get("text", "")))
+    elif kind == "done":
+        result.status, result.kind = "ok", ""
+        result.value, result.has_value = msg.get("value"), not msg.get("undefined")
+        # Still running now means the script returned without awaiting them (audit C-05).
+        for record in tasks.values():
+            record.unawaited = True
+        return True
+    elif kind == "error":
+        result.kind, result.message = str(msg.get("kind") or "thrown"), str(msg.get("message") or "")
+        # Runner call ids count calls in the order it sent them, as `calls` does.
+        late = msg.get("callId")
+        if type(late) is int and 0 < late <= len(calls) and calls[late - 1].status == "running":
+            calls[late - 1].status, calls[late - 1].reason = "timeout", "no answer in time"
+        return True
+    elif kind == "_stop":
+        result.kind = "refused"
+        result.message = f"{msg['tool']} was refused, so the script was ended there: {msg['message']}"
+        return True
+    return False
+
+
+def _drop_unstarted(tasks: dict) -> None:
+    """Calls the script asked for but whose tool was not called yet are not run once the script has
+    ended: nothing of them can land after the reply."""
+    for task, record in list(tasks.items()):
+        if not record.started:
             task.cancel()
-        _kill(proc)
-        await _close_groups(groups)
-        result.seconds = time.monotonic() - started
-    for record in calls:
-        if record.status == "running":
-            record.status = "unfinished"
-    return result
+            tasks.pop(task, None)
+            record.status = "not run"
+            record.reason = ("the script returned without awaiting it" if record.unawaited
+                             else "the script ended before it started")
+
+
+async def _settle(tasks: dict, result: ScriptResult, wall_end: float) -> None:
+    """Calls already running when the script ended get the rest of the time limit to finish, so no
+    effect lands after the reply (audit C-05); what is left after that is reported as unfinished."""
+    pending = set(tasks)
+    if pending:
+        await asyncio.wait(pending, timeout=max(0.0, wall_end - time.monotonic()))
+    _note_unawaited(result, late=sum(1 for task in tasks if not task.done()))
+
+
+def _note_unawaited(result: ScriptResult, late: int = 0) -> None:
+    skipped = [r for r in result.calls if r.unawaited and r.status == "not run"]
+    waited = [r for r in result.calls if r.unawaited and r.status != "not run"]
+    if skipped:
+        result.notes.append(f"{len(skipped)} tool call(s) were not awaited by the script, so they were not run; "
+                            "await them (or use Promise.all) to run them")
+    if waited:
+        result.notes.append(f"{len(waited)} tool call(s) were not awaited by the script but had already started; "
+                            "run_script waited for them before replying"
+                            + ("" if not late else f", and {late} did not finish in time"))
 
 
 async def _close_groups(groups: Sequence[ToolGroup]) -> None:
@@ -737,6 +898,7 @@ _KIND_TEXT = {
     "call_limit": f"the script made more than {MAX_CALLS} tool calls",
     "refused": "a tool call was refused",
     "unavailable": "run_script is unavailable",
+    "invalid": "the arguments were not valid",
     "crashed": "the sandbox stopped unexpectedly",
     "protocol": "the sandbox protocol broke",
     "internal": "the sandbox failed",
@@ -754,16 +916,18 @@ def calls_line(calls: Sequence[CallRecord], *, full: bool = False) -> str:
     i = 0
     while i < len(calls):
         rec = calls[i]
+        mark = " (not awaited)" if rec.unawaited and rec.status != "not run" else ""
         if rec.status == "ok":
             j = i
-            while j + 1 < len(calls) and calls[j + 1].status == "ok" and calls[j + 1].tool == rec.tool:
+            while (j + 1 < len(calls) and calls[j + 1].status == "ok" and calls[j + 1].tool == rec.tool
+                   and calls[j + 1].unawaited == rec.unawaited):
                 j += 1
             span = f"{rec.index}" if j == i else f"{rec.index}-{calls[j].index}"
-            parts.append(f"{span} {rec.tool} ok" + ("" if j == i else f" ({j - i + 1})"))
+            parts.append(f"{span} {rec.tool} ok" + ("" if j == i else f" ({j - i + 1})") + mark)
             i = j + 1
             continue
         reason = rec.reason if full else _short(rec.reason)
-        parts.append(f"{rec.index} {rec.tool} {rec.status}" + (f" ({reason})" if reason else ""))
+        parts.append(f"{rec.index} {rec.tool} {rec.status}" + (f" ({reason})" if reason else "") + mark)
         i += 1
     line = "; ".join(parts)
     if full or len(line) <= CALL_LIST_CAP:
@@ -787,14 +951,19 @@ def _summary(result: ScriptResult) -> str:
     return f"{head} after {result.seconds:.1f} s. {tail}"
 
 
+# Short-reply shares of the message and of each note; the full text always goes to the file.
+MESSAGE_CAP = 1500
+NOTE_CAP = 300
+
+
 def _render(result: ScriptResult, *, full: bool, value_text: str, logs_text: str) -> list[tuple[str, str]]:
     sections = [("", _summary(result))]
     if result.status != "ok" and result.message:
-        sections.append(("Error", result.message))
+        sections.append(("Error", result.message if full else _cut(result.message, MESSAGE_CAP)))
     if result.calls:
         sections.append(("Tool calls in order", calls_line(result.calls, full=full)))
     for note in result.notes:
-        sections.append(("Note", note))
+        sections.append(("Note", note if full else _cut(note, NOTE_CAP)))
     if result.status == "ok":
         sections.append(("Result", value_text if result.has_value else "(the script returned nothing)"))
     if logs_text:
@@ -814,12 +983,34 @@ def _value_text(result: ScriptResult) -> str:
     return json.dumps(result.value, ensure_ascii=False, default=str)
 
 
+KEEP_RUN_FILES = 50
+
+
+def runs_folder(workspace: str) -> Path:
+    """<workspace>/.gamachine/script-runs, or Gamachine's temp folder without a workspace (never the
+    server's cwd, audit AD-01)."""
+    if workspace and workspace.strip():
+        return Path(workspace).joinpath(*RUNS_DIR)
+    import tempfile
+    return Path(tempfile.gettempdir()) / "Gamachine" / "script-runs"
+
+
+def _prune(folder: Path) -> None:
+    files = sorted(folder.glob("run-*.txt"), key=lambda p: (p.stat().st_mtime, p.name), reverse=True)
+    for old in files[KEEP_RUN_FILES:]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
+
+
 def _save_full(text: str, workspace: str) -> tuple[Optional[str], Optional[str]]:
     try:
-        folder = Path(workspace or os.getcwd()).joinpath(*RUNS_DIR)
+        folder = runs_folder(workspace)
         folder.mkdir(parents=True, exist_ok=True)
         path = folder / f"run-{time.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(3)}.txt"
         path.write_text(text, encoding="utf-8")
+        _prune(folder)
         return str(path), None
     except OSError as exc:
         return None, str(exc)
@@ -852,9 +1043,22 @@ def format_reply(result: ScriptResult, workspace: str) -> str:
     value_cut = _cut(value_text, max(0, value_budget)) if result.has_value else value_text
     used = len(value_cut.encode("utf-8")) if result.status == "ok" else 0
     logs_cut = _cut(logs_text, max(0, budget - used)) if logs_text else ""
-    sections = _render(result, full=False, value_text=value_cut, logs_text=logs_cut)
-    sections.append(("", footer))
-    return _join(sections)
+    body = _join(_render(result, full=False, value_text=value_cut, logs_text=logs_cut))
+    # Many notes can still overflow; the cap is a promise, so the body gives way last.
+    body = _cut(body, REPLY_CAP_BYTES - len(footer.encode("utf-8")) - 2)
+    return body + "\n" + footer
+
+
+def timeout_refusal(timeout: Any, max_timeout_s: float) -> Optional[str]:
+    """A clear message for a `timeout` argument that is not a number of seconds in range, else None."""
+    if timeout is None:
+        return None
+    limit = int(max_timeout_s)
+    ok_type = isinstance(timeout, (int, float)) and not isinstance(timeout, bool)
+    if not ok_type or not math.isfinite(timeout) or not 1 <= timeout <= max_timeout_s:
+        return (f"run_script: `timeout` must be a number of seconds from 1 to {limit} (this agent's limit); "
+                f"got {timeout!r}. Leave it out to get {limit} s.")
+    return None
 
 
 async def run_script(code: str, groups: Sequence[ToolGroup], workspace: str,
@@ -862,6 +1066,9 @@ async def run_script(code: str, groups: Sequence[ToolGroup], workspace: str,
     """(reply text, is_error) for one run_script call."""
     if not isinstance(code, str) or not code.strip():
         return "run_script needs `code`: the JavaScript body to run.", True
+    refusal = timeout_refusal(timeout, max_timeout_s)
+    if refusal is not None:
+        return refusal, True
     result = await execute(code, groups, timeout_s=timeout, max_timeout_s=max_timeout_s)
     return format_reply(result, workspace), result.status != "ok"
 
@@ -909,7 +1116,8 @@ def tool_description(tool_lines: Sequence[str], extra_lines: Sequence[str] = (),
         "and each call passes the same approval and safety rules as a direct call (cards may "
         "appear; a plain user refusal ends the script).\n"
         "API: `await tools.<name>({...})` returns the tool's result (parsed JSON, else text); a "
-        "failed call throws an Error you can catch and go on. `callTool(name, args)` works too. "
+        "failed call throws an Error you can catch and go on. Await every call (or Promise.all): a call "
+        "still unstarted when the script returns is not run. `callTool(name, args)` works too. "
         "`console.log` output is returned. Top-level await and `return <value>` work: return a "
         "small JSON value, not raw tool output.\n"
         f"Limits: `timeout` seconds (default and max {max_timeout_s} here: the longest this agent "

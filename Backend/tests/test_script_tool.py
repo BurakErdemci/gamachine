@@ -45,13 +45,48 @@ def port_guard(monkeypatch):
     the fakes' URLs in their entry env. A blocked call raises and is recorded, and the test fails at
     teardown even if product code swallowed the error."""
     import http.client
+    import socket
     import httpx
     blocked = []
+    # Ports this process listens on itself (asyncio's socketpair on Windows connects to one).
+    listening: set = set()
 
     def check(host, port):
-        if host != "127.0.0.1" or port not in _ALLOWED_PORTS:
+        if host != "127.0.0.1" or (port not in _ALLOWED_PORTS and port not in listening):
             blocked.append(f"{host}:{port}")
-            raise OSError(f"test port guard: HTTP to {host}:{port} is not a fake of this test")
+            raise OSError(f"test port guard: a connection to {host}:{port} is not a fake of this test")
+
+    def check_address(address):
+        if isinstance(address, tuple) and len(address) >= 2:
+            check(address[0], address[1])
+
+    real_listen, real_sock_connect = socket.socket.listen, socket.socket.connect
+    real_connect_ex, real_create = socket.socket.connect_ex, socket.create_connection
+
+    def listen(self, *args):
+        value = real_listen(self, *args)
+        try:
+            listening.add(self.getsockname()[1])
+        except OSError:
+            pass
+        return value
+
+    def sock_connect(self, address):
+        check_address(address)
+        return real_sock_connect(self, address)
+
+    def connect_ex(self, address):
+        check_address(address)
+        return real_connect_ex(self, address)
+
+    def create_connection(address, *args, **kwargs):
+        check_address(address)
+        return real_create(address, *args, **kwargs)
+
+    monkeypatch.setattr(socket.socket, "listen", listen)
+    monkeypatch.setattr(socket.socket, "connect", sock_connect)
+    monkeypatch.setattr(socket.socket, "connect_ex", connect_ex)
+    monkeypatch.setattr(socket, "create_connection", create_connection)
 
     real_async_send, real_send = httpx.AsyncClient.send, httpx.Client.send
     real_connect = http.client.HTTPConnection.connect
@@ -99,6 +134,19 @@ def test_port_guard_blocks_the_default_backend_url(port_guard):
         run(probe())
     assert port_guard == ["localhost:8000"]
     port_guard.clear()  # the block itself is what this test expects
+
+
+@pytest.mark.parametrize("connect", ["create_connection", "socket_connect"])
+def test_port_guard_blocks_raw_sockets_to_the_live_unity_mcp_port(port_guard, connect):
+    import socket
+    with pytest.raises(OSError, match="test port guard"):
+        if connect == "create_connection":
+            socket.create_connection(("127.0.0.1", 8080), timeout=1)
+        else:
+            with socket.socket() as sock:
+                sock.connect(("127.0.0.1", 8080))
+    assert port_guard == ["127.0.0.1:8080"]
+    port_guard.clear()
 
 
 # ── a fake Unity MCP server ──────────────────────────────────────────────────
@@ -791,6 +839,9 @@ def test_codex_unityai_entry_carries_the_run_script_timeout(monkeypatch):
     assert codex_session.unityai_timeout_override() == []
     import inspect
     assert "spawn = spawn + unityai_timeout_override()" in inspect.getsource(codex_session)
+    # _build_cmd asks whether Unity MCP runs; unstubbed that probed 127.0.0.1:8080 (the owner's live one).
+    from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
+    monkeypatch.setattr(unity_mcp_manager, "is_running", lambda *a, **k: False)
     provider = CodexProvider.__new__(CodexProvider)
     for attr, value in (("prompt_via_stdin", True), ("binary_name", "codex")):
         setattr(provider, attr, value)
@@ -844,3 +895,304 @@ def test_unityai_cap_comes_from_the_entry_env_and_is_stated(monkeypatch, env, ex
 def test_the_cap_bounds_a_longer_requested_timeout(runtime, procs):
     result = run(script_tool.execute("while (true) {}", [], timeout_s=500, max_timeout_s=1, runtime=runtime))
     assert result.kind == "timeout" and result.seconds < 15
+
+
+# ── turn 4: audit fixes ──────────────────────────────────────────────────────
+
+import time  # noqa: E402
+
+HELPER_SERVER = r'''
+import asyncio, os, sys
+with open(os.environ["PID_FILE"], "a") as f:
+    f.write(str(os.getpid()) + "\n")
+if os.environ.get("SILENT") == "1":
+    import time
+    time.sleep(120)  # never answers initialize
+    sys.exit(0)
+sys.path.insert(0, os.environ["APP_DIR"])
+from mcp.server.mcpserver import MCPServer
+from mcp.types import ToolAnnotations
+mcp = MCPServer(name="helper")
+@mcp.tool(name="rd", annotations=ToolAnnotations(read_only_hint=True))
+async def rd(x: int = 0) -> str:
+    return str(x * 11)
+@mcp.tool(name="slow", annotations=ToolAnnotations(read_only_hint=True))
+async def slow(s: float = 30) -> str:
+    await asyncio.sleep(s)
+    return "late"
+mcp.run(transport="stdio")
+'''
+
+
+def _alive(pid: int) -> bool:
+    if sys.platform != "win32":
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return False
+        return True
+    import ctypes
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    handle = kernel32.OpenProcess(0x00100000 | 0x1000, False, pid)  # SYNCHRONIZE | QUERY_LIMITED
+    if not handle:
+        return False
+    try:
+        return kernel32.WaitForSingleObject(handle, 0) == 0x102  # WAIT_TIMEOUT: still running
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _pids(path) -> list:
+    return [int(x) for x in path.read_text().split()] if path.exists() else []
+
+
+def _wait_dead(pids, seconds=10.0) -> list:
+    end = time.monotonic() + seconds
+    while time.monotonic() < end and any(_alive(p) for p in pids):
+        time.sleep(0.2)
+    return [p for p in pids if _alive(p)]
+
+
+@pytest.fixture
+def helper(tmp_path):
+    """A stdio helper server entry (like browser/connectors/mail) that logs its pid."""
+    server = tmp_path / "helper_server.py"
+    server.write_text(HELPER_SERVER, encoding="utf-8")
+    pid_file = tmp_path / "helper_pids.txt"
+    app_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "app"))
+
+    def entry(silent=False):
+        env = {"PID_FILE": str(pid_file), "APP_DIR": app_dir, "SILENT": "1" if silent else "0"}
+        return {"command": sys.executable, "args": [str(server)], "env": env}
+
+    yield SimpleNamespace(entry=entry, pid_file=pid_file)
+    for pid in _pids(pid_file):
+        if _alive(pid):
+            subprocess_kill(pid)
+
+
+def subprocess_kill(pid):
+    import subprocess
+    if sys.platform == "win32":
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True)
+    else:
+        os.kill(pid, 9)
+
+
+def test_anyio_scope_cancel_ends_the_run_and_its_helper(helper, runtime, procs):
+    """How the MCP SDK drops a request: a level-triggered anyio scope (audit L-01)."""
+    import anyio
+    group = script_tool.StdioServerGroup("Helper", helper.entry(), keep=script_tool.read_only_tool)
+    seen = {}
+
+    async def scenario():
+        started = time.monotonic()
+        with anyio.CancelScope() as scope:
+            async def killer():
+                while not _pids(helper.pid_file):
+                    await anyio.sleep(0.1)
+                await anyio.sleep(1.5)  # the script is parked in tools.slow by now
+                scope.cancel()
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(killer)
+                await script_tool.execute("await tools.slow({s: 60});", [group], runtime=runtime)
+        seen["seconds"] = time.monotonic() - started
+
+    asyncio.run(asyncio.wait_for(scenario(), 60))
+    assert seen["seconds"] < 30
+    assert _wait_dead(_pids(helper.pid_file)) == []
+
+
+def test_cancel_during_discovery_closes_the_helper(helper, runtime, procs):
+    group = script_tool.StdioServerGroup("Helper", helper.entry(silent=True))
+
+    async def scenario():
+        task = asyncio.create_task(script_tool.execute("return 1;", [group], runtime=runtime))
+        while not _pids(helper.pid_file):
+            await asyncio.sleep(0.1)
+        await asyncio.sleep(0.5)
+        task.cancel()
+        started = time.monotonic()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        took = time.monotonic() - started
+        # Checked inside this loop: asyncio.run's own shutdown would reap a leaked helper later.
+        end = time.monotonic() + 3
+        while time.monotonic() < end and any(_alive(p) for p in _pids(helper.pid_file)):
+            await asyncio.sleep(0.2)
+        return took, [p for p in _pids(helper.pid_file) if _alive(p)]
+
+    took, alive = run(asyncio.wait_for(scenario(), 60))
+    assert took < 15 and alive == []
+    assert procs == []  # the runner never started
+
+
+def test_the_time_limit_covers_a_helper_that_never_answers(helper, runtime, procs):
+    group = script_tool.StdioServerGroup("Helper", helper.entry(silent=True))
+    started = time.monotonic()
+    result = run(script_tool.execute("return 1;", [group], timeout_s=2, runtime=runtime))
+    assert result.kind == "timeout" and "finding the tools" in result.message
+    assert time.monotonic() - started < 15
+    assert _wait_dead(_pids(helper.pid_file)) == []
+
+
+def test_parallel_calls_after_cached_discovery_start_one_helper(helper, runtime, procs):
+    entry = helper.entry()
+    first = run(script_tool.execute("return 1;", [script_tool.StdioServerGroup("Helper", entry)], runtime=runtime))
+    assert first.status == "ok"
+    second = run(script_tool.execute("return await Promise.all([tools.rd({x: 1}), tools.rd({x: 2})]);",
+                                     [script_tool.StdioServerGroup("Helper", entry)], runtime=runtime))
+    assert second.status == "ok" and second.value == [11, 22]
+    pids = _pids(helper.pid_file)
+    assert len(pids) == 2  # one helper per run, none extra from the parallel first calls
+    assert _wait_dead(pids) == []
+
+
+def test_a_unity_mcp_that_accepts_and_never_answers_is_bounded_by_the_time_limit(runtime, procs):
+    import socket
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(5)
+    port = server.getsockname()[1]
+    _ALLOWED_PORTS.add(port)
+    held = []
+
+    def accept_and_stay_silent():
+        try:
+            while True:
+                held.append(server.accept())
+        except OSError:  # the test closed the socket
+            pass
+
+    threading.Thread(target=accept_and_stay_silent, daemon=True).start()
+    url = f"http://127.0.0.1:{port}/mcp"
+
+    async def factory():
+        return script_tool.unity_bridge_client(url, conversation_id=None, secret_reader=lambda: "k")
+
+    try:
+        started = time.monotonic()
+        result = run(script_tool.execute("return 1;", [script_tool.UnityMCPGroup(factory)], timeout_s=2,
+                                         runtime=runtime))
+        assert result.kind == "timeout" and time.monotonic() - started < 10
+    finally:
+        server.close()
+
+
+def test_local_tool_failure_text_is_an_error_that_throws(unityai, runtime, procs):
+    reply = _text(run(unityai.mcp.call_tool("run_script", {"code": """
+        try { await tools.read_file({path: "missing.txt"}); return "read"; }
+        catch (e) { return "threw: " + e.message; }"""})))
+    assert "threw: Hata:" in reply and "1 read_file error" in reply
+
+
+def test_unawaited_calls_do_not_land_after_the_reply(runtime, procs):
+    effects = []
+
+    async def slow(args):
+        await asyncio.sleep(0.6)
+        effects.append(("slow", time.monotonic()))
+        return Outcome.ok("applied")
+
+    async def fast(args):
+        await asyncio.sleep(0.2)
+        return Outcome.ok("fast")
+
+    group = FakeGroup(slow=slow, fast=fast)
+
+    async def scenario(code):
+        result = await script_tool.execute(code, [group], runtime=runtime)
+        ended = time.monotonic()
+        await asyncio.sleep(1.0)
+        return result, ended
+
+    # Returned before the call started: it is not run at all.
+    result, _ = run(scenario("tools.slow({}); return 'done';"))
+    assert result.status == "ok" and [(c.tool, c.status) for c in result.calls] == [("slow", "not run")]
+    assert effects == [] and any("not awaited" in note for note in result.notes)
+    # Started while the script awaited something else: waited for before the reply.
+    result, ended = run(scenario("tools.slow({}); await tools.fast({}); return 'done';"))
+    assert result.status == "ok"
+    assert [(c.tool, c.status, c.unawaited) for c in result.calls] == [("slow", "ok", True), ("fast", "ok", False)]
+    assert effects and effects[0][1] <= ended
+    assert "(not awaited)" in script_tool.format_reply(result, ".")
+
+
+class FakeGroup:
+    label = "fake"
+
+    def __init__(self, **handlers):
+        self.handlers = handlers
+
+    async def list_tools(self):
+        return [script_tool.ToolSpec(n, n, {"type": "object", "properties": {}}) for n in self.handlers]
+
+    async def call(self, name, args):
+        return await self.handlers[name](args)
+
+
+def test_nan_and_infinity_in_a_tool_result_reach_the_script_as_null(runtime, procs):
+    from script_tool import Outcome as O
+
+    async def text(args):
+        return O.ok(script_tool.parse_tool_text('{"v": NaN, "w": [1, Infinity], "x": 1e999}'))
+
+    async def raw(args):
+        return O.ok({"nan": float("nan")})
+
+    result = run(script_tool.execute("return [await tools.text({}), await tools.raw({})];",
+                                     [FakeGroup(text=text, raw=raw)], runtime=runtime))
+    assert result.status == "ok", result.message
+    assert result.value == [{"v": None, "w": [1, None], "x": None}, {"nan": None}]
+
+
+Outcome = script_tool.Outcome
+
+
+@pytest.mark.parametrize("code,extra", [('throw new Error("x".repeat(20000));', None),
+                                        ("return 1;", "N" * 20000)])
+def test_reply_cap_holds_for_large_errors_and_notes(tmp_path, runtime, procs, code, extra):
+    class NoteGroup(FakeGroup):
+        note = extra
+
+    groups = [NoteGroup(echo=lambda a: None)] if extra else []
+    result = run(script_tool.execute(code, groups, runtime=runtime))
+    reply = script_tool.format_reply(result, str(tmp_path))
+    assert len(reply.encode("utf-8")) <= script_tool.REPLY_CAP_BYTES
+    saved = next((tmp_path / ".gamachine" / "script-runs").glob("run-*.txt")).read_text(encoding="utf-8")
+    assert ("x" * 20000 if extra is None else "N" * 20000) in saved
+
+
+def test_unityai_endpoint_marks_a_failed_script_as_an_mcp_error(unityai, runtime, procs):
+    good = run(unityai.mcp.call_tool("run_script", {"code": "return 1;"}))
+    bad = run(unityai.mcp.call_tool("run_script", {"code": "return ("}))
+    assert getattr(good, "is_error", None) is False
+    assert getattr(bad, "is_error", None) is True and "did not compile" in _text(bad)
+
+
+@pytest.mark.parametrize("message", ["import interrupted by user", "worker reported out of memory",
+                                     "parser reported stack overflow"])
+def test_ordinary_errors_are_not_read_as_limits(runtime, procs, message):
+    result = run(script_tool.execute(f"throw new Error({json.dumps(message)});", [], runtime=runtime))
+    assert result.kind == "thrown" and message in result.message
+
+
+@pytest.mark.parametrize("timeout", ["abc", True, 0, -3, 601, float("nan")])
+def test_bad_timeout_gets_a_clear_error(tmp_path, timeout):
+    text, is_error = run(script_tool.run_script("return 1;", [], str(tmp_path), timeout=timeout,
+                                                max_timeout_s=600))
+    assert is_error and "`timeout` must be a number of seconds from 1 to 600" in text
+
+
+def test_saved_runs_keep_the_newest_50_and_never_use_the_cwd(tmp_path, monkeypatch):
+    big = script_tool.ScriptResult("ok", value="v" * 9000, has_value=True)
+    ws = tmp_path / "ws"
+    for _ in range(55):
+        script_tool.format_reply(big, str(ws))
+    assert len(list((ws / ".gamachine" / "script-runs").glob("run-*.txt"))) == script_tool.KEEP_RUN_FILES
+    import tempfile
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path / "temp"))
+    monkeypatch.chdir(tmp_path)
+    reply = script_tool.format_reply(big, "")
+    assert str(tmp_path / "temp" / "Gamachine" / "script-runs") in reply
+    assert not (tmp_path / ".gamachine").exists()

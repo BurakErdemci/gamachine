@@ -9,8 +9,38 @@
 //                   {"type":"error","kind":str,"message":str}
 // The script sees only `tools`, `callTool` and `console`; everything else it could
 // act through lives in this host process, which the VM cannot reach.
-import { createInterface } from "node:readline";
+import { Worker } from "node:worker_threads";
 import { newQuickJSWASMModuleFromVariant } from "./vendor/quickjs-emscripten-core/dist/index.mjs";
+
+const stdinClosed = new Int32Array(new SharedArrayBuffer(4));
+// Blocking reads of fd 0, one line per message; null at end of input.
+const STDIN_READER = `
+const { parentPort, workerData } = require("node:worker_threads");
+const fs = require("node:fs");
+const { StringDecoder } = require("node:string_decoder");
+const decoder = new StringDecoder("utf8");
+const buf = Buffer.alloc(65536);
+const nap = new Int32Array(new SharedArrayBuffer(4));
+let rest = "";
+for (;;) {
+  let n = 0;
+  try {
+    n = fs.readSync(0, buf, 0, buf.length, null);
+  } catch (e) {
+    if (e.code === "EAGAIN") { Atomics.wait(nap, 0, 0, 20); continue; }
+    n = 0;
+  }
+  if (n === 0) break;
+  rest += decoder.write(buf.subarray(0, n));
+  let i;
+  while ((i = rest.indexOf("\\n")) >= 0) {
+    parentPort.postMessage(rest.slice(0, i));
+    rest = rest.slice(i + 1);
+  }
+}
+Atomics.store(workerData, 0, 1);
+parentPort.postMessage(null);
+`;
 
 const variant = {
   type: "sync",
@@ -32,15 +62,34 @@ const DEFAULTS = {
 
 let finished = false;
 
+// Lines leave in one write per event-loop turn, and the final line in the same write as the calls
+// before it: a script that returns without awaiting a call then reaches the host as "call" + "done"
+// together, so the host can leave that call unrun instead of racing it (audit C-05).
+let outbox = [];
+let flushQueued = false;
+
+function flush() {
+  flushQueued = false;
+  if (!outbox.length || finished) return;
+  process.stdout.write(outbox.join(""));
+  outbox = [];
+}
+
 function emit(obj) {
-  process.stdout.write(JSON.stringify(obj) + "\n");
+  outbox.push(JSON.stringify(obj) + "\n");
+  if (!flushQueued) {
+    flushQueued = true;
+    setImmediate(flush);
+  }
 }
 
 function finish(obj, code = 0) {
   if (finished) return;
   finished = true;
-  // Exit only after the line is flushed: on Windows pipe writes are async.
-  process.stdout.write(JSON.stringify(obj) + "\n", () => process.exit(code));
+  const text = outbox.join("") + JSON.stringify(obj) + "\n";
+  outbox = [];
+  // Exit only after the lines are flushed: on Windows pipe writes are async.
+  process.stdout.write(text, () => process.exit(code));
 }
 
 function fail(kind, message, extra = {}) {
@@ -108,6 +157,9 @@ async function main(job) {
   const deadline = Date.now() + limits.wallMs;
   let interrupted = false;
   rt.setInterruptHandler(() => {
+    // The stdin reader thread flags a closed pipe; a busy loop never yields to the event loop,
+    // so the check has to live here (audit L-04).
+    if (Atomics.load(stdinClosed, 0) === 1) process.exit(3);
     if (Date.now() >= deadline) interrupted = true;
     return interrupted;
   });
@@ -121,11 +173,14 @@ async function main(job) {
   let logBytes = 0;
   let logCut = false;
 
+  // Limits are told apart by the engine's own InternalError (and our interrupt flag), never by
+  // wording alone: `new Error("import interrupted")` is an ordinary throw (audit).
   const classify = (dumped, stage) => {
     const { name, text } = describe(dumped);
-    if (interrupted || /\binterrupted\b/.test(text)) return ["timeout", `script ran past its ${limits.wallMs / 1000} s limit`];
-    if (/out of memory/i.test(text)) return ["memory", `script ran out of memory (limit ${limits.memoryBytes} bytes)`];
-    if (/stack overflow/i.test(text)) return ["memory", "stack overflow (too deep recursion)"];
+    const engine = name === "InternalError" || (dumped !== null && typeof dumped !== "object");
+    if (interrupted) return ["timeout", `script ran past its ${limits.wallMs / 1000} s limit`];
+    if (engine && /out of memory/i.test(text)) return ["memory", `script ran out of memory (limit ${limits.memoryBytes} bytes)`];
+    if (engine && /stack overflow/i.test(text)) return ["memory", "stack overflow (too deep recursion)"];
     if (stage === "compile" && name === "SyntaxError") return ["syntax", text];
     return ["thrown", text];
   };
@@ -236,10 +291,9 @@ async function main(job) {
   return onResult;
 }
 
-const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
 let onResult = null;
 const early = [];
-rl.on("line", (line) => {
+const onLine = (line) => {
   if (!line.trim()) return;
   let msg;
   try {
@@ -261,8 +315,15 @@ rl.on("line", (line) => {
     if (onResult) onResult(msg);
     else early.push(msg);
   }
+};
+// stdin is read on its own thread, so a closed pipe (the parent is gone) is seen even while the
+// script busy-loops: the thread sets stdinClosed, which the interrupt handler checks.
+const reader = new Worker(STDIN_READER, { eval: true, workerData: stdinClosed });
+reader.on("message", (line) => {
+  if (line === null) {
+    if (!finished) process.exit(3);
+  } else {
+    onLine(line);
+  }
 });
-// The parent is gone (or closed the pipe): nothing may outlive it.
-rl.on("close", () => {
-  if (!finished) process.exit(3);
-});
+reader.on("error", (e) => fail("internal", `stdin reader failed: ${e?.message || e}`));

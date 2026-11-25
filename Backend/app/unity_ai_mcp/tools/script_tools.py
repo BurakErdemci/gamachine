@@ -18,12 +18,16 @@ from typing import Callable, Optional, Sequence
 
 import httpx
 from mcp.server.mcpserver import MCPServer
+from mcp.types import CallToolResult, TextContent
 
 import script_tool
 from script_tool import Outcome, ToolSpec, UnityMCPGroup
 from unity_ai_mcp import approval_bridge
 
 logger = logging.getLogger(__name__)
+
+
+LOCAL_FAILURE_PREFIX = "Hata:"
 
 
 class LocalToolGroup:
@@ -63,9 +67,13 @@ class LocalToolGroup:
         text = script_tool.content_text(getattr(result, "content", None))
         if getattr(result, "isError", False) or getattr(result, "is_error", False):
             return Outcome.error(text or f"{name} failed")
-        # These tools report their own refusals (guards, bad paths) as text starting with ❌.
-        if text.lstrip().startswith("❌"):
-            return Outcome.error(text.lstrip()[1:].strip())
+        # These tools report their own refusals (guards) with a leading ❌ and their failures
+        # (missing file or folder, bad range) with a leading "Hata:" (audit C-03).
+        head = text.lstrip()
+        if head.startswith("❌"):
+            return Outcome.error(head[1:].strip())
+        if head.startswith(LOCAL_FAILURE_PREFIX):
+            return Outcome.error(head)
         return Outcome.ok(script_tool.parse_tool_text(text))
 
 
@@ -215,7 +223,8 @@ def register_script_tool(mcp: MCPServer, get_workspace: Callable[[], str], local
     make_groups = groups_factory or (lambda: default_groups(mcp, names))
 
     @mcp.tool(name=script_tool.TOOL_NAME, description=description)
-    async def run_script(code: str, timeout: Optional[int] = None) -> str:
-        text, _ = await script_tool.run_script(code, make_groups(), get_workspace(), timeout=timeout,
-                                               max_timeout_s=max_timeout)
-        return text
+    async def run_script(code: str, timeout: Optional[float] = None) -> CallToolResult:
+        text, is_error = await script_tool.run_script(code, make_groups(), get_workspace(), timeout=timeout,
+                                                      max_timeout_s=max_timeout)
+        # A failed script is an MCP error result, as the Claude endpoint already reports it.
+        return CallToolResult(content=[TextContent(type="text", text=text)], is_error=is_error)
