@@ -3,7 +3,7 @@ import fs from 'fs'
 import os from 'os'
 import net from 'net'
 import { randomUUID, createHash, randomBytes } from 'crypto'
-import { app, autoUpdater as nativeUpdater, ipcMain, dialog, shell, BrowserWindow, Notification, powerSaveBlocker, systemPreferences, globalShortcut, screen, desktopCapturer, WebContentsView, session } from 'electron'
+import { app, ipcMain, dialog, shell, BrowserWindow, Notification, powerSaveBlocker, systemPreferences, globalShortcut, screen, desktopCapturer, WebContentsView, session } from 'electron'
 import serve from 'electron-serve'
 import { createWindow, applyNavigationPolicy } from './helpers'
 import { spawn, ChildProcess, execFile } from 'child_process'
@@ -11,6 +11,7 @@ import { promisify } from 'util'
 import axios from 'axios'
 import { autoUpdater } from 'electron-updater'
 import { setupAutoUpdate, type AutoUpdateHandle } from './helpers/auto-update'
+import { createMacInstaller } from './helpers/mac-install'
 import {
   TEXT_MAX_BYTES,
   isAllowedWorkspacePath,
@@ -1743,7 +1744,14 @@ if (!gotTheLock) {
           relaunch: () => { app.relaunch(); app.exit(0) },
           openExternal: (url) => shell.openExternal(url),
           getMainWindow: () => BrowserWindow.getAllWindows()[0],
-          stageNative: () => nativeUpdater.checkForUpdates(),
+          // macOS installs by swapping the app bundle itself; Squirrel.Mac crashes on our 1.37 GB zip.
+          mac: process.platform === 'darwin'
+            ? {
+                installer: createMacInstaller({ logDir: app.getPath('logs'), logger: console }),
+                onWillQuit: (handler) => app.on('will-quit', handler),
+                quit: () => app.quit(),
+              }
+            : undefined,
         })
       }
     })()

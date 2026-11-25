@@ -452,6 +452,127 @@ describe('setupAutoUpdate', () => {
   })
 })
 
+// macOS installs through mac-install.ts (faked here); Squirrel's quitAndInstall is never used.
+describe('setupAutoUpdate on macOS', () => {
+  beforeEach(() => { vi.useFakeTimers(); setUiLanguage('tr') })
+  afterEach(() => { vi.useRealTimers() })
+
+  function macSetup(opts: { response?: number; refusal?: string; stage?: string; noMac?: boolean; stopImpl?: () => Promise<void> } = {}) {
+    const updater: any = new EventEmitter()
+    updater.checkForUpdates = vi.fn(() => Promise.resolve(null))
+    updater.downloadUpdate = vi.fn(() => Promise.resolve([]))
+    updater.quitAndInstall = vi.fn()
+    const order: string[] = []
+    const staged = { version: '9.9.9', swap: vi.fn(() => { order.push('swap'); return '/logs/update-swap.log' }), discard: vi.fn(async () => {}) }
+    const installer = {
+      refusal: vi.fn(async () => opts.refusal),
+      stage: vi.fn(async (_zip: string, _version: string): Promise<any> => opts.stage ?? staged),
+    }
+    const willQuit: Array<() => void> = []
+    const quit = vi.fn(() => { order.push('quit') })
+    const stopBackend = vi.fn(opts.stopImpl ?? (async () => { order.push('stopBackend') }))
+    const dialog = { showMessageBox: vi.fn(async (..._args: any[]): Promise<any> => ({ response: opts.response ?? 1, checkboxChecked: false })) }
+    const relaunch = vi.fn()
+    const openExternal = vi.fn(async () => {})
+    const manifest = Buffer.from('version: 9.9.9\nfiles:\n  - url: Gamachine-Setup-9.9.9.exe\n    sha512: HASH==\npath: Gamachine-Setup-9.9.9.exe\nsha512: HASH==\n')
+    const { publicKey, privateKey } = generateKeyPairSync('ed25519')
+    const handle = setupAutoUpdate({
+      autoUpdater: updater, dialog: dialog as any, stopBackend, logger: { log: vi.fn(), error: vi.fn() }, getMainWindow: () => null,
+      relaunch, openExternal, platform: 'darwin',
+      publicKeys: [publicKey.export({ type: 'spki', format: 'pem' }).toString()],
+      fetchBytes: async (url: string) => (url.endsWith('.sig') ? sign64(manifest, privateKey) : manifest),
+      hashFile: async () => 'HASH==',
+      removeFile: async () => {},
+      mac: opts.noMac ? undefined : { installer, onWillQuit: (h) => willQuit.push(h), quit },
+    })
+    const quitNow = () => willQuit.forEach((h) => h())
+    const title = (n = 0) => dialog.showMessageBox.mock.calls[n]![0].title
+    return { updater, order, staged, installer, quit, quitNow, stopBackend, dialog, relaunch, openExternal, handle, title }
+  }
+
+  it('"now": stages the verified file, stops the backend, quits, and the swap starts on will-quit; no quitAndInstall', async () => {
+    const m = macSetup({ response: 0 })
+    await setupDownload(m.updater)
+    await vi.waitFor(() => expect(m.quit).toHaveBeenCalledTimes(1))
+    expect(m.installer.stage).toHaveBeenCalledWith(INFO.downloadedFile, '9.9.9')
+    expect(m.title()).toBe('Güncelleme hazır')
+    expect(m.staged.swap).not.toHaveBeenCalled()
+    m.quitNow()
+    m.quitNow()
+    expect(m.order).toEqual(['stopBackend', 'quit', 'swap'])
+    expect(m.updater.quitAndInstall).not.toHaveBeenCalled()
+    expect(m.updater.autoInstallOnAppQuit).toBe(false)
+    m.handle.dispose()
+  })
+
+  it('"later": nothing swaps before "later" was chosen; then a normal quit starts the swap', async () => {
+    let answer!: (v: any) => void
+    const m = macSetup()
+    m.dialog.showMessageBox.mockImplementation(() => new Promise((r) => { answer = r }) as any)
+    await setupDownload(m.updater)
+    await vi.waitFor(() => expect(answer).toBeTypeOf('function'))
+    m.quitNow()
+    expect(m.staged.swap).not.toHaveBeenCalled()
+    answer({ response: 1 })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(m.quit).not.toHaveBeenCalled()
+    expect(m.stopBackend).not.toHaveBeenCalled()
+    m.handle.dispose()
+    m.quitNow()
+    expect(m.staged.swap).toHaveBeenCalledTimes(1)
+    expect(m.updater.quitAndInstall).not.toHaveBeenCalled()
+  })
+
+  it('a copy that cannot replace itself downloads nothing and offers the release page once', async () => {
+    const m = macSetup({ refusal: 'uygulama bağlı bir diskten (dmg) çalışıyor', response: 0 })
+    m.updater.emit('update-available', AVAILABLE)
+    await vi.waitFor(() => expect(m.openExternal).toHaveBeenCalledWith('https://github.com/BurakErdemci/gamachine/releases/latest'))
+    expect(m.title()).toBe('Güncelleme kurulamadı')
+    m.updater.emit('update-available', AVAILABLE)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(m.installer.refusal).toHaveBeenCalledTimes(1)
+    expect(m.dialog.showMessageBox).toHaveBeenCalledTimes(1)
+    expect(m.updater.downloadUpdate).not.toHaveBeenCalled()
+    expect(m.installer.stage).not.toHaveBeenCalled()
+    m.handle.dispose()
+  })
+
+  it('an unpacked app that fails its checks is not offered, swapped or downloaded again', async () => {
+    const m = macSetup({ stage: 'Gatekeeper kabul etmedi (spctl): rejected', response: 0 })
+    await setupDownload(m.updater)
+    await vi.waitFor(() => expect(m.dialog.showMessageBox).toHaveBeenCalledTimes(1))
+    expect(m.title()).toBe('Güncelleme kurulamadı')
+    m.quitNow()
+    expect(m.quit).not.toHaveBeenCalled()
+    expect(m.stopBackend).not.toHaveBeenCalled()
+    m.updater.emit('update-available', AVAILABLE)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(m.updater.downloadUpdate).toHaveBeenCalledTimes(1)
+    m.handle.dispose()
+  })
+
+  it('without a mac installer nothing is downloaded', async () => {
+    const m = macSetup({ noMac: true })
+    m.updater.emit('update-available', AVAILABLE)
+    await vi.waitFor(() => expect(m.dialog.showMessageBox).toHaveBeenCalledTimes(1))
+    expect(m.title()).toBe('Güncelleme kurulamadı')
+    expect(m.updater.downloadUpdate).not.toHaveBeenCalled()
+    m.handle.dispose()
+  })
+
+  it('"now" with a hung stopBackend relaunches the old app after 30 s and drops the staged update', async () => {
+    const m = macSetup({ response: 0, stopImpl: () => new Promise<void>(() => {}) })
+    await setupDownload(m.updater)
+    await vi.waitFor(() => expect(m.stopBackend).toHaveBeenCalled())
+    vi.advanceTimersByTime(31 * 1000)
+    expect(m.relaunch).toHaveBeenCalledTimes(1)
+    expect(m.staged.discard).toHaveBeenCalled()
+    m.quitNow()
+    expect(m.staged.swap).not.toHaveBeenCalled()
+    m.handle.dispose()
+  })
+})
+
 // The same flow driven through electron-updater's real NsisUpdater / MacUpdater:
 // only the network download, the installer launch and Squirrel are faked.
 describe('with the real electron-updater classes', () => {
@@ -514,15 +635,19 @@ describe('with the real electron-updater classes', () => {
     const dialog = {
       showMessageBox: vi.fn(async () => ({ response: opts.response >= 0 ? opts.response : await new Promise<number>((r) => { answer = r }), checkboxChecked: false })),
     }
+    const swap = vi.fn(() => '/logs/update-swap.log')
+    const stage = vi.fn(async (_zip: string, version: string) => ({ version, swap, discard: async () => {} }))
+    const willQuit: Array<() => void> = []
+    const quit = vi.fn(() => willQuit.forEach((h) => h()))
     const handle = setupAutoUpdate({
       autoUpdater: updater, dialog: dialog as any, stopBackend, logger: { log() {}, error() {} }, getMainWindow: () => null,
       relaunch: vi.fn(), openExternal: vi.fn(), platform: kind === 'nsis' ? 'win32' : 'darwin',
-      stageNative: () => native.checkForUpdates(),
+      mac: { installer: { refusal: async () => undefined, stage }, onWillQuit: (h) => willQuit.push(h), quit },
       publicKeys: [publicKey.export({ type: 'spki', format: 'pem' }).toString()], fetchBytes,
       hashFile: async (file) => { await opts.hashGate; return sha512(readFileSync(file)) },
     })
     return {
-      updater, quitHandlers, dialog, stopBackend, handle, realCheck, served, answer: (r: number) => answer!(r),
+      updater, quitHandlers, dialog, stopBackend, handle, realCheck, served, answer: (r: number) => answer!(r), stage, swap, quit, willQuit,
       offer: (version: string, content: string) => { served.content = content; latest = releaseInfo(version, sha512(content)) },
       dialogTitle: (n = 0) => (dialog.showMessageBox.mock.calls[n] as any)[0].title,
       installerCalls: () => updater.spawnLog.mock.calls.map((c: any[]) => ({ file: c[0], args: c[1] })),
@@ -626,31 +751,40 @@ describe('with the real electron-updater classes', () => {
     r.handle.dispose()
   })
 
-  it('macOS, "later": nothing is staged before the hash matched and "later" was chosen', async () => {
+  // Squirrel.Mac buffers the whole zip in memory and crashed on 1.37 GB (25 Nov 2026).
+  const squirrelUntouched = (updater: any) => {
+    expect(native.setFeedURL).not.toHaveBeenCalled()
+    expect(native.checkForUpdates).not.toHaveBeenCalled()
+    expect(native.quitAndInstall).not.toHaveBeenCalled()
+    expect(updater.server).toBeUndefined()
+  }
+
+  it('macOS, "later": the verified zip is staged, never handed to Squirrel, and swapped in on quit', async () => {
     const r = await rig('mac', { response: -1 })
     await r.realCheck()
     await vi.waitFor(() => expect(r.dialog.showMessageBox).toHaveBeenCalledTimes(1))
     expect(r.dialogTitle()).toBe('Güncelleme hazır')
-    expect(native.checkForUpdates).not.toHaveBeenCalled()
-    expect(r.updater.autoInstallOnAppQuit).toBe(false)
+    expect(r.stage).toHaveBeenCalledTimes(1)
+    const [zip, version] = r.stage.mock.calls[0]!
+    expect(version).toBe('2.0.0')
+    expect(readFileSync(zip, 'utf8')).toBe('installer-v2')
     r.answer(1)
-    await vi.waitFor(() => expect(native.checkForUpdates).toHaveBeenCalledTimes(1))
-    expect(r.updater.autoInstallOnAppQuit).toBe(true)
-    expect(native.quitAndInstall).not.toHaveBeenCalled()
-    r.updater.closeServerIfExists()
+    await new Promise((res) => setTimeout(res, 20))
+    expect(r.swap).not.toHaveBeenCalled()
+    r.willQuit.forEach((h) => h())
+    expect(r.swap).toHaveBeenCalledTimes(1)
+    expect(r.updater.autoInstallOnAppQuit).toBe(false)
+    squirrelUntouched(r.updater)
     r.handle.dispose()
   })
 
-  it('macOS, "now": the real quitAndInstall hands over to Squirrel once it has the update', async () => {
+  it('macOS, "now": stops the backend, quits and swaps; Squirrel is never involved', async () => {
     const r = await rig('mac', { response: 0 })
     await r.realCheck()
-    await vi.waitFor(() => expect(r.stopBackend).toHaveBeenCalledTimes(1))
-    await vi.waitFor(() => expect(native.listenerCount('update-downloaded')).toBeGreaterThan(1))
-    expect(native.checkForUpdates).toHaveBeenCalledTimes(1)
-    expect(native.quitAndInstall).not.toHaveBeenCalled()
-    native.emit('update-downloaded')
-    expect(native.quitAndInstall).toHaveBeenCalledTimes(1)
-    r.updater.closeServerIfExists()
+    await vi.waitFor(() => expect(r.swap).toHaveBeenCalledTimes(1))
+    expect(r.stopBackend).toHaveBeenCalledTimes(1)
+    expect(r.quit).toHaveBeenCalledTimes(1)
+    squirrelUntouched(r.updater)
     r.handle.dispose()
   })
 
@@ -661,9 +795,8 @@ describe('with the real electron-updater classes', () => {
     expect(r.dialogTitle()).toBe('Güncelleme doğrulanamadı')
     expect(r.updater.autoInstallOnAppQuit).toBe(false)
     expect(r.stopBackend).not.toHaveBeenCalled()
-    expect(native.checkForUpdates).not.toHaveBeenCalled()
-    expect(native.quitAndInstall).not.toHaveBeenCalled()
-    r.updater.closeServerIfExists()
+    expect(r.stage).not.toHaveBeenCalled()
+    squirrelUntouched(r.updater)
     r.handle.dispose()
   })
 })

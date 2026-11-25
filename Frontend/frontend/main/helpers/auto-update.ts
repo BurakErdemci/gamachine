@@ -5,6 +5,7 @@ import type { BrowserWindow, MessageBoxOptions, MessageBoxReturnValue } from 'el
 import { UPDATE_PUBLIC_KEYS } from './update-keys'
 import { checkAvailable, verifyManifest } from './update-signature'
 import { mt } from './main-i18n'
+import type { MacInstaller, StagedMacUpdate } from './mac-install'
 
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
 const INSTALL_TIMEOUT_MS = 30 * 1000
@@ -60,9 +61,14 @@ export interface AutoUpdateDeps {
   fetchBytes?: (url: string) => Promise<Uint8Array>
   hashFile?: (file: string) => Promise<string>
   removeFile?: (file: string) => Promise<void>
-  // macOS: asks Squirrel (electron's native autoUpdater) to fetch and stage the update from
-  // electron-updater's local proxy, so it installs on the next quit.
-  stageNative?: () => void
+  // macOS: installs through our own staged-bundle swap (mac-install.ts), never Squirrel.Mac,
+  // which crashes reading a 1.37 GB zip into memory. Without it nothing is installed on macOS.
+  mac?: {
+    installer: MacInstaller
+    // Registers a handler for the moment the quit is certain (electron's will-quit).
+    onWillQuit: (handler: () => void) => void
+    quit: () => void
+  }
 }
 
 export interface AutoUpdateHandle {
@@ -86,6 +92,17 @@ export function setupAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
   // only after the app hashed the downloaded file itself (see update-downloaded).
   autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = false
+  // MacUpdater hands every download to Squirrel.Mac: updateDownloaded starts a local proxy for
+  // the zip and calls nativeUpdater.setFeedURL (electron-updater 6.8.9 MacUpdater.js:122-231).
+  // Our install does not use Squirrel, so the downloaded event is dispatched directly instead.
+  if (platform === 'darwin') {
+    const mac = autoUpdater as any
+    if (typeof mac.updateDownloaded === 'function' && typeof mac.dispatchUpdateDownloaded === 'function') {
+      mac.updateDownloaded = async (_zip: unknown, event: unknown) => { mac.dispatchUpdateDownloaded(event); return [] }
+    } else if (mac.nativeUpdater) {
+      logger.error('[updater] MacUpdater beklenen biçimde değil; Squirrel devre dışı bırakılamadı')
+    }
+  }
   // NSIS web installers fetch archives listed under `packages:` with digests the signed manifest
   // does not bind, so they are switched off (and any update that lists packages is refused below).
   autoUpdater.disableWebInstaller = true
@@ -120,7 +137,8 @@ export function setupAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
 
   // At most one failure dialog per version, however often the check repeats.
   const warned = new Set<string>()
-  const showFailure = async (version: string) => {
+  // 'install': verified, but this Mac cannot install it in place (see mac-install.ts).
+  const showFailure = async (version: string, kind: 'verify' | 'install' = 'verify') => {
     if (warned.has(version)) return
     warned.add(version)
     // Reporting is best effort: a failing dialog or browser must not escape the event listener.
@@ -130,8 +148,8 @@ export function setupAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
         buttons: [mt('updateRelease'), mt('close')],
         defaultId: 0,
         cancelId: 1,
-        title: mt('updateFailedTitle'),
-        message: mt('updateFailedMessage'),
+        title: mt(kind === 'install' ? 'updateInstallFailedTitle' : 'updateFailedTitle'),
+        message: mt(kind === 'install' ? 'updateInstallFailedMessage' : 'updateFailedMessage'),
         detail: mt('updateFailedDetail'),
       })
       if (disposed) return
@@ -143,17 +161,38 @@ export function setupAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
 
   let verified: VerifiedUpdate | null = null
   let downloaded = false
+  // macOS: the unpacked, checked bundle of the verified update, and whether quitting swaps it in.
+  let staged: StagedMacUpdate | null = null
+  let swapOnQuit = false
+  // Versions this Mac refused to install; they are not downloaded again this session.
+  const macRefused = new Set<string>()
   const forget = () => {
     verified = null
     downloaded = false
     autoUpdater.autoInstallOnAppQuit = false
+    swapOnQuit = false
+    if (staged) void staged.discard()
+    staged = null
   }
+  deps.mac?.onWillQuit(() => {
+    if (!swapOnQuit || !staged) return
+    swapOnQuit = false
+    try {
+      staged.swap()
+    } catch (e) {
+      logger.error('[updater] kurulum yardımcısı başlatılamadı:', (e as any)?.message || e)
+    }
+  })
   // Install-on-quit for the hash-checked file, armed only after the user picked "later".
   // NSIS/Linux: BaseUpdater.addQuitHandler registers the quit-time install only if the flag is
-  // true at that moment (it is protected, so reached by name). macOS: MacUpdater has no quit
-  // handler; Squirrel installs a staged update on quit, so staging is asked for here.
+  // true at that moment (it is protected, so reached by name). macOS: the staged bundle is
+  // swapped in by our helper when the app quits; electron-updater's flag stays off there.
   const armInstallOnQuit = () => {
-    const register = platform === 'darwin' ? deps.stageNative : (autoUpdater as any).addQuitHandler?.bind(autoUpdater)
+    if (platform === 'darwin') {
+      swapOnQuit = staged !== null
+      return
+    }
+    const register = (autoUpdater as any).addQuitHandler?.bind(autoUpdater)
     autoUpdater.autoInstallOnAppQuit = register !== undefined
     if (!register) {
       logger.error('[updater] çıkışta kurulum kaydedilemedi, güncelleme çıkışta kurulmayacak')
@@ -175,6 +214,9 @@ export function setupAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
     if (!installing || relaunched || disposed) return
     relaunched = true
     if (installTimer) clearTimeout(installTimer)
+    // The old app comes back; a helper must not swap the bundle under it.
+    swapOnQuit = false
+    if (staged) void staged.discard()
     logger.error('[updater] kurulum başarısız, uygulama yeniden başlatılıyor:', reason)
     try { relaunch() } catch (e) { logger.error('[updater] yeniden başlatma hatası:', (e as any)?.message || e) }
   }
@@ -194,6 +236,19 @@ export function setupAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
       logger.error('[updater] güncelleme doğrulanamadı, indirilmeyecek:', result)
       await showFailure(String(info?.version))
       return
+    }
+    if (platform === 'darwin') {
+      // Checked before the download: a copy that cannot replace itself should not fetch 1.4 GB.
+      const refused = macRefused.has(result.version)
+        ? 'bu oturumda reddedildi'
+        : deps.mac ? await deps.mac.installer.refusal().catch((e: any) => String(e?.message || e)) : 'macOS kurucusu yok'
+      if (disposed || verified || mine !== latestCheck) return
+      if (refused) {
+        logger.error('[updater] güncelleme bu Mac\'te yerinde kurulamaz, indirilmeyecek:', refused)
+        macRefused.add(result.version)
+        await showFailure(result.version, 'install')
+        return
+      }
     }
     logger.log('[updater] imzalı güncelleme bulundu, indiriliyor:', result.version)
     verified = result
@@ -227,6 +282,24 @@ export function setupAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
         await showFailure(generation.version)
         return
       }
+      if (platform === 'darwin') {
+        const result = deps.mac
+          ? await deps.mac.installer.stage(info.downloadedFile, generation.version).catch((e: any) => String(e?.message || e))
+          : 'macOS kurucusu yok'
+        if (typeof result !== 'string' && (disposed || verified !== generation)) {
+          void result.discard()
+          return
+        }
+        if (disposed) return
+        if (typeof result === 'string') {
+          logger.error('[updater] güncelleme hazırlanamadı, kurulmayacak:', result)
+          macRefused.add(generation.version)
+          if (verified === generation) forget()
+          await showFailure(generation.version, 'install')
+          return
+        }
+        staged = result
+      }
       const { response } = await ask({
         type: 'info',
         buttons: [mt('updateRestart'), mt('updateLater')],
@@ -246,7 +319,13 @@ export function setupAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
         installTimer = setTimeout(() => failInstall('30 sn içinde çıkış olmadı'), INSTALL_TIMEOUT_MS)
         // Not checked for dispose here: an install the user already accepted still runs during a quit.
         await stopBackend()
-        autoUpdater.quitAndInstall(false, true)
+        if (platform === 'darwin') {
+          // will-quit starts the swap helper; Squirrel (quitAndInstall) is never involved.
+          swapOnQuit = true
+          deps.mac!.quit()
+        } else {
+          autoUpdater.quitAndInstall(false, true)
+        }
       }
     } catch (e) {
       logger.error('[updater] kurulum hatası:', (e as any)?.message || e)
