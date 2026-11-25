@@ -987,11 +987,14 @@ class DatabaseManager:
 
     def create_subagent(self, parent_conv: int, user_id: int, name: str, provider_type: str,
                         model_name: str, effort: str, status: str) -> Optional[Dict[str, Any]]:
-        """A hidden child chat of `parent_conv` (same user, same folder, its
+        """A hidden child chat of `parent_conv` (same user, the folder its turns run in now, its
         model stamped) and its sub-agent row, in one transaction. None if the
         parent is gone, another user's, a side chat or itself a sub-agent's."""
         now_s = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         now = time.time()
+        # The folder the parent's turns run in now: an ordinary turn uses the user's latest
+        # workspace, not the parent row's creation-time one (audit of B1).
+        current = self.get_last_workspace(user_id)
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute('BEGIN IMMEDIATE')
             row = conn.execute(
@@ -1004,7 +1007,7 @@ class DatabaseManager:
                 'INSERT INTO conversations (user_id, title, created_at, updated_at, hidden, '
                 'agent_of, workspace, provider_type, model_name, title_source) '
                 "VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, 'user')",
-                (user_id, name, now_s, now_s, parent_conv, row[3], provider_type, model_name)
+                (user_id, name, now_s, now_s, parent_conv, current or row[3], provider_type, model_name)
             ).lastrowid
             agent_id = conn.execute(
                 'INSERT INTO subagents (parent_conv, child_conv, name, provider_type, model_name, '

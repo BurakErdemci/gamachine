@@ -557,19 +557,22 @@ async def test_results_are_kept_in_a_cli_handoff_transcript(env):
 
 
 # ── turn 2: audit blockers ───────────────────────────────────────────────────
-async def test_B1_a_child_runs_in_its_parents_folder_not_the_users_latest(env, tmp_path):
-    project_a, project_b = tmp_path / "project-a", tmp_path / "project-b"
-    for folder in (project_a, project_b):
+async def test_B1_a_child_runs_where_its_parent_ran_when_it_was_started(env, tmp_path):
+    # An ordinary turn runs in the user's latest folder, not its row's creation-time one: the
+    # child takes the folder the parent works in at spawn and keeps it if the user moves on.
+    project_a, project_b, project_c = (tmp_path / n for n in ("project-a", "project-b", "project-c"))
+    for folder in (project_a, project_b, project_c):
         folder.mkdir()
     env.db.save_workspace(1, str(project_a))
     parent = env.db.create_conversation(1, "Ana", workspace=str(project_a))
     env.db.set_conversation_model(parent, "subscription", MAIN)
     env.in_flight.add(parent)
-    env.db.save_workspace(1, str(project_b))   # the user opens another project
+    env.db.save_workspace(1, str(project_b))   # the parent's turns now run in project B
     child = (await _start(env, parent))["chat_id"]
+    env.db.save_workspace(1, str(project_c))   # the user opens a third project afterwards
     await _idle()
     child_kw = next(k for k in _Runner.kwargs if k["conversation_id"] == child)
-    assert child_kw["workspace_path"] == str(project_a)
+    assert child_kw["workspace_path"] == str(project_b)
 
 
 async def test_B2_a_held_result_survives_compaction_and_rides_the_users_turn(env):
