@@ -308,6 +308,12 @@ def _scan_app() -> Tuple[List[_Site], List[_Site]]:
 # ⚠️ Buraya bir satır eklemek "bu sızıntı kabul edildi" demektir. Gerekçesi
 # ölçüme ya da somut bir arıza yönüne dayanmayan satır eklenmeyecek.
 _EXEMPT: Dict[Tuple[str, str], Tuple[int, str]] = {
+    ("app/script_tool.py", "_node_version"): (
+        1, "run_script's sandbox runtime probe: _child_env passes only ELECTRON_RUN_AS_NODE and "
+           "the Windows system-root names, no parent secrets."),
+    ("app/script_tool.py", "execute"): (
+        1, "run_script's QuickJS runner: _child_env passes only ELECTRON_RUN_AS_NODE and the "
+           "Windows system-root names, no parent secrets; the runner reaches tools only over its pipe."),
     ("app/computer_use/driver_client.py", "_transport"): (
         1, "Embedded driver receives an exact minimal environment with telemetry disabled; "
            "parent secrets are intentionally not inherited."),
