@@ -268,22 +268,52 @@ def shadow_supported() -> bool:
     return version is not None and _SHADOW_VERSION_MIN <= version < _SHADOW_VERSION_BELOW
 
 
-def _without_grants(perm) -> dict:
-    """A permission block minus every rule Gamachine sets itself.
+_PERM_SKIP_KEYS = frozenset({"*", "edit", "bash", "read", "glob", "grep"})
+_GAMACHINE_SERVERS = (
+    "unityai",
+    "unityMCP",
+    "gamachineComputer",
+    "gamachineBrowser",
+    "gamachineConnectors",
+)
+_GAMACHINE_SERVER_PREFIXES = tuple(f"{s}_" for s in _GAMACHINE_SERVERS)
+
+
+def _is_restricting_value(value) -> bool:
+    if isinstance(value, str):
+        return value in ("deny", "ask")
+    if isinstance(value, dict):
+        return bool(value) and all(
+            isinstance(v, str) and v in ("deny", "ask")
+            for v in value.values()
+        )
+    return False
+
+
+def _restricting_permissions(perm) -> dict:
+    """Keep only user permission entries that restrict (deny/ask), excluding
+    keys Gamachine sets itself.
 
     Rules are evaluated last-match-wins in key order (permission/index.ts
-    evaluate/disabled use findLast), so the caller appends its own edit/bash
-    rules AFTER what is left; a string form ("allow") means {"*": "allow"}.
+    evaluate/disabled use findLast). A string-form value ("allow"/"ask"/"deny")
+    means {"*": value} and contributes nothing.
     """
-    if isinstance(perm, str):
-        perm = {"*": perm}
     if not isinstance(perm, dict):
         return {}
-    def _grants_all(k, v):
-        return k == "*" and (v == "allow" or (isinstance(v, dict) and "allow" in v.values()))
-
-    return {k: v for k, v in perm.items()
-            if k not in ("edit", "bash") and not _grants_all(k, v)}
+    kept = {}
+    for k, v in perm.items():
+        if not isinstance(k, str):
+            continue
+        if (
+            k in _PERM_SKIP_KEYS
+            or k.endswith("_*")
+            or k in _GAMACHINE_SERVERS
+            or k.startswith(_GAMACHINE_SERVER_PREFIXES)
+        ):
+            continue
+        if _is_restricting_value(v):
+            kept[k] = dict(v) if isinstance(v, dict) else v
+    return kept
 
 
 def _opencode_tool(tool: str) -> str:
@@ -469,17 +499,11 @@ class OpenCodeProvider(BaseCLIProvider):
             if not isinstance(user_permission, (dict, str)):  # "allow"/"ask" shorthand is valid
                 user_permission = {}
 
-            # Yazma/shell CLI içinde kapalı → unityai MCP (onaylı) tek yol.
-            # This file never opens bash: "ask" comes only from the shadow
-            # dir (see _SHADOW_CONFIG), so a spawn without the shadow keeps
-            # "deny" even when another chat's turn wrote this file.
-            permission = {**_without_grants(user_permission),
-                          "edit": "deny", "bash": "deny"}
             merged = {
                 "$schema": existing.get("$schema", "https://opencode.ai/config.json"),
                 **existing,
                 "mcp": {**user_mcp, **mcp},
-                "permission": permission,
+                "permission": {},
             }
             # An agent's own permission is merged after the top-level one
             # (agent/agent.ts ~293), so a user's agent.build.permission.bash
@@ -488,19 +512,47 @@ class OpenCodeProvider(BaseCLIProvider):
                 entries = merged.get(section)
                 if isinstance(entries, dict):
                     merged[section] = {
-                        name: ({**entry, "permission": _without_grants(entry["permission"])}
+                        name: ({**entry, "permission": _restricting_permissions(entry["permission"])}
                                if isinstance(entry, dict) and "permission" in entry else entry)
                         for name, entry in entries.items()
                     }
             if not unity_mcp_manager.is_running():
                 merged["mcp"].pop("unityMCP", None)
-            # Unlisted MCP tools run headless without a prompt (measured by the
-            # vault image test, 15 Oct 2026), so no permission entry is needed.
-            self._apply_computer_servers(
+            # Unlisted MCP tools would run headless without a prompt (measured
+            # 25 Nov 2026), which is why "*": "deny" comes first and only
+            # Gamachine's own servers are allowed below.
+            computer_names = self._apply_computer_servers(
                 merged["mcp"],
                 lambda e: {"type": "local", "command": [e["command"], *e["args"]],
                            "environment": e["env"], "enabled": True},
                 chat_id=False)
+
+            # Yazma/shell CLI içinde kapalı → unityai MCP (onaylı) tek yol.
+            # This file never opens bash: "ask" comes only from the shadow
+            # dir (see _SHADOW_CONFIG), so a spawn without the shadow keeps
+            # "deny" even when another chat's turn wrote this file.
+            # Built as a fresh dict in key order (last-match-wins).
+            permission = {}
+            permission["*"] = "deny"
+            for k, v in _restricting_permissions(user_permission).items():
+                permission[k] = v
+            permission["read"] = {
+                "*": "allow",
+                "*.env": "deny",
+                "*.env.*": "deny",
+                "*.env.example": "allow",
+            }
+            permission["glob"] = "allow"
+            permission["grep"] = "allow"
+            allowed_servers = ["unityai"]
+            if "unityMCP" in mcp and "unityMCP" in merged["mcp"]:
+                allowed_servers.append("unityMCP")
+            allowed_servers.extend(computer_names)
+            for srv in allowed_servers:
+                permission[f"{srv}_*"] = "allow"
+            permission["edit"] = "deny"
+            permission["bash"] = "deny"
+            merged["permission"] = permission
 
             # Reasoning effort: opencode CLI flag sunmaz — model options'a yazılır
             # (provider.<id>.models.<model>.options.reasoningEffort). auto → dokunma.

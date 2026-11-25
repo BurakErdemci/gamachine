@@ -66,14 +66,21 @@ def _effective_permission(cfg, env):
 
 
 def _grants(node):
-    """Every (key, value) pair in a JSON tree that opens bash/edit or '*'."""
+    """Every (key, value) pair in a permission block that opens bash/edit or '*'."""
     found = []
     if isinstance(node, dict):
         for k, v in node.items():
-            if k in ("bash", "edit", "*") and (v == "allow" or (
-                    isinstance(v, dict) and "allow" in v.values())):
-                found.append((k, v))
-            found += _grants(v)
+            if k == "permission":
+                if v == "allow":
+                    found.append(("*", v))
+                elif isinstance(v, dict):
+                    for tk, tv in v.items():
+                        if tk in ("bash", "edit", "*") and (
+                            tv == "allow" or (isinstance(tv, dict) and "allow" in tv.values())
+                        ):
+                            found.append((tk, tv))
+            else:
+                found += _grants(v)
     elif isinstance(node, list):
         for item in node:
             found += _grants(item)
