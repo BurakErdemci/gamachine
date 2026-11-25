@@ -293,6 +293,13 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    # Backend-started turns end first, while the sessions they use still exist.
+    try:
+        from agentic import turn_runner
+        await turn_runner.shutdown()
+    except Exception as e:
+        logger.warning(f"[Shutdown] background turns not stopped: {e}")
+
     try:
         await usage_service.aclose()
     except Exception as e:

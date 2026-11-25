@@ -31,6 +31,7 @@ from agentic import chat_titles
 from agentic import mailbox
 from agentic import turn_events
 from agentic import turn_replies
+from agentic import turn_runner
 from computer_use import activity as computer_activity
 from computer_use import gate as computer_gate
 from computer_use import policy as computer_policy
@@ -697,6 +698,13 @@ def _tag_sse_frame(frame: str, conversation_id: int) -> str:
         return frame
     sep = ", " if payload else ""
     return f'data: {body[:-1]}{sep}"conversation_id": {int(conversation_id)}}}\n\n'
+
+
+def _single_frame(frame: str):
+    """The stream of a turn that ends at its opening (one terminal frame)."""
+    async def stream():
+        yield frame
+    return stream
 
 
 async def _tag_sse_stream(frames, conversation_id: int):
@@ -1458,7 +1466,8 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
         # checks below only saw the Claude session, so mail to a busy Codex or
         # OpenCode chat would have started a second turn on top of the first.
         from agentic.approval_policy import conversation_turn_in_flight
-        if conversation_turn_in_flight(conv_id):
+        # The gate also covers a turn still opening and a backend-started one.
+        if conversation_turn_in_flight(conv_id) or turn_runner.busy(conv_id):
             return "turn_running"
         try:
             from providers.claude_sdk_session import peek_session, session_busy
@@ -2281,32 +2290,99 @@ Max 300 kelime. Türkçe yaz.
 
         _check_chat_rate_limit(user_id)
 
+        turn = turn_runner.TurnInput(
+            conversation_id=request.conversation_id, message=request.message,
+            origin=request.origin, http=True, user_id=user_id, language=request.language,
+            ui_language=_stream_language(request, x_ui_lang), editor_code=request.editor_code,
+            thinking_level=request.thinking_level, images=request.images, videos=request.videos,
+            effort_level=request.effort_level, ultracode=request.ultracode)
+        language = turn.ui_language
+        # The turn state `_open_turn` settles; tests reach it through this
+        # endpoint's closure (tests/test_bg_tasks_reset.py).
+        (_reply_owed, _turn_reply_detached)
+        if turn_runner.busy(request.conversation_id):
+            # Busy chat: this turn waits at the gate, and opens (stores its
+            # row, reads the history) only once the running turn has ended,
+            # so its context holds that turn's reply.
+            frames = turn_runner.run_turn(turn, _turn_frames)
+        else:
+            # Idle chat: the turn opens now, inside the request, exactly as
+            # before (its rows are stored and its errors are HTTP errors);
+            # its stream still passes the gate on its first frame.
+            stream = _open_turn(turn)
+            frames = turn_runner.run_turn(turn, lambda _t: stream())
+        return StreamingResponse(
+            localize_sse(_tag_sse_stream(frames, request.conversation_id), language),
+            media_type="text/event-stream")
+
+    def _store_carried(turn: turn_runner.TurnInput) -> Optional[int]:
+        """Store the turn's carried inputs as messages in arrival order; the
+        first user row (an input with origin "user"), else None."""
+        first_user = None
+        for q in turn.carried:
+            role = "user" if q.origin == "user" else "system"
+            row = db.add_message(turn.conversation_id, role, q.text)
+            if role == "user" and first_user is None:
+                first_user = row
+        turn.consumed = True
+        return first_user
+
+    def _store_background_error(turn: turn_runner.TurnInput) -> None:
+        # Nobody may be watching a backend-started turn: the chat keeps a row.
+        try:
+            db.add_message(turn.conversation_id, "system",
+                           "Arka planda başlayan tur bir hatayla bitti. Ayrıntı sunucu loglarında.")
+        except Exception:
+            logger.exception("[turn-gate] conv=%s background error not stored",
+                             turn.conversation_id)
+
+    async def _turn_frames(turn: turn_runner.TurnInput):
+        """A whole turn as SSE frames: the executor of background and deferred turns."""
+        frames = _open_turn(turn)()
+        try:
+            async for frame in frames:
+                yield frame
+        finally:
+            await frames.aclose()
+
+    turn_runner.set_executor(_turn_frames)
+
+    def _open_turn(turn: turn_runner.TurnInput):
+        """Open one turn of a chat, whoever started it (agentic/turn_runner).
+
+        Opening is the synchronous part: wake ticket, rows, history, the
+        runner; `/chat-stream` runs it inside the request when the chat is
+        idle, so its errors stay HTTP errors. The returned `stream()` runs
+        the turn and its turn-end work; its caller holds the chat's gate.
+        """
         from agentic import wake_queue
 
-        ticketed_wake = request.origin == "wake" and wake_queue.consume_ticket(
-            request.conversation_id)
-        wake_notices = (wake_queue.take_ticket_notices(request.conversation_id)
-                        if request.origin == "wake" else [])
-        if request.origin == "wake" and not ticketed_wake:
+        user_id = turn.user_id
+        if not turn.http:
+            if _side_main_of(turn.conversation_id) is not None:
+                raise HTTPException(status_code=400, detail=_SIDE_REFUSED)
+            user_id = db.get_conversation_owner(turn.conversation_id)
+            if user_id is None:
+                raise ValueError(f"conversation {turn.conversation_id} has no owner")
+
+        ticketed_wake = turn.origin == "wake" and wake_queue.consume_ticket(
+            turn.conversation_id)
+        wake_notices = (wake_queue.take_ticket_notices(turn.conversation_id)
+                        if turn.origin == "wake" else [])
+        if turn.origin == "wake" and not ticketed_wake:
             # No ticket (expired or already claimed): the notices stay queued
             # and are offered again. The client's text is not a user message.
             logger.info("[wake] conv=%s unticketed wake claim -> no turn",
-                        request.conversation_id)
-
-            async def _stale():
-                yield f"data: {json.dumps({'type': 'done', 'stop_reason': 'wake_stale'})}\n\n"
-
-            return StreamingResponse(
-                localize_sse(_tag_sse_stream(_stale(), request.conversation_id), _stream_language(request, x_ui_lang)),
-                media_type="text/event-stream")
+                        turn.conversation_id)
+            return _single_frame(f"data: {json.dumps({'type': 'done', 'stop_reason': 'wake_stale'})}\n\n")
         # A reply still owed by an earlier turn of this chat (its stream went
         # away and it never stored) is not this turn's to settle. Only a turn
         # that really starts settles it: a stale wake above starts none.
-        _reply_owed.pop(request.conversation_id, None)
-        _abandon_detached_turn_reply(request.conversation_id)
+        _reply_owed.pop(turn.conversation_id, None)
+        _abandon_detached_turn_reply(turn.conversation_id)
         # The text this turn runs on. A mail wake replaces it with the notes
         # from the DB: the client's text is never what gets delivered.
-        turn_message = request.message
+        turn_message = turn.message
         mail_note = ""
         mail_depth = 0
         mail_rows: Optional[List[dict]] = None
@@ -2319,22 +2395,16 @@ Max 300 kelime. Türkçe yaz.
             # finishes. Without a limit this loop spends the user's quota while
             # nobody is there. Once the limit is exceeded the turn does NOT
             # start at all; the client learns this from a single `done` frame.
-            if wake_queue.chain_exhausted(request.conversation_id):
+            if wake_queue.chain_exhausted(turn.conversation_id):
                 logger.info("[wake] conv=%s consecutive-wake limit reached -> turn not started",
-                            request.conversation_id)
+                            turn.conversation_id)
                 # The ticket took the notices out of the queue: put them back so
                 # the next wake after a user message still delivers them. Mail
                 # notes are DB rows and stay queued on their own.
                 for _n in wake_notices:
-                    wake_queue.enqueue(request.conversation_id, _n)
-
-                async def _exhausted():
-                    yield f"data: {json.dumps({'type': 'done', 'stop_reason': 'wake_chain_exhausted'})}\n\n"
-
-                return StreamingResponse(
-                    localize_sse(_tag_sse_stream(_exhausted(), request.conversation_id), _stream_language(request, x_ui_lang)),
-                    media_type="text/event-stream")
-            mail_rows = _claim_mail(request.conversation_id)
+                    wake_queue.enqueue(turn.conversation_id, _n)
+                return _single_frame(f"data: {json.dumps({'type': 'done', 'stop_reason': 'wake_chain_exhausted'})}\n\n")
+            mail_rows = _claim_mail(turn.conversation_id)
             # A wake that only carries notes from turns the user started
             # (depth 1) has a human active in the sender chat, so it is not
             # counted; replies (depth 2), task notices and a failed claim are.
@@ -2348,24 +2418,18 @@ Max 300 kelime. Türkçe yaz.
                              and not any(n and not mailbox.is_mail_notice(n)
                                          for n in wake_notices))
             if not _human_driven:
-                wake_queue.bump_chain(request.conversation_id)
+                wake_queue.bump_chain(turn.conversation_id)
             if mail_rows is None:
                 # No turn and no row: this wake may be carrying mail that is
                 # still queued, and the client's text is not what it says
                 # (Codex mailverify, 27 Sep 2026). The next wake claims again.
                 logger.info("[wake] conv=%s mail claim failed -> turn not started",
-                            request.conversation_id)
-
-                async def _claim_failed():
-                    yield f"data: {json.dumps({'type': 'done', 'stop_reason': 'mail_claim_failed'})}\n\n"
-
-                return StreamingResponse(
-                    localize_sse(_tag_sse_stream(_claim_failed(), request.conversation_id), _stream_language(request, x_ui_lang)),
-                    media_type="text/event-stream")
+                            turn.conversation_id)
+                return _single_frame(f"data: {json.dumps({'type': 'done', 'stop_reason': 'mail_claim_failed'})}\n\n")
             if mail_rows:
                 mail_note = mailbox.stored_text(mail_rows)
                 # The note names the send tool as the receiving model sees it.
-                _mail = chat_model.chat_model(db, user_id, request.conversation_id)
+                _mail = chat_model.chat_model(db, user_id, turn.conversation_id)
                 turn_message = mailbox.turn_text(mail_rows, wake_notices,
                                                  _mail["provider_type"], _mail["model_name"])
                 mail_depth = max(int(r.get("depth") or 0) for r in mail_rows)
@@ -2378,24 +2442,30 @@ Max 300 kelime. Türkçe yaz.
                 _wake_text = wake_queue.notice_turn_text(wake_notices)
                 if _wake_text:
                     turn_message = _wake_text
-                db.add_message(request.conversation_id, "system",
-                               _wake_text or request.message)
+                db.add_message(turn.conversation_id, "system",
+                               _wake_text or turn.message)
+        elif not turn.http:
+            # A backend-started turn runs on its queued inputs; no human is
+            # here, so the wake chain, mail notices and a computer-use Stop stay.
+            _turn_user_row = _store_carried(turn)
+            turn_message = "\n\n".join(q.text for q in turn.carried)
+            _begin_turn_reply(turn.conversation_id, _turn_user_row)
         else:
             # A real user message CANCELS pending mail wakes: the human is back
             # in the loop and decides the next step. Queued notes stay in the
             # DB and are re-armed once this turn is over. Background-task
             # notices stay: that work finished and still needs its continuation.
-            wake_queue.drop_mail_notices(request.conversation_id)
-            wake_queue.reset_chain(request.conversation_id)
+            wake_queue.drop_mail_notices(turn.conversation_id)
+            wake_queue.reset_chain(turn.conversation_id)
             # The user's next message ends a computer-use Stop; a wake that lost its ticket is not one.
-            if request.origin != "wake":
-                _computer_halted.discard(request.conversation_id)
-            _turn_user_row = db.add_message(request.conversation_id, "user", request.message)
-            _begin_turn_reply(request.conversation_id, _turn_user_row)
+            if turn.origin != "wake":
+                _computer_halted.discard(turn.conversation_id)
+            _turn_user_row = db.add_message(turn.conversation_id, "user", turn.message)
+            _begin_turn_reply(turn.conversation_id, _turn_user_row)
             try:
-                turn_message = _with_mentions(request.conversation_id, user_id, request.message)
+                turn_message = _with_mentions(turn.conversation_id, user_id, turn.message)
             except Exception:
-                _end_turn_reply(request.conversation_id, _turn_user_row, None, "error")
+                _end_turn_reply(turn.conversation_id, _turn_user_row, None, "error")
                 raise
 
         # Background tasks a Stop or a session close ended: one line in front
@@ -2406,32 +2476,32 @@ Max 300 kelime. Türkçe yaz.
             if not _is_slash_command(turn_message):
                 from providers.claude_sdk_session import (peek_session as _peek_claude,
                                                           take_reset_notice as _take_reset_notice)
-                _claude = _peek_claude(request.conversation_id)
+                _claude = _peek_claude(turn.conversation_id)
                 _stop_notice = (_claude.take_stop_notice() if _claude is not None
-                                else _take_reset_notice(request.conversation_id))
+                                else _take_reset_notice(turn.conversation_id))
                 if _stop_notice:
-                    db.add_message(request.conversation_id, "system", _stop_notice)
+                    db.add_message(turn.conversation_id, "system", _stop_notice)
                     turn_message = f"{_stop_notice}\n\n{turn_message}"
         except Exception:
-            logger.exception("[bg-tasks] conv=%s stop notice not stored", request.conversation_id)
+            logger.exception("[bg-tasks] conv=%s stop notice not stored", turn.conversation_id)
 
         # A turn that fails before its stream starts still ends its record.
         try:
             # Eğer varsa kod düzenleyicisinden gelen kodu ekle
-            if request.editor_code:
-                combined_msg = f"{turn_message}\n\n```csharp\n{request.editor_code}\n```"
+            if turn.editor_code:
+                combined_msg = f"{turn_message}\n\n```csharp\n{turn.editor_code}\n```"
             else:
                 combined_msg = turn_message
 
             # The chat's own model, whatever any window shows (per-chat model).
-            provider_type, model_name = chat_model.turn_model(db, user_id, request.conversation_id)
+            provider_type, model_name = chat_model.turn_model(db, user_id, turn.conversation_id)
             api_key = (db.get_api_key(user_id, provider_type) or "")
             workspace_path = db.get_last_workspace(user_id) or ""
 
             # CLI'lar arası "kaldığı yerden devam": tam transcript (her iki rol). Yeni
             # provider'ın ilk turunda enjekte edilir (agent_runner switch'te session'ı resetler).
-            memory = db.get_memory(request.conversation_id)
-            history_messages = db.get_conversation_messages(request.conversation_id)
+            memory = db.get_memory(turn.conversation_id)
+            history_messages = db.get_conversation_messages(turn.conversation_id)
             context_summary = _build_handoff_context(
                 memory, history_messages,
                 history_header=mailbox.MAIL_WAKE_HISTORY_HEADER if mail_note else None)
@@ -2440,9 +2510,9 @@ Max 300 kelime. Türkçe yaz.
             # yalnız kimliği saklıyoruz. Workspace değişmişse `None` döner (yanlış
             # projenin geçmişini açmamak için) → eski transcript enjeksiyonuna düşülür.
             _oturum_anahtari = _oturum_saglayici_anahtari(provider_type, model_name)
-            _resume_id = db.get_cli_session(request.conversation_id, _oturum_anahtari, workspace_path)
+            _resume_id = db.get_cli_session(turn.conversation_id, _oturum_anahtari, workspace_path)
             _turn_agent = _message_agent(provider_type, model_name)
-            reply_entry = (_owe_reply(request.conversation_id, mail_rows, user_id, _turn_agent)
+            reply_entry = (_owe_reply(turn.conversation_id, mail_rows, user_id, _turn_agent)
                            if mail_note and mail_rows else None)
 
             runner = AgentRunner(
@@ -2450,24 +2520,24 @@ Max 300 kelime. Türkçe yaz.
                 api_key=api_key,
                 model_name=model_name,
                 workspace_path=workspace_path,
-                language=request.language,
+                language=turn.language,
                 context=context_summary,
-                thinking_level=request.thinking_level,
-                conversation_id=request.conversation_id,
-                images=request.images,
-                videos=request.videos,
+                thinking_level=turn.thinking_level,
+                conversation_id=turn.conversation_id,
+                images=turn.images,
+                videos=turn.videos,
                 # The global mode decides; `request.generation_mode` is still
                 # accepted for old clients but no longer trusted for approval.
                 generation_mode=approval_mode.current_mode(),
-                effort_level=request.effort_level,
-                ultracode=request.ultracode,
+                effort_level=turn.effort_level,
+                ultracode=turn.ultracode,
                 resume_id=_resume_id,
                 mail_depth=mail_depth,
                 task_wake=bool(ticketed_wake and not mail_rows),
                 api_history=api_compaction.history_turns(history_messages),
                 api_memory=memory if isinstance(memory, str) else "",
             )
-            _conv = request.conversation_id
+            _conv = turn.conversation_id
 
             def _store_compaction(summary: str, through_id) -> None:
                 # Auto-compaction of an API turn: the same storage as the button.
@@ -2477,10 +2547,21 @@ Max 300 kelime. Türkçe yaz.
                     db.compact_conversation(_conv, summary, through_id=through_id)
             runner.compaction_store = _store_compaction
         except Exception:
-            _end_turn_reply(request.conversation_id, _turn_user_row, None, "error")
+            _end_turn_reply(turn.conversation_id, _turn_user_row, None, "error")
             raise
 
-        async def event_generator():
+        async def stream():
+            _msg = combined_msg
+            if turn.carried and not turn.consumed and not _is_slash_command(turn_message):
+                # Background inputs queued while the chat was busy ride this user
+                # turn, after the user's message. A slash command must reach the
+                # CLI bare: its inputs go back to the queue and run next.
+                try:
+                    _store_carried(turn)
+                    _msg = "\n\n".join([_msg] + [q.text for q in turn.carried])
+                except Exception:
+                    logger.exception("[turn-gate] conv=%s carried inputs not stored; requeued",
+                                     turn.conversation_id)
             entry = _TurnRecord()
             turn_reply = _TurnReply()
             # Only a `done` that says `complete`, with no `error`, forwards an
@@ -2499,10 +2580,11 @@ Max 300 kelime. Türkçe yaz.
             # This turn's turn_replies record: its outcome, and whether it ended.
             _tr_status: Optional[str] = None
             _tr_ended = False
+            _bg_error_stored = False
             # Every provider path runs through `runner.run` below, so this one
             # tap feeds the turn-event ring for all of them.
-            tap = turn_events.TurnTap(request.conversation_id, _turn_agent, model_name,
-                                      "wake" if ticketed_wake else "user")
+            tap = turn_events.TurnTap(turn.conversation_id, _turn_agent, model_name,
+                                      "wake" if ticketed_wake else ("user" if turn.http else turn.origin))
             try:
                 tap.start()
                 # Labels the answer being streamed with the agent that runs it,
@@ -2512,12 +2594,12 @@ Max 300 kelime. Türkçe yaz.
                     # The client drew its own text for this row; this is the
                     # stored one, so the screen shows what the chat really got.
                     yield f"data: {json.dumps({'type': 'wake_message', 'content': mail_note})}\n\n"
-                async for event in runner.run(combined_msg):
+                async for event in runner.run(_msg):
                     if event.type == "user_injected":
                         # A message sent into this turn reached the agent:
                         # the text so far, then that message, then the rest.
                         try:
-                            _save_injected_split(request.conversation_id, entry.split(),
+                            _save_injected_split(turn.conversation_id, entry.split(),
                                                  (event.data or {}).get("text") or "",
                                                  model=model_name, provider=_turn_agent)
                         except Exception:
@@ -2527,11 +2609,11 @@ Max 300 kelime. Türkçe yaz.
                     tap.feed(event)
                     if event.type == "done" and (event.data or {}).get("stop_reason") == "wake_deferred":
                         # The session was busy: no turn ran and nothing reset it.
-                        if not wake_queue.requeue_deferred(request.conversation_id, wake_notices):
+                        if not wake_queue.requeue_deferred(turn.conversation_id, wake_notices):
                             logger.info("[wake] conv=%s deferred twice -> notices dropped",
-                                        request.conversation_id)
+                                        turn.conversation_id)
                     elif ticketed_wake and event.type != "status":
-                        wake_queue.wake_ran(request.conversation_id)
+                        wake_queue.wake_ran(turn.conversation_id)
                     if event.type == "done":
                         ended_normally = ((event.data or {}).get("stop_reason")
                                           or "complete") == "complete"
@@ -2550,7 +2632,7 @@ Max 300 kelime. Türkçe yaz.
                     if event.type == "done":
                         _sid = (event.data or {}).get("session_id")
                         if _sid:
-                            db.save_cli_session(request.conversation_id, _oturum_anahtari,
+                            db.save_cli_session(turn.conversation_id, _oturum_anahtari,
                                                 _sid, workspace_path)
                     if event.type in ("done", "error"):
                         terminal_gitti = True
@@ -2570,31 +2652,32 @@ Max 300 kelime. Türkçe yaz.
                                 getattr(runner, "session_defer_notice", "")):
                     if _notice:
                         try:
-                            db.add_message(request.conversation_id, "system", _notice)
+                            db.add_message(turn.conversation_id, "system", _notice)
                         except Exception:
                             logger.exception("[bg-tasks] conv=%s notice not stored",
-                                             request.conversation_id)
+                                             turn.conversation_id)
                 full_response = entry.value()
                 _tr_row: Optional[int] = None
                 if full_response:
                     try:
-                        _tr_row = db.add_message(request.conversation_id, "assistant", full_response,
+                        _tr_row = db.add_message(turn.conversation_id, "assistant", full_response,
                                                  provider=_turn_agent, model=model_name)
                         if ended_normally and not ticketed_wake:
-                            db.record_activity("turn_done", request.conversation_id,
+                            db.record_activity("turn_done", turn.conversation_id,
                                                provider=_turn_agent, model=model_name)
 
                         # İlk mesajsa başlığı otomatik değiştir
                         # Not from a note: its framed text is no title. Not
                         # over a name the user gave the empty chat either.
                         if len(history_messages) <= 1 and not mail_note:
-                            auto_title = request.message[:40].strip()
-                            if len(request.message) > 40:
+                            _title_src = turn.message if turn.http else turn_message
+                            auto_title = _title_src[:40].strip()
+                            if len(_title_src) > 40:
                                 auto_title += "..."
-                            db.set_auto_title(request.conversation_id, auto_title)
-                        chat_titles.after_reply(db, request.conversation_id,
+                            db.set_auto_title(turn.conversation_id, auto_title)
+                        chat_titles.after_reply(db, turn.conversation_id,
                                                 provider_type, model_name, api_key,
-                                                language=_stream_language(request, x_ui_lang))
+                                                language=turn.ui_language)
                     except Exception:
                         logger.exception("Asistan turu DB'ye yazılamadı")
                         _w = {"type": "warning", "code": "turn_not_saved",
@@ -2604,22 +2687,25 @@ Max 300 kelime. Türkçe yaz.
                         yield f"data: {json.dumps(_w)}\n\n"
 
                 _tr_ended = True
-                _end_turn_reply(request.conversation_id, _turn_user_row, _tr_row,
+                _end_turn_reply(turn.conversation_id, _turn_user_row, _tr_row,
                                 _tr_status or "error")
+                if not turn.http and _tr_status in (None, "error"):
+                    _bg_error_stored = True
+                    _store_background_error(turn)
 
                 if reply_entry is not None:
                     reply_settled = True
                     try:
-                        _settle_owed_reply(request.conversation_id, reply_entry,
+                        _settle_owed_reply(turn.conversation_id, reply_entry,
                                            turn_reply.value() if full_response else "",
                                            ended_normally)
                     except Exception:
                         logger.exception("[mailbox] conv=%s reply not forwarded",
-                                         request.conversation_id)
+                                         turn.conversation_id)
 
                 # Context usage hesapla ve frontend'e ilet
-                _usage = _context_usage_payload(db, request.conversation_id, last_usage,
-                                                _live_context_reading(request.conversation_id, chat_model.cli_family(provider_type, model_name),
+                _usage = _context_usage_payload(db, turn.conversation_id, last_usage,
+                                                _live_context_reading(turn.conversation_id, chat_model.cli_family(provider_type, model_name),
                                                                       provider_type, model_name))
                 yield f"data: {json.dumps(_usage)}\n\n"
 
@@ -2629,9 +2715,11 @@ Max 300 kelime. Türkçe yaz.
                 # log'a yazılır, istemci sabit/anlaşılır bir mesaj görür.
                 logger.exception("Streaming hatası")
                 tap.end("error")
+                if not turn.http and not _bg_error_stored:
+                    _store_background_error(turn)
                 if not _tr_ended:
                     _tr_ended = True
-                    _end_turn_reply(request.conversation_id, _turn_user_row, None, "error")
+                    _end_turn_reply(turn.conversation_id, _turn_user_row, None, "error")
                 # json.dumps şart: elle kurulan JSON'da hata metnindeki bir tırnak
                 # ya da satır sonu SSE event framing'ini bozuyor ve istemci akışın
                 # geri kalanını kaybediyordu (3 satır yukarıdaki kalıpla aynı).
@@ -2651,8 +2739,8 @@ Max 300 kelime. Türkçe yaz.
                 # göndermek, doluluğa en çok yaklaşıldığı anda göstergeyi
                 # dondurur — sigortanın en çok gerektiği an tam olarak orası.
                 try:
-                    _usage = _context_usage_payload(db, request.conversation_id, last_usage,
-                                                    _live_context_reading(request.conversation_id, chat_model.cli_family(provider_type, model_name),
+                    _usage = _context_usage_payload(db, turn.conversation_id, last_usage,
+                                                    _live_context_reading(turn.conversation_id, chat_model.cli_family(provider_type, model_name),
                                                                       provider_type, model_name))
                     yield f"data: {json.dumps(_usage)}\n\n"
                 except Exception:
@@ -2666,18 +2754,17 @@ Max 300 kelime. Türkçe yaz.
                 # turn ends with its stream, so its entry goes now.
                 if reply_entry is not None and not reply_settled and (
                         terminal_gitti or _turn_agent != "claude"):
-                    _drop_owed_reply(request.conversation_id, reply_entry)
+                    _drop_owed_reply(turn.conversation_id, reply_entry)
                 # The same split for this turn's record: a detached Claude turn
                 # ends when `_save_detached_claude_turn` stores its reply.
                 if not _tr_ended and _turn_user_row is not None:
                     if terminal_gitti or _turn_agent != "claude":
-                        _end_turn_reply(request.conversation_id, _turn_user_row, None, "stopped")
+                        _end_turn_reply(turn.conversation_id, _turn_user_row, None, "stopped")
                     else:
-                        _turn_reply_detached[request.conversation_id] = _turn_user_row
+                        _turn_reply_detached[turn.conversation_id] = _turn_user_row
 
-        return StreamingResponse(
-            localize_sse(_tag_sse_stream(event_generator(), request.conversation_id), _stream_language(request, x_ui_lang)),
-            media_type="text/event-stream")
+        return stream
+
 
     def _answering_device() -> str:
         """Who sends this answer: the paired device when the web remote's
