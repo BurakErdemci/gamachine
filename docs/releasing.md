@@ -52,13 +52,58 @@ CI, the repo, or a synced folder; the owner signs the draft release locally.
 3. Publish the draft in the GitHub UI. Sign BEFORE publishing: clients that
    see a published release without `.sig` files refuse it.
 
+Without a flag the script needs both manifests and fails if `latest-mac.yml` is
+missing. `--skip-mac-manifest` is the only way to sign `latest.yml` alone; it
+refuses while `latest-mac.yml` or `latest-mac.yml.sig` is still on the draft.
+
+## v4.0.4 only: no macOS update manifest
+
+4.0.0-4.0.3 install macOS updates through Squirrel.Mac, which reads the whole
+1.37 GB zip into memory and crashes the app on "Restart now" (measured 25 Nov 2026,
+4.0.0 -> 4.0.3, 3 of 3; electron/electron#55089). 4.0.4 installs with its own
+bundle swap, but a 4.0.0-4.0.3 Mac that saw 4.0.4 as an update would still try
+Squirrel and crash. So 4.0.4 ships for Mac as a dmg only:
+
+1. Build and draft the release as usual (step 1 above).
+2. In the draft, delete `latest-mac.yml` (and `latest-mac.yml.sig` if there is one).
+   Keep the dmg, the zip and its blockmap: the zip is what 4.0.5's auto-update
+   diffs against.
+3. Sign with the flag:
+   `node scripts/sign-release.js v4.0.4 C:\Users\<you>\gamachine-update-primary.pem --skip-mac-manifest`
+4. Publish. Windows updates as usual. Mac users on 4.0.0-4.0.3 see no update and
+   install 4.0.4 once by hand from the dmg; say so in the release notes.
+5. From 4.0.5 on, sign without the flag again: 4.0.4+ Macs install through the
+   bundle swap below.
+
 ## What the app does with an update
 
 Nothing downloads or installs on its own. After the signed manifest checked out the app
 downloads the update, hashes the file itself and only then offers "Şimdi yeniden başlat" /
-"Sonra". Install-on-quit is armed only when "Sonra" is chosen for a file whose hash matched
-(on macOS that is also the moment Squirrel is asked to stage it); a file that does not match
-is deleted and nothing can install it later.
+"Sonra". Install-on-quit is armed only when "Sonra" is chosen for a file whose hash matched;
+a file that does not match is deleted and nothing can install it later.
+
+### macOS (4.0.4+): our own bundle swap, no Squirrel
+
+`main/helpers/mac-install.ts`. electron-updater only checks and downloads; the app never
+calls `quitAndInstall` or electron's `autoUpdater`, and replaces MacUpdater's
+`updateDownloaded` so the download is not handed to Squirrel's local proxy either.
+
+1. Before downloading, the app refuses (release-page dialog, once per version) when it
+   cannot replace itself: bundle path unknown, running translocated (`/AppTranslocation/`),
+   from a mounted image (`/Volumes/...`), or its folder is not writable (a non-admin user
+   with the app in `/Applications`).
+2. After the sha512 match the zip is unpacked with `ditto -x -k` into a hidden
+   `.<App>-update-XXXXXX` folder next to the installed bundle (same volume, so the swap is
+   a rename). The unpacked app must pass `codesign --verify --deep --strict`, carry
+   TeamIdentifier `MG4KS3D497`, the verified version as `CFBundleShortVersionString`, the
+   installed app's bundle id, and `spctl --assess --type execute`. Any failure removes the
+   folder and shows the release-page dialog; only then is "Restart now / Later" offered.
+3. On quit (`will-quit`, for both choices) a detached `/bin/bash` helper (`swap.sh`, written
+   into the staging folder) waits up to 60 s for the app's pid to exit, renames the old
+   bundle to `.<App>.app.backup-<pid>` in the same folder, moves the new one in, removes
+   `com.apple.quarantine`, opens it, and deletes the backup only after `open` succeeded.
+   Any failure puts the old bundle back and opens it. It logs to
+   `~/Library/Logs/Gamachine/update-swap.log` (the app logs that path).
 
 ## Rotating to the backup key
 
@@ -81,5 +126,8 @@ app hashes the final file once more before offering the install.
 
 ## Not covered by tests
 
-The real GitHub download, the `gh` upload and an actual NSIS/Squirrel install are
-only exercised on a live test release: do one before the first public one.
+The real GitHub download, the `gh` upload and an actual NSIS install are only exercised
+on a live test release: do one before the first public one. The macOS swap helper was run
+for real on a copy of the installed 4.0.3 app with the signed 4.0.3 zip (success and
+rollback, 25 Nov 2026); an app-initiated update end to end is first measurable 4.0.4 -> 4.0.5,
+and non-admin users and the in-app `open` of the new bundle were not measured.

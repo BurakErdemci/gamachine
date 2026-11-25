@@ -11,52 +11,45 @@
   repository-relative paths.
 -->
 
-## Gamachine v4.0.3
+## Gamachine v4.0.4
 
-> 🍎 **macOS (Apple Silicon):** `Gamachine-4.0.3-arm64.dmg`
-> · 🪟 **Windows:** `Gamachine-Setup-4.0.3.exe`
+> 🍎 **macOS (Apple Silicon):** `Gamachine-4.0.4-arm64.dmg`
+> · 🪟 **Windows:** `Gamachine-Setup-4.0.4.exe`
 
 **Windows:** the installer is not code-signed, so SmartScreen warns on first run.
 Click **More info**, then **Run anyway**.
 **macOS:** the app is signed with a Developer ID and notarized by Apple, so it opens
 without a warning.
 
+**On a Mac with 4.0.0-4.0.3?** Install 4.0.4 by hand from the dmg, once: those versions
+do not see 4.0.4 as an update, because their installer crashes on it (see below).
+In-app updates on the Mac resume with 4.0.5.
+
 **Coming from v3?** v3.2.0's update notice only opens the release page, so install
-4.0.3 by hand. From 4.0.0 on, updates download inside the app and install with one
-click, and only after the release checks out against our own signed update manifest.
+4.0.4 by hand. From 4.0.0 on, updates download inside the app, and only after the release
+checks out against our own signed update manifest.
 
 ---
 
-A safety release on top of v4.0.2. Updating is recommended, above all if you use
-Antigravity (agy). Everything in
-[v4.0.2](https://github.com/BurakErdemci/gamachine/releases/tag/v4.0.2) is included.
+A macOS update fix on top of v4.0.3. Everything in
+[v4.0.3](https://github.com/BurakErdemci/gamachine/releases/tag/v4.0.3) is included.
 
-### Approval modes
-- **Two modes: Auto and Safe Auto.** Step by Step is gone. A saved Step by Step
-  choice opens as Safe Auto, and so does an old phone page or desktop that still
-  sends it. Without a UI secret (Docker, a reload worker) the mode is Safe Auto and
-  cannot be changed, from the desktop or from the phone.
+### Updates on macOS
+- **Mac users on 4.0.0-4.0.3: install 4.0.4 by hand, once.** Download
+  `Gamachine-4.0.4-arm64.dmg` and drag Gamachine to Applications. In those versions
+  "Restart now" crashes the app instead of installing the update (Squirrel.Mac reads the
+  whole 1.37 GB update into memory), so 4.0.4 is not offered to them as an in-app update.
+  In-app updates on the Mac resume with 4.0.5.
+- **The Mac app installs updates itself, without Squirrel.Mac.** After the signed
+  manifest and the downloaded file's hash check out, the update is unpacked next to the
+  installed app and must pass Apple's code signature check, carry Gamachine's developer
+  ID and the expected version, and be accepted by Gatekeeper before "Restart now" or
+  "Later" is offered. When the app quits, a small helper swaps in the new app and opens
+  it; if any step fails it puts the old app back and opens that instead. The helper's
+  log is `~/Library/Logs/Gamachine/update-swap.log`.
+- **When the app cannot replace itself** (opened from the dmg, opened before being moved
+  to Applications, or a folder your account cannot write to) nothing is downloaded and
+  the release page is offered instead.
 
-### Antigravity (agy)
-- **Every agy tool call goes through Gamachine's gate.** v4.0.2 knew only agy 1.2.x's
-  write tools, so on agy 1.5.x `write_file` and `edit_file` wrote files with no card
-  in Safe Auto mode. The hook now sees every built-in call: reads pass, file writes
-  get a card, commands go through the `unityai` bridge, and a tool it does not know
-  is refused. If the gate's state cannot be read, the call is refused, not let
-  through.
-- **agy chats run at the same time.** A turn in one chat no longer waits for an agy
-  turn in another chat to finish.
-
-### Other CLI agents
-- **Cursor runs in a home of its own** (`~/.unity_architect_ai/cursor-home`, with
-  your existing chats linked in). Cursor CLI approves every MCP server it loads, so it
-  now loads only Gamachine's servers and your project's `.cursor/mcp.json`, not the
-  ones in your global `~/.cursor`. A project MCP server that reads files from your
-  home folder sees this home instead. Measured on Windows; not yet measured on macOS.
-- **OpenCode** denies every tool except reads and Gamachine's own servers. Your own
-  deny rules in `opencode.json` are kept, per agent and per mode as well.
-- **Kimi Code** denies its writing, command and agent-spawning built-ins, and a turn
-  does not start until `config.toml` is read back with those rules in it (validated
-  with `kimi doctor config`; the model's behaviour under them was not measured).
-- **Claude Code one-shot runs** also deny the `PowerShell` tool, which could write
-  files when only `Bash` was denied.
+### Windows
+- No change: updates install through the NSIS installer as before.
