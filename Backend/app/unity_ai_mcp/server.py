@@ -107,9 +107,9 @@ def create_server(workspace: str = "") -> MCPServer:
 
     register_file_tools(mcp, get_workspace)
     register_bash_tool(mcp, get_workspace)
-    # Scripts reach the file and shell tools registered above (whatever their names are today).
-    script_tool_names = [tool.name for tool in mcp._tool_manager.list_tools()]
+    # Scripts reach the file, shell and chat-mail tools (whatever their names are today).
     register_mailbox_tools(mcp)
+    script_tool_names = [tool.name for tool in mcp._tool_manager.list_tools()]
     register_show_tools(mcp)
     register_harness_tools(mcp)
     register_script_tool(mcp, get_workspace, script_tool_names)

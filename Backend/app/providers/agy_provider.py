@@ -625,7 +625,10 @@ class AgyProvider(BaseCLIProvider):
         # Bu env sözlüğü ~/.gemini/settings.json'a yazılıyor — token oraya
         # girmiyor: dosya paylaşımlı (Jarvan da aynı dosyayı kullanıyor) ve
         # sırrın config'e yayılması denetimin C grubu bulgusuydu.
-        env = {"UNITYAI_URL": backend_url, "WORKSPACE": workspace, **AGY_CHILD_SECRET_BLANKS}
+        # GAMACHINE_SCRIPT_MAX_S: agy cancels every MCP call at 180 s, so run_script stops at 150 s.
+        import script_tool
+        env = {"UNITYAI_URL": backend_url, "WORKSPACE": workspace,
+               script_tool.SCRIPT_MAX_ENV: str(script_tool.AGY_SCRIPT_MAX_S), **AGY_CHILD_SECRET_BLANKS}
 
         # 0. unityai CLI env dosyası — agy run_command env'i propagate etmese bile
         #    CLI doğru backend'e/token'a/workspace'e bağlanmayı garanti eder.

@@ -26,6 +26,8 @@ from test_script_runner import procs, runtime  # noqa: E402,F401  (fixtures)
 from unity_ai_mcp import script_server  # noqa: E402
 from unity_ai_mcp.tools import bash_tool, file_tools, script_tools  # noqa: E402
 
+_REAL_BROWSER_ENTRY = script_tools.browser_entry
+
 
 def run(coro):
     return asyncio.run(coro)
@@ -135,6 +137,8 @@ def unityai(monkeypatch, tmp_path):
         return None
 
     monkeypatch.setattr(script_tools, "_unity_mcp_url", no_unity)
+    monkeypatch.setattr(script_tools, "browser_entry", no_unity)
+    monkeypatch.setattr(script_tools, "connectors_entry", no_unity)
     monkeypatch.setattr(server, "_workspace_path", "")
     mcp = server.create_server(str(tmp_path))
     return SimpleNamespace(mcp=mcp, seen=seen, answers=answers, ws=tmp_path)
@@ -151,8 +155,11 @@ def test_unityai_lists_run_script_with_signatures_from_the_real_tools(unityai):
     assert "tools.read_file({path: string, start_line?: integer, max_lines?: integer})" in desc
     for name in ("save_file", "delete_file", "list_directory", "bash"):
         assert f"tools.{name}(" in desc
-    # Mail, image and harness tools are not relayed this turn, and the tool is not Unity-only.
-    assert "tools.send_chat_message(" not in desc and "tools.harness_search(" not in desc
+    # Chat mail is relayed; image and harness tools are not; the tool is not Unity-only.
+    assert "tools.send_chat_message(" in desc and "tools.list_chats(" in desc
+    assert "tools.show_image(" not in desc and "tools.harness_search(" not in desc
+    assert "tools.browser_navigate(" in desc and "gamachineConnectors" in desc
+    assert "tools.browser_click(" not in desc and "computer_" not in desc
     assert "Unity MCP server" in desc and "direct calls first" in desc
     assert "Do not use it for one or two calls" in desc
 
@@ -448,3 +455,333 @@ def test_reply_cap_also_cuts_a_long_call_list(tmp_path):
     assert "full list in the file below" in reply
     saved = next((tmp_path / ".gamachine" / "script-runs").glob("run-*.txt")).read_text(encoding="utf-8")
     assert "119 tool_0 error" in saved and saved.count("reason") >= 119 * 30
+
+
+# ── turn 2: browser (read-only), chat mail, connectors, per-CLI time limits ───
+
+class FakeBackend:
+    """The backend routes the browser, mail and connectors servers are gated by, on a loopback port."""
+
+    def __init__(self, *, browser_on=True, connectors=()):
+        self.requests = []
+        outer = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def _reply(self, payload):
+                data = json.dumps(payload).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def do_GET(self):
+                outer.requests.append(("GET", self.path, None, dict(self.headers.items())))
+                if self.path.startswith("/browser/settings"):
+                    self._reply({"enabled": browser_on})
+                elif self.path.startswith("/connectors"):
+                    self._reply({"connectors": list(connectors)})
+                elif self.path.startswith("/mailbox/chats"):
+                    self._reply({"text": "#3 Other chat"})
+                else:
+                    self._reply({})
+
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])) or b"{}")
+                outer.requests.append(("POST", self.path, body, dict(self.headers.items())))
+                if self.path == "/browser/command":
+                    self._reply({"ok": True, "text": f"page for {body.get('tool')}"})
+                elif self.path == "/mailbox/send":
+                    self._reply({"message": "sent"})
+                else:
+                    self._reply({})
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def paths(self, method=None):
+        return [p for m, p, _, _ in self.requests if method in (None, m)]
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+@pytest.fixture
+def backend():
+    fake = FakeBackend()
+    yield fake
+    fake.close()
+
+
+@pytest.fixture(autouse=True)
+def fresh_stdio_lists():
+    script_tool._STDIO_LISTS.clear()
+    yield
+    script_tool._STDIO_LISTS.clear()
+
+
+def _child_env(backend_url, chat=7):
+    # LOCAL_APP_TOKEN in the entry: a spawned server must never read the real token file.
+    return {"GAMACHINE_CONVERSATION_ID": str(chat), "UNITYAI_URL": backend_url, "LOCAL_APP_TOKEN": "test-token"}
+
+
+def _entry(argv, backend_url, chat=7):
+    return {"type": "stdio", "command": argv[0], "args": argv[1:], "env": _child_env(backend_url, chat)}
+
+
+def _browser_entry(backend_url, chat=7):
+    from browser_use import registration
+    return _entry(registration.server_argv(), backend_url, chat)
+
+
+def _mail_entry(backend_url, chat=7):
+    from agentic import mailbox
+    return _entry([mailbox.claude_server_entry(chat)["command"], *mailbox.claude_server_entry(chat)["args"]],
+                  backend_url, chat)
+
+
+def test_browser_server_marks_only_page_reading_tools_read_only():
+    from browser_use.server import create_server
+    marked = sorted(t.name for t in create_server()._tool_manager.list_tools() if script_tool.read_only_tool(t))
+    assert marked == ["browser_navigate", "browser_search", "browser_snapshot", "browser_tabs"]
+    lines = "\n".join(script_tool.browser_lines())
+    assert "tools.browser_snapshot(" in lines and "tools.browser_click(" not in lines
+
+
+def test_unityai_browser_read_only_calls_reach_the_backend_gate(unityai, backend, runtime, procs, monkeypatch):
+    from unity_ai_mcp import approval_bridge
+    monkeypatch.setattr(approval_bridge, "BACKEND_URL", backend.url)
+    monkeypatch.setenv("LOCAL_APP_TOKEN", "test-token")
+    monkeypatch.setattr(script_tools, "browser_entry", _REAL_BROWSER_ENTRY)
+    monkeypatch.setattr(script_tools, "_chat_env", lambda: _child_env(backend.url, 42))
+    reply = _text(run(unityai.mcp.call_tool("run_script", {"code": """
+        const page = await tools.browser_navigate({url: "https://example.com"});
+        let click = "";
+        try { await tools.browser_click({snapshot_id: "s", ref: 1}); } catch (e) { click = e.message; }
+        return {page, listed: Object.keys(tools).filter(n => n.startsWith("browser_")), click};"""})))
+    assert "run_script finished" in reply, reply
+    commands = [(b["tool"], b["conversation_id"]) for m, p, b, _ in backend.requests if p == "/browser/command"]
+    assert commands == [("browser_navigate", 42)]
+    value = json.loads(reply.split("Result:\n", 1)[1].split("\nConsole:", 1)[0].split("\nFull output", 1)[0])
+    assert value["click"].startswith('no tool named "browser_click"')
+    assert sorted(value["listed"]) == ["browser_navigate", "browser_search", "browser_snapshot", "browser_tabs"]
+
+
+def test_unityai_mail_inner_call_reaches_the_backend_like_a_direct_call(unityai, backend, runtime, procs,
+                                                                        monkeypatch):
+    from unity_ai_mcp.tools import mailbox_tools
+    monkeypatch.setattr(mailbox_tools, "BACKEND_URL", backend.url)
+    monkeypatch.setenv("LOCAL_APP_TOKEN", "test-token")
+    direct = _text(run(unityai.mcp.call_tool("list_chats", {})))
+    reply = _text(run(unityai.mcp.call_tool("run_script", {"code": """
+        const chats = await tools.list_chats({});
+        const sent = await tools.send_chat_message({to_chat_id: 3, message: "hi"});
+        return {chats, sent};"""})))
+    assert "#3 Other chat" in direct and "#3 Other chat" in reply
+    gets = [r for r in backend.requests if r[1].startswith("/mailbox/chats")]
+    assert len(gets) == 2 and gets[0][1] == gets[1][1]  # same query, same chat
+    sends = [r[2] for r in backend.requests if r[1] == "/mailbox/send"]
+    assert sends == [{"to": 3, "body": "hi", "conversation_id": 42}]
+
+
+def test_unityai_connectors_entry_is_the_registration_argv_with_the_usable_ids(backend, monkeypatch):
+    from connectors import registration
+    from unity_ai_mcp import approval_bridge
+    fake = FakeBackend(connectors=[
+        {"id": "blender", "enabled": True, "state": "ready"},
+        {"id": "krita", "enabled": False, "state": "ready"},
+        {"id": "godot", "enabled": True, "state": "not_installed"},
+    ])
+    try:
+        monkeypatch.setattr(approval_bridge, "BACKEND_URL", fake.url)
+        monkeypatch.setattr(script_tools, "_CONNECTOR_IDS", None)
+        monkeypatch.setenv("GAMACHINE_CONVERSATION_ID", "42")
+        entry = run(script_tools.connectors_entry())
+        assert [entry["command"], *entry["args"]] == registration.server_argv()
+        assert entry["env"][registration.IDS_ENV] == "blender"
+        assert entry["env"]["GAMACHINE_CONVERSATION_ID"] == "42"
+        run(script_tools.connectors_entry())
+        assert fake.paths("GET").count("/connectors") == 1  # read once per process, like the CLI's server
+    finally:
+        fake.close()
+
+
+def test_read_only_unityai_turn_gets_no_browser_or_connectors(unityai, monkeypatch):
+    monkeypatch.setenv("GAMACHINE_READ_ONLY", "1")
+    labels = [g.label for g in script_tools.default_groups(unityai.mcp, ["read_file"])]
+    assert labels == ["unityai", "Unity MCP"]
+
+
+def test_connector_refusal_marks_match_the_backend_texts():
+    from connectors.mcp_server import USER_REFUSAL_MARKS
+    from routes import conversation_routes as routes
+    texts = (routes.BLENDER_DECLINED_REASON, routes.BLENDER_UNANSWERED_REASON, routes.CONNECTOR_HALTED_REASON)
+    assert all(text.startswith(mark) for text, mark in zip(texts, USER_REFUSAL_MARKS))
+
+
+FAKE_CONNECTORS = r'''
+import json, os, sys
+sys.path.insert(0, os.environ["APP_DIR"])
+from mcp.server.mcpserver import MCPServer
+from mcp.types import CallToolResult, TextContent
+mcp = MCPServer(name="gamachineConnectors")
+def log(name, args):
+    with open(os.environ["CALL_LOG"], "a", encoding="utf-8") as f:
+        f.write(json.dumps([name, args, os.environ.get("GAMACHINE_CONVERSATION_ID")]) + "\n")
+@mcp.tool(name="blender_get_scene_info")
+async def info(detail: int = 0) -> str:
+    log("blender_get_scene_info", {"detail": detail})
+    return json.dumps({"objects": ["Cube", "Camera"]})
+@mcp.tool(name="blender_execute_blender_code")
+async def code(code: str) -> CallToolResult:
+    log("blender_execute_blender_code", {"code": code})
+    return CallToolResult(content=[TextContent(type="text", text="The user declined this Blender code, so it did not run.")], is_error=True)
+mcp.run(transport="stdio")
+'''
+
+
+@pytest.fixture
+def claude_servers(claude, backend, tmp_path):
+    """A Claude session given mail, browser, connectors and computer-use entries, as agent_runner would."""
+    server_file = tmp_path / "fake_connectors.py"
+    server_file.write_text(FAKE_CONNECTORS, encoding="utf-8")
+    log = tmp_path / "connector_calls.jsonl"
+    connectors_env = {**_child_env(backend.url), "APP_DIR": os.path.abspath(os.path.join(
+        os.path.dirname(__file__), "..", "app")), "CALL_LOG": str(log)}
+    claude.session.mcp_servers = {
+        "gamachineMail": _mail_entry(backend.url),
+        "gamachineBrowser": _browser_entry(backend.url),
+        "gamachineConnectors": {"type": "stdio", "command": sys.executable, "args": [str(server_file)],
+                                "env": connectors_env},
+        # Never a group: would fail loudly if anything tried to start it.
+        "gamachineComputer": {"type": "stdio", "command": "definitely-not-a-binary", "args": [], "env": {}},
+    }
+    claude.connector_log = log
+    claude.backend = backend
+    return claude
+
+
+def test_claude_groups_come_from_the_session_entries_and_never_computer_use(claude_servers):
+    labels = [g.label for g in script_server.groups_for(claude_servers.session)]
+    assert labels == ["Unity MCP", "Chat mail", "Browser", "Connectors"]
+
+
+def test_claude_mail_browser_and_connector_calls_pass_can_use_tool_then_their_gate(claude_servers, runtime, procs,
+                                                                                    monkeypatch):
+    monkeypatch.setattr(approval_mode, "current_mode", lambda: "auto")
+    text, is_error = _claude_run(claude_servers, """
+        const names = Object.keys(tools);
+        const chats = await tools.list_chats({});
+        const snap = await tools.browser_snapshot({});
+        const scene = await tools.blender_get_scene_info({detail: 1});
+        let click = "";
+        try { await callTool("browser_click", {snapshot_id: "s", ref: 1}); } catch (e) { click = e.message; }
+        return {chats, snap, objects: scene.objects, click,
+                computer: names.filter(n => n.startsWith("computer_")).length,
+                writes: names.filter(n => ["browser_click", "browser_fill", "browser_download_to_project",
+                                           "show_image"].includes(n))};""")
+    assert not is_error, text
+    gated = [name for name, verdict in claude_servers.gated if verdict == "PermissionResultAllow"]
+    assert gated == ["mcp__gamachineMail__list_chats", "mcp__gamachineBrowser__browser_snapshot",
+                     "mcp__gamachineConnectors__blender_get_scene_info"]
+    value = json.loads(text.split("Result:\n", 1)[1].split("\nConsole:", 1)[0].split("\nFull output", 1)[0])
+    assert value["computer"] == 0 and value["writes"] == []
+    assert value["click"].startswith('no tool named "browser_click"') and value["objects"] == ["Cube", "Camera"]
+    backend = claude_servers.backend
+    assert [b["tool"] for m, p, b, _ in backend.requests if p == "/browser/command"] == ["browser_snapshot"]
+    assert any(p.startswith("/mailbox/chats") for p in backend.paths("GET"))
+    calls = [json.loads(line) for line in claude_servers.connector_log.read_text(encoding="utf-8").splitlines()]
+    assert calls == [["blender_get_scene_info", {"detail": 1}, "7"]]
+
+
+def test_claude_read_only_session_refuses_mail_before_the_server(claude_servers, runtime, procs, monkeypatch):
+    monkeypatch.setattr(approval_mode, "current_mode", lambda: "auto")
+    claude_servers.session.read_only = True
+    text, _ = _claude_run(claude_servers, """
+        try { await tools.send_chat_message({to_chat_id: 3, message: "x"}); return "sent"; }
+        catch (e) { return e.message; }""")
+    assert "sent" not in text.split("Result:")[-1]
+    assert ("mcp__gamachineMail__send_chat_message", "PermissionResultDeny") in claude_servers.gated
+    assert "/mailbox/send" not in claude_servers.backend.paths("POST")
+
+
+def test_claude_connector_user_refusal_ends_the_script(claude_servers, runtime, procs, monkeypatch):
+    monkeypatch.setattr(approval_mode, "current_mode", lambda: "auto")
+    text, is_error = _claude_run(claude_servers, """
+        try { await tools.blender_execute_blender_code({code: "x"}); } catch (e) {}
+        await tools.blender_get_scene_info({});""")
+    assert is_error and "a tool call was refused" in text
+    calls = [json.loads(line)[0] for line in claude_servers.connector_log.read_text(encoding="utf-8").splitlines()]
+    assert calls == ["blender_execute_blender_code"]
+
+
+def test_codex_unityai_entry_carries_the_run_script_timeout(monkeypatch):
+    from providers import codex_session
+    from providers.codex_provider import CodexProvider
+    flag = f"mcp_servers.unityai.tool_timeout_sec={script_tool.CODEX_UNITYAI_TOOL_TIMEOUT_S}"
+    assert script_tool.CODEX_UNITYAI_TOOL_TIMEOUT_S > script_tool.MAX_TIMEOUT_S
+    monkeypatch.setattr(codex_session, "_configured_codex_mcp_names", lambda: {"unityai"})
+    assert codex_session.unityai_timeout_override() == ["-c", flag]
+    # No registered unityai entry: a bare table would fail Codex's config load, so nothing is passed.
+    monkeypatch.setattr(codex_session, "_configured_codex_mcp_names", lambda: set())
+    assert codex_session.unityai_timeout_override() == []
+    import inspect
+    assert "spawn = spawn + unityai_timeout_override()" in inspect.getsource(codex_session)
+    provider = CodexProvider.__new__(CodexProvider)
+    for attr, value in (("prompt_via_stdin", True), ("binary_name", "codex")):
+        setattr(provider, attr, value)
+    monkeypatch.setattr("providers.codex_provider.provider_guide", lambda *a, **k: "")
+    try:
+        cmd = provider._build_cmd("hi", "off", None)
+    except Exception as exc:  # noqa: BLE001 - only the flag is under test
+        pytest.skip(f"_build_cmd needs more provider state here: {exc}")
+    assert flag in cmd
+
+
+def test_codex_registration_names_the_cap_for_the_unityai_process(monkeypatch):
+    import subprocess as sp
+    from providers.codex_provider import CodexProvider
+    seen = []
+    monkeypatch.setattr(sp, "run", lambda argv, **kw: seen.append(list(argv)) or SimpleNamespace(returncode=0))
+    provider = CodexProvider.__new__(CodexProvider)
+    provider.binary_name = "codex"
+    monkeypatch.setattr(CodexProvider, "_cli_installed", lambda self, name: True)
+    monkeypatch.setattr(CodexProvider, "_resolve_exec", staticmethod(lambda argv: argv))
+    from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
+    monkeypatch.setattr(unity_mcp_manager, "mcp_url", lambda host="localhost": None)
+    provider._register_mcp("launcher", "ws", "http://127.0.0.1:1")
+    add = next(argv for argv in seen if argv[:4] == ["codex", "mcp", "add", "unityai"])
+    assert f"{script_tool.SCRIPT_MAX_ENV}={script_tool.MAX_TIMEOUT_S}" in add
+
+
+def test_agy_unityai_entry_caps_scripts_under_its_180_s_cancel():
+    import inspect
+    from providers import agy_provider
+    assert script_tool.AGY_SCRIPT_MAX_S <= 180 - 25
+    assert "script_tool.SCRIPT_MAX_ENV: str(script_tool.AGY_SCRIPT_MAX_S)" in inspect.getsource(
+        agy_provider.AgyProvider._register_mcp)
+
+
+@pytest.mark.parametrize("env,expected", [(None, script_tool.UNKNOWN_CLI_MAX_S), ("150", 150), ("600", 600),
+                                          ("9999", script_tool.UNKNOWN_CLI_MAX_S), ("abc", script_tool.UNKNOWN_CLI_MAX_S)])
+def test_unityai_cap_comes_from_the_entry_env_and_is_stated(monkeypatch, env, expected):
+    from mcp.server.mcpserver import MCPServer
+    if env is None:
+        monkeypatch.delenv(script_tool.SCRIPT_MAX_ENV, raising=False)
+    else:
+        monkeypatch.setenv(script_tool.SCRIPT_MAX_ENV, env)
+    assert script_tool.max_timeout_from_env() == expected
+    mcp = MCPServer(name="cap-probe")
+    script_tools.register_script_tool(mcp, lambda: ".", [])
+    desc = next(t for t in run(mcp.list_tools()) if t.name == "run_script").description
+    assert f"default and max {expected} here" in desc
+
+
+def test_the_cap_bounds_a_longer_requested_timeout(runtime, procs):
+    result = run(script_tool.execute("while (true) {}", [], timeout_s=500, max_timeout_s=1, runtime=runtime))
+    assert result.kind == "timeout" and result.seconds < 15

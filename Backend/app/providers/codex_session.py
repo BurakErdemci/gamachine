@@ -844,6 +844,17 @@ def _trusted_mcp_config(forward_env: Sequence[str] = (), read_only: bool = False
     return {"mcp_servers": servers}
 
 
+def unityai_timeout_override() -> List[str]:
+    """`-c` for the app-server: Codex's 60 s default per MCP call would cut run_script (up to 600 s).
+
+    Only for a registered unityai entry: a table with no transport fails Codex's config load.
+    """
+    import script_tool
+    if "unityai" not in _configured_codex_mcp_names():
+        return []
+    return ["-c", f"mcp_servers.unityai.tool_timeout_sec={script_tool.CODEX_UNITYAI_TOOL_TIMEOUT_S}"]
+
+
 def _configured_codex_mcp_names() -> Set[str]:
     """Kullanıcının global Codex config'indeki MCP adlarını güvenle oku.
 
@@ -985,6 +996,7 @@ class CodexSession:
         # A restart after the process died must not reuse the old process's "ready".
         self._mcp_status.clear()
         spawn = _resolve_codex_appserver_cmd()
+        spawn = spawn + unityai_timeout_override()
         if self.effort:
             # Global -c override subcommand'dan sonra da geçerli (codex exec ile aynı desen)
             spawn = spawn + ["-c", f"model_reasoning_effort={self.effort}"]

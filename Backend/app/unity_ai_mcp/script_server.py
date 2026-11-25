@@ -42,14 +42,15 @@ def hidden_unity_tools(session) -> list:
     return sorted(hidden)
 
 
-def claude_gate(session):
-    """The session's own `_can_use_tool`, as a run_script gate for Unity MCP calls."""
+def claude_gate(session, server: str = "unityMCP"):
+    """The session's own `_can_use_tool` for `mcp__<server>__<tool>`, as a run_script gate."""
     from providers.claude_sdk_session import USER_DENIED_MESSAGE
+    prefix = f"mcp__{server}__"
 
     async def gate(name: str, args: dict) -> Optional[Outcome]:
         if getattr(session, "_cancel_requested", False):
             return Outcome.stop("the turn was stopped")
-        verdict = await session._can_use_tool(UNITY_PREFIX + name, args, None)
+        verdict = await session._can_use_tool(prefix + name, args, None)
         if type(verdict).__name__ == "PermissionResultAllow":
             updated = getattr(verdict, "updated_input", None)
             if isinstance(updated, dict) and updated is not args:
@@ -76,19 +77,51 @@ def _unity_client_factory(conversation_id: Optional[int]):
     return factory
 
 
+def _stdio_groups(session) -> list:
+    """Mail, browser (read-only tools) and connectors, from the very entries this session was given.
+    Any other server in `mcp_servers` (computer use among them) is never a group."""
+    from agentic import mailbox
+    from browser_use import registration as browser_registration
+    from connectors import registration as connectors_registration
+    from unity_ai_mcp.tools.script_tools import connector_refusal_marks
+    servers = getattr(session, "mcp_servers", None) or {}
+    plan = (
+        (mailbox.CLAUDE_SERVER_NAME, "Chat mail", {"keep": lambda tool: tool.name in mailbox.MAIL_TOOLS}),
+        (browser_registration.SERVER_NAME, "Browser", {"keep": script_tool.read_only_tool}),
+        (connectors_registration.SERVER_NAME, "Connectors", {"stop_marks": connector_refusal_marks()}),
+    )
+    groups = []
+    for server, label, options in plan:
+        entry = servers.get(server)
+        if isinstance(entry, dict) and entry.get("command"):
+            groups.append(script_tool.StdioServerGroup(label, entry, gate=claude_gate(session, server), **options))
+    return groups
+
+
 def groups_for(session) -> list:
-    """Claude's groups: Unity MCP only (Claude's file and shell tools live inside its CLI)."""
+    """Claude's groups (its file and shell tools live inside its CLI, out of reach)."""
     cid = getattr(session, "conversation_id", None)
     cid = cid if type(cid) is int and cid > 0 else None
     return [UnityMCPGroup(_unity_client_factory(cid), gate=claude_gate(session),
-                          hidden=hidden_unity_tools(session))]
+                          hidden=hidden_unity_tools(session)), *_stdio_groups(session)]
 
 
 def description() -> str:
     from providers.unity_script_tools import UNITY_SCRIPT_WRITE_TOOLS
     line = (script_tool.UNITY_TOOLS_LINE + " (mcp__unityMCP__<name>), except the C# script writers ("
             + ", ".join(UNITY_SCRIPT_WRITE_TOOLS) + "): write .cs files with Write/Edit")
-    return script_tool.tool_description([], [line])
+    return script_tool.tool_description(
+        [], [line, *_mail_lines(), *script_tool.browser_lines(), script_tool.CONNECTORS_TOOLS_LINE])
+
+
+def _mail_lines() -> list:
+    """The gamachineMail server's mail tools, from their own registration."""
+    from mcp.server.mcpserver import MCPServer
+    from unity_ai_mcp.tools.mailbox_tools import register_mailbox_tools
+    probe = MCPServer(name="mail-probe")
+    register_mailbox_tools(probe)
+    return [script_tool.signature(script_tool.ToolSpec(t.name, t.description or "", t.parameters or {}))
+            for t in probe._tool_manager.list_tools()]
 
 
 async def run_for_session(session, args: Any) -> tuple:

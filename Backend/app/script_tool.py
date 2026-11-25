@@ -43,6 +43,15 @@ REPLY_CAP_BYTES = 6000
 CALL_LIST_CAP = 1500
 DEFAULT_TIMEOUT_S = 600
 MAX_TIMEOUT_S = 600
+# The calling CLI cancels a long MCP call on its own (measured 25 Nov 2026, from code and binaries):
+# Codex 60 s unless the entry sets tool_timeout_sec (Gamachine sets 660 for unityai), agy 180 s fixed,
+# Copilot 180 s, Kimi/OpenCode likely 60 s (SDK default; OpenCode's schema text says 5 s), Cursor
+# unknown, Claude Code 1e8 ms. The unityai entry names this family's cap in SCRIPT_MAX_ENV where
+# Gamachine writes it (Codex 600, agy 150); without it the cap stays under the 60 s default.
+SCRIPT_MAX_ENV = "GAMACHINE_SCRIPT_MAX_S"
+UNKNOWN_CLI_MAX_S = 50
+CODEX_UNITYAI_TOOL_TIMEOUT_S = 660.0
+AGY_SCRIPT_MAX_S = 150
 CALL_TIMEOUT_S = 300
 MAX_CALLS = 200
 MEMORY_BYTES = 64 * 1024 * 1024
@@ -251,6 +260,148 @@ class UnityMCPGroup:
         return await asyncio.to_thread(client.call, name, args)
 
 
+# ── stdio MCP servers (browser, connectors, mail) ───────────────────────────
+
+# Tool lists by server entry (the entry carries the chat id): listing starts the server, calls
+# only start it when the script makes one.
+_STDIO_LISTS: dict = {}
+STDIO_START_TIMEOUT_S = 60.0
+
+
+def _entry_key(entry: dict) -> str:
+    return json.dumps({k: entry.get(k) for k in ("command", "args", "env")}, sort_keys=True, default=str)
+
+
+class _StdioClient:
+    """One MCP session on a stdio server child; the child lives in one task, so its streams open and
+    close in the same task (anyio's rule), and dies when the run closes the client."""
+
+    def __init__(self, entry: dict):
+        from mcp.client.stdio import StdioServerParameters
+        self.params = StdioServerParameters(command=entry["command"], args=list(entry.get("args") or []),
+                                            env=dict(entry.get("env") or {}) or None)
+        self.session = None
+        self._error = ""
+        self._ready = asyncio.Event()
+        self._stop = asyncio.Event()
+        self._task = None
+
+    async def start(self):
+        self._task = asyncio.create_task(self._run())
+        try:
+            await asyncio.wait_for(self._ready.wait(), STDIO_START_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            self._error = "did not start in time"
+        if self.session is None:
+            await self.aclose()
+            raise RuntimeError(f"{self.params.command}: {self._error or 'did not start'}")
+
+    async def _run(self):
+        from mcp import ClientSession
+        from mcp.client.stdio import stdio_client
+        try:
+            async with stdio_client(self.params) as (read, write), ClientSession(read, write) as session:
+                await session.initialize()
+                self.session = session
+                self._ready.set()
+                await self._stop.wait()
+        except Exception as exc:  # noqa: BLE001 - reported to the caller through start()/call()
+            self._error = f"{type(exc).__name__}: {exc}"
+        finally:
+            self.session = None
+            self._ready.set()
+
+    async def aclose(self):
+        self._stop.set()
+        if self._task is not None:
+            try:
+                await asyncio.wait_for(self._task, 10)
+            except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+                self._task.cancel()
+
+
+def mcp_result_outcome(name: str, result: Any, stop_marks: Sequence[str] = ()) -> Outcome:
+    """An MCP CallToolResult (object) as an Outcome; images are dropped, scripts only get text."""
+    blocks = getattr(result, "content", None) or []
+    text = content_text(blocks)
+    if any(getattr(b, "type", None) == "image" for b in blocks):
+        text = (text + "\n" if text else "") + "[image omitted: scripts get text only]"
+    if getattr(result, "is_error", False) or getattr(result, "isError", False):
+        if any(mark in text for mark in stop_marks):
+            return Outcome.stop(text)
+        return Outcome.error(text or f"{name} failed")
+    parsed = parse_tool_text(text) if text else None
+    structured = getattr(result, "structured_content", None)
+    if (parsed is None or isinstance(parsed, str)) and isinstance(structured, dict):
+        return Outcome.ok(structured)
+    return Outcome.ok(parsed)
+
+
+def read_only_tool(tool) -> bool:
+    annotations = getattr(tool, "annotations", None)
+    return getattr(annotations, "read_only_hint", None) is True
+
+
+class StdioServerGroup:
+    """The tools of one stdio MCP server, started from the very entry this agent's CLI was given,
+    so each call runs that server's own code and reaches its backend gate. `keep` narrows the tools
+    (the browser's read-only ones); a tool it drops is neither listed nor callable. `gate` (Claude)
+    runs before the call."""
+
+    def __init__(self, label: str, entry: dict, *, keep: Callable[[Any], bool] = lambda tool: True,
+                 gate: Optional[GateFn] = None, stop_marks: Sequence[str] = ()):
+        self.label = label
+        self._entry = entry
+        self._keep = keep
+        self._gate = gate
+        self._stop_marks = tuple(stop_marks)
+        self._client: Optional[_StdioClient] = None
+        self._names: Optional[frozenset] = None
+        self.note: Optional[str] = None
+
+    async def _session(self):
+        if self._client is None or self._client.session is None:
+            self._client = _StdioClient(self._entry)
+            await self._client.start()
+        return self._client.session
+
+    async def list_tools(self) -> list[ToolSpec]:
+        key = _entry_key(self._entry)
+        tools = _STDIO_LISTS.get(key)
+        if tools is None:
+            try:
+                tools = list((await (await self._session()).list_tools()).tools)
+            except Exception as exc:  # noqa: BLE001 - this group is just missing for the run
+                self.note = f"{self.label} tools unavailable: {exc}"
+                self._names = frozenset()
+                return []
+            _STDIO_LISTS[key] = tools
+        kept = [t for t in tools if self._keep(t)]
+        self._names = frozenset(t.name for t in kept)
+        return [ToolSpec(t.name, t.description or "", getattr(t, "input_schema", None) or {}) for t in kept]
+
+    async def call(self, name: str, args: dict) -> Outcome:
+        if self._names is None:
+            await self.list_tools()
+        if name not in self._names:
+            return Outcome.error(f"{name} is not available in scripts")
+        if self._gate is not None:
+            verdict = await self._gate(name, args)
+            if verdict is not None:
+                return verdict
+        try:
+            session = await self._session()
+            result = await session.call_tool(name, args, read_timeout_seconds=CALL_TIMEOUT_S)
+        except Exception as exc:  # noqa: BLE001 - a dead server is an error for the script
+            return Outcome.error(f"{self.label}: {type(exc).__name__}: {exc}")
+        return mcp_result_outcome(name, result, self._stop_marks)
+
+    async def aclose(self):
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
+
+
 # ── runtime ──────────────────────────────────────────────────────────────────
 
 def runner_path() -> Path:
@@ -385,11 +536,21 @@ async def _collect_tools(groups: Sequence[ToolGroup]) -> tuple[dict, list]:
     return table, notes
 
 
+def max_timeout_from_env() -> int:
+    """This process's cap on one script's wall clock (see SCRIPT_MAX_ENV)."""
+    raw = os.environ.get(SCRIPT_MAX_ENV, "").strip()
+    if raw.isdigit() and 1 <= int(raw) <= MAX_TIMEOUT_S:
+        return int(raw)
+    return UNKNOWN_CLI_MAX_S
+
+
 async def execute(code: str, groups: Sequence[ToolGroup], *, timeout_s: Optional[float] = None,
-                  limits: Optional[dict] = None, runtime: Optional[list] = None) -> ScriptResult:
+                  limits: Optional[dict] = None, runtime: Optional[list] = None,
+                  max_timeout_s: float = MAX_TIMEOUT_S) -> ScriptResult:
     started = time.monotonic()
-    wall_s = float(DEFAULT_TIMEOUT_S if timeout_s is None else timeout_s)
-    wall_s = max(1.0, min(float(MAX_TIMEOUT_S), wall_s))
+    cap = max(1.0, min(float(MAX_TIMEOUT_S), float(max_timeout_s)))
+    wall_s = float(cap if timeout_s is None else timeout_s)
+    wall_s = max(1.0, min(cap, wall_s))
     runner = runner_path()
     argv_prefix = runtime if runtime is not None else await asyncio.to_thread(find_runtime)
     if argv_prefix is None or not runner.is_file():
@@ -410,6 +571,7 @@ async def execute(code: str, groups: Sequence[ToolGroup], *, timeout_s: Optional
             stderr=subprocess.PIPE, cwd=str(runner.parent), env=_child_env(),
             creationflags=_creationflags())
     except OSError as exc:
+        await _close_groups(groups)
         result.kind, result.message = "unavailable", f"run_script could not start its sandbox: {exc}"
         return result
 
@@ -528,11 +690,23 @@ async def execute(code: str, groups: Sequence[ToolGroup], *, timeout_s: Optional
         for task in list(tasks):
             task.cancel()
         _kill(proc)
+        await _close_groups(groups)
         result.seconds = time.monotonic() - started
     for record in calls:
         if record.status == "running":
             record.status = "unfinished"
     return result
+
+
+async def _close_groups(groups: Sequence[ToolGroup]) -> None:
+    for group in groups:
+        closer = getattr(group, "aclose", None)
+        if closer is None:
+            continue
+        try:
+            await closer()
+        except Exception as exc:  # noqa: BLE001 - closing must not hide the run's own result
+            logger.warning("[run_script] closing %s failed: %r", getattr(group, "label", group), exc)
 
 
 def _kill(proc: subprocess.Popen) -> None:
@@ -684,11 +858,11 @@ def format_reply(result: ScriptResult, workspace: str) -> str:
 
 
 async def run_script(code: str, groups: Sequence[ToolGroup], workspace: str,
-                     timeout: Optional[float] = None) -> tuple[str, bool]:
+                     timeout: Optional[float] = None, max_timeout_s: float = MAX_TIMEOUT_S) -> tuple[str, bool]:
     """(reply text, is_error) for one run_script call."""
     if not isinstance(code, str) or not code.strip():
         return "run_script needs `code`: the JavaScript body to run.", True
-    result = await execute(code, groups, timeout_s=timeout)
+    result = await execute(code, groups, timeout_s=timeout, max_timeout_s=max_timeout_s)
     return format_reply(result, workspace), result.status != "ok"
 
 
@@ -718,7 +892,8 @@ def signature(spec: ToolSpec) -> str:
     return f"tools.{spec.name}({{{args}}})" + (f" — {_short(first, 100)}" if first else "")
 
 
-def tool_description(tool_lines: Sequence[str], extra_lines: Sequence[str] = ()) -> str:
+def tool_description(tool_lines: Sequence[str], extra_lines: Sequence[str] = (),
+                     max_timeout_s: int = MAX_TIMEOUT_S) -> str:
     listing = "\n".join(f"  {line}" for line in [*tool_lines, *extra_lines]) or "  (none)"
     return (
         "Run a short JavaScript program that calls your Gamachine tools as async functions; "
@@ -737,7 +912,8 @@ def tool_description(tool_lines: Sequence[str], extra_lines: Sequence[str] = ())
         "failed call throws an Error you can catch and go on. `callTool(name, args)` works too. "
         "`console.log` output is returned. Top-level await and `return <value>` work: return a "
         "small JSON value, not raw tool output.\n"
-        f"Limits: `timeout` seconds (default and max {MAX_TIMEOUT_S}), {MAX_CALLS} tool calls, "
+        f"Limits: `timeout` seconds (default and max {max_timeout_s} here: the longest this agent "
+        f"lets one tool call run, with a margin; split longer work), {MAX_CALLS} tool calls, "
         f"{MEMORY_BYTES // (1024 * 1024)} MB, {CALL_TIMEOUT_S} s per call. The reply is capped "
         f"at about {REPLY_CAP_BYTES // 1000} KB; the full text is saved under .gamachine/"
         "script-runs/ and the reply names the file. On a stop, the reply lists which calls "
@@ -747,6 +923,25 @@ def tool_description(tool_lines: Sequence[str], extra_lines: Sequence[str] = ())
         "         return rows.filter(r => r.success).length;"
     )
 
+
+def browser_lines() -> list:
+    """The browser server's read-only tools (its own readOnlyHint marks), as description lines."""
+    try:
+        from browser_use.server import create_server
+        tools = create_server()._tool_manager.list_tools()
+    except Exception as exc:  # noqa: BLE001 - the description just goes without them
+        logger.warning("[run_script] browser tool list failed: %r", exc)
+        return []
+    lines = [signature(ToolSpec(t.name, t.description or "", t.parameters or {}))
+             for t in tools if read_only_tool(t)]
+    return ["Browser panel, when it is on (read-only tools only; click, typing, forms and downloads "
+            "stay direct calls):", *lines] if lines else []
+
+
+CONNECTORS_TOOLS_LINE = (
+    "tools.<connector>_<tool>(args) for the gamachineConnectors tools in your tool list "
+    "(for example blender_get_scene_info), when a connector is switched on"
+)
 
 UNITY_TOOLS_LINE = (
     "tools.<name>(args) for every tool of the Unity MCP server in your tool list (unityMCP), "

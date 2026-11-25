@@ -286,12 +286,13 @@ def test_runner_hands_read_only_and_guide_lines_to_the_provider(switch):
 
     seen, base = _runner_provider(read_only=False)
     assert seen["read_only"] is False and seen["chat"] == CHAT
-    assert seen["guide"] == agent_guide.with_connectors(
-        agent_guide.with_browser_use(agent_guide.with_computer_use(base)))
+    # The one-shot CLIs mount the unityai server, so the run_script line comes in either way.
+    assert seen["guide"] == agent_guide.with_script_tool(agent_guide.with_connectors(
+        agent_guide.with_browser_use(agent_guide.with_computer_use(base))))
     assert seen["guide"] != base
     switch["on"] = False
     seen, base = _runner_provider(read_only=False)
-    assert seen["guide"] == base
+    assert seen["guide"] == agent_guide.with_script_tool(base)
     switch["on"] = True
     seen, base = _runner_provider(read_only=True)
     assert seen["read_only"] is True and seen["guide"] == base

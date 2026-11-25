@@ -3013,6 +3013,8 @@ class AgentRunner:
                 _cli_guide = agent_guide.with_browser_use(_cli_guide)
             if _connectors_reg.stdio_entry() is not None:
                 _cli_guide = agent_guide.with_connectors(_cli_guide)
+            # Cursor, Copilot, OpenCode and Kimi mount the unityai server, which serves run_script.
+            _cli_guide = agent_guide.with_script_tool(_cli_guide)
         _note_text = "\n\n".join(text for _, text in self._turn_notes())
         _guide_units = len(((_cli_guide or "") + _note_text).encode("utf-16-le")) // 2
         _prompt_cap = 24000 - _guide_units

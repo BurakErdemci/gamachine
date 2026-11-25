@@ -10,7 +10,7 @@ from urllib.parse import quote_plus
 
 import httpx
 from mcp.server.mcpserver import MCPServer
-from mcp.types import CallToolResult, ImageContent, TextContent
+from mcp.types import CallToolResult, ImageContent, TextContent, ToolAnnotations
 
 from spawn_env import CONVERSATION_ENV, read_only_refusal
 from unity_ai_mcp import approval_bridge
@@ -78,13 +78,17 @@ def create_server(handler: BrowserServer | None = None) -> MCPServer:
         instructions=("A browser panel the user watches. Use it to find and show web pages and assets."
                       + _DATA_NOTE))
 
-    def tool(name, description):
+    def tool(name, description, read_only=False):
+        # read_only: the tool only opens or reads pages (no click, typing, form, upload or download),
+        # so run_script may call it (script_tool keeps only tools with readOnlyHint from this server).
+        annotations = ToolAnnotations(read_only_hint=True) if read_only else None
+
         def register(fn):
-            mcp.tool(name=name, description=description + _DATA_NOTE)(fn)
+            mcp.tool(name=name, description=description + _DATA_NOTE, annotations=annotations)(fn)
             return fn
         return register
 
-    @tool("browser_navigate", "Open an http(s) page in the agent browser, in your agent tab (the tab that was in "
+    @tool("browser_navigate", read_only=True, description="Open an http(s) page in the agent browser, in your agent tab (the tab that was in "
           "front when the user sent their message; switch with browser_use_tab). Local servers on localhost or "
           "127.0.0.1 open, except Gamachine's own ports; files open only inside this chat's project or the temp "
           "folder, as file:///; private network addresses are refused. Use it for an address you know; when you "
@@ -92,7 +96,7 @@ def create_server(handler: BrowserServer | None = None) -> MCPServer:
     async def browser_navigate(url: str) -> CallToolResult:
         return await handler.call("navigate", {"url": url})
 
-    @tool("browser_search", "Search the web for query and open the results page in the agent browser; read it "
+    @tool("browser_search", read_only=True, description="Search the web for query and open the results page in the agent browser; read it "
           "with browser_snapshot and follow a result.")
     async def browser_search(query: str) -> CallToolResult:
         # A guessed store or account URL often 404s; a results page needs no guess.
@@ -102,13 +106,13 @@ def create_server(handler: BrowserServer | None = None) -> MCPServer:
             return _text("query is too long (max 500 characters).", True)
         return await handler.call("navigate", {"url": SEARCH_URL + quote_plus(query.strip())})
 
-    @tool("browser_snapshot", "Read the current page of your agent tab (the tab that was in front when the user sent "
+    @tool("browser_snapshot", read_only=True, description="Read the current page of your agent tab (the tab that was in front when the user sent "
           "their message; switch with browser_use_tab): readable text plus numbered elements (links, buttons, "
           "inputs). Returns a snapshot_id that the element tools need.")
     async def browser_snapshot(max_chars: int | None = None) -> CallToolResult:
         return await handler.call("snapshot", {} if max_chars is None else {"max_chars": max_chars})
 
-    @tool("browser_tabs", "List this chat's open browser tabs: id, title, url, which one is in front (active), which "
+    @tool("browser_tabs", read_only=True, description="List this chat's open browser tabs: id, title, url, which one is in front (active), which "
           "one is your agent tab (agent) and which ones the user has used since their last message (userTouched). "
           "Tabs other than your agent tab show only their site and title, not the full url. "
           "Call it first when the user refers to a page that may already be open, then switch with browser_use_tab.")

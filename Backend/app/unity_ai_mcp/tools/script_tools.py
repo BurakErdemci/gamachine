@@ -1,9 +1,16 @@
 """run_script on the unityai server (Codex, agy, OpenCode, Cursor, Kimi, Copilot).
 
-Groups for this agent: the server's own file and shell tools, called through MCPServer.call_tool
-so each passes the very function (and approval_bridge card) a direct call runs, and the Unity MCP
-tools over the same bridge code the CLI's own unityMCP entry uses, carrying this process's
-GAMACHINE_CONVERSATION_ID. The server's mail, image and harness tools are not relayed yet.
+Groups for this agent, each through its own gate:
+- this server's file, shell and chat-mail tools, through MCPServer.call_tool (the very functions a
+  direct call runs: approval_bridge cards, file guards, the backend's mail limits);
+- Unity MCP over the same bridge code the CLI's own unityMCP entry uses, with this process's
+  GAMACHINE_CONVERSATION_ID;
+- the browser's read-only tools and the connectors, each by starting the same server the CLI is
+  given (its argv from the registration module, this chat's env), so every call reaches that
+  server's backend gate (/browser/command, /connectors/gate). The backend owns which of them this
+  agent has, so this process asks it: /browser/settings, and /connectors once per process (it runs
+  app detection). A read-only turn gets neither, as its CLI does not.
+Computer-use tools are never relayed. Image and harness tools are not relayed.
 """
 import logging
 import os
@@ -92,8 +99,106 @@ async def _unity_client():
         secret_reader=lambda: codex_unitymcp_bridge._read_shared_secret())
 
 
+async def _backend_get(path: str):
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"{approval_bridge.BACKEND_URL}{path}", headers=approval_bridge._get_headers())
+        return resp.json() if resp.status_code == 200 else None
+    except Exception as exc:  # noqa: BLE001 - no backend: the group is simply missing
+        logger.info("[run_script] GET %s failed: %s", path, exc)
+        return None
+
+
+def _chat_env() -> dict:
+    from spawn_env import conversation_env
+    return {**conversation_env(approval_bridge._conversation_id_from_env()),
+            "UNITYAI_URL": approval_bridge.BACKEND_URL}
+
+
+async def browser_entry() -> Optional[dict]:
+    """browser_use.registration.stdio_entry as the backend would build it, when the browser is on."""
+    settings = await _backend_get("/browser/settings")
+    if not (isinstance(settings, dict) and settings.get("enabled") is True):
+        return None
+    from browser_use import registration
+    argv = registration.server_argv()
+    return {"command": argv[0], "args": argv[1:], "env": _chat_env()}
+
+
+_CONNECTOR_IDS: Optional[tuple] = None
+
+
+async def connectors_entry() -> Optional[dict]:
+    """connectors.registration.stdio_entry as the backend would build it: the switched-on, usable
+    connectors (launcher.ready_ids), read once per process like the CLI's own connectors server."""
+    global _CONNECTOR_IDS
+    from connectors import launcher, registration
+    if _CONNECTOR_IDS is None:
+        listing = await _backend_get("/connectors")
+        rows = listing.get("connectors") if isinstance(listing, dict) else None
+        if not isinstance(rows, list):
+            return None
+        _CONNECTOR_IDS = tuple(r["id"] for r in rows if isinstance(r, dict) and r.get("enabled") is True
+                               and r.get("state") in launcher.USABLE_STATES)
+    if not _CONNECTOR_IDS:
+        return None
+    from connectors.installer import Installer
+    argv = registration.server_argv()
+    return {"command": argv[0], "args": argv[1:],
+            "env": {**_chat_env(), registration.IDS_ENV: ",".join(_CONNECTOR_IDS),
+                    registration.ROOT_ENV: str(Installer().root)}}
+
+
+def connector_refusal_marks() -> tuple:
+    from connectors.mcp_server import USER_REFUSAL_MARKS
+    return USER_REFUSAL_MARKS
+
+
+class _LazyGroup:
+    """A group whose server entry is only known at run time (the backend decides)."""
+
+    def __init__(self, label: str, make: Callable):
+        self.label = label
+        self._make = make
+        self._group = None
+        self.note = None
+
+    async def list_tools(self):
+        self._group = await self._make()
+        if self._group is None:
+            return []
+        specs = await self._group.list_tools()
+        self.note = getattr(self._group, "note", None)
+        return specs
+
+    async def call(self, name, args):
+        if self._group is None:
+            return Outcome.error(f"{name} is not available in scripts")
+        return await self._group.call(name, args)
+
+    async def aclose(self):
+        if self._group is not None:
+            await self._group.aclose()
+
+
+async def _browser_group():
+    entry = await browser_entry()
+    return None if entry is None else script_tool.StdioServerGroup(
+        "Browser", entry, keep=script_tool.read_only_tool)
+
+
+async def _connectors_group():
+    entry = await connectors_entry()
+    return None if entry is None else script_tool.StdioServerGroup(
+        "Connectors", entry, stop_marks=connector_refusal_marks())
+
+
 def default_groups(mcp: MCPServer, local_names: Sequence[str]) -> list:
-    return [LocalToolGroup(mcp, local_names), UnityMCPGroup(_unity_client)]
+    from spawn_env import read_only_refusal
+    groups = [LocalToolGroup(mcp, local_names), UnityMCPGroup(_unity_client)]
+    if read_only_refusal() is None:
+        groups += [_LazyGroup("Browser", _browser_group), _LazyGroup("Connectors", _connectors_group)]
+    return groups
 
 
 def register_script_tool(mcp: MCPServer, get_workspace: Callable[[], str], local_names: Sequence[str],
@@ -103,10 +208,14 @@ def register_script_tool(mcp: MCPServer, get_workspace: Callable[[], str], local
     registered = {tool.name: tool for tool in mcp._tool_manager.list_tools()}
     lines = [script_tool.signature(ToolSpec(n, registered[n].description or "", registered[n].parameters or {}))
              for n in names if n in registered]
-    description = script_tool.tool_description(lines, [script_tool.UNITY_TOOLS_LINE])
+    max_timeout = script_tool.max_timeout_from_env()
+    description = script_tool.tool_description(
+        lines, [script_tool.UNITY_TOOLS_LINE, *script_tool.browser_lines(), script_tool.CONNECTORS_TOOLS_LINE],
+        max_timeout_s=max_timeout)
     make_groups = groups_factory or (lambda: default_groups(mcp, names))
 
     @mcp.tool(name=script_tool.TOOL_NAME, description=description)
     async def run_script(code: str, timeout: Optional[int] = None) -> str:
-        text, _ = await script_tool.run_script(code, make_groups(), get_workspace(), timeout=timeout)
+        text, _ = await script_tool.run_script(code, make_groups(), get_workspace(), timeout=timeout,
+                                               max_timeout_s=max_timeout)
         return text

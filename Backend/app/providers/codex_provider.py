@@ -4,6 +4,7 @@ import sys
 import logging
 from .cli_base import BaseCLIProvider
 from agent_guide import provider_guide
+import script_tool
 from .unityai_tool_text import mail_and_fallback, mcp_double_underscore
 
 logger = logging.getLogger(__name__)
@@ -65,6 +66,8 @@ class CodexProvider(BaseCLIProvider):
             "--disable", "unified_exec",
             "--json",
             "-c", 'mcp_servers.unityai.default_tools_approval_mode="approve"',
+            # Codex gives an MCP call 60 s unless the entry says otherwise; run_script may run 600 s.
+            "-c", f"mcp_servers.unityai.tool_timeout_sec={script_tool.CODEX_UNITYAI_TOOL_TIMEOUT_S}",
             # ⚠️ Onayı KİMİN vereceğini sabitle — `codex_session.py`'deki thread
             # config'inin bu yoldaki karşılığı. Belirtilmezse Codex reviewer'ı
             # kullanıcının `~/.codex/config.toml`'undan okuyor ve orada
@@ -155,6 +158,8 @@ class CodexProvider(BaseCLIProvider):
             env_args = [
                 "--env", f"UNITYAI_URL={backend_url}",
                 "--env", f"WORKSPACE={workspace}",
+                # run_script's cap; covered by tool_timeout_sec (exec -c, thread config).
+                "--env", f"{script_tool.SCRIPT_MAX_ENV}={script_tool.MAX_TIMEOUT_S}",
             ]
 
             # Yeni kaydı ekle
