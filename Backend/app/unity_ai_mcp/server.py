@@ -35,6 +35,7 @@ import httpx
 from mcp.server.mcpserver import MCPServer
 
 import harness_notes
+from spawn_env import script_tool_allowed
 from unity_ai_mcp.approval_bridge import BACKEND_URL, _get_headers
 from unity_ai_mcp.tools.file_tools import register_file_tools
 from unity_ai_mcp.tools.bash_tool import register_bash_tool
@@ -115,7 +116,9 @@ def create_server(workspace: str = "") -> MCPServer:
     register_agent_tools(mcp)
     register_show_tools(mcp)
     register_harness_tools(mcp)
-    register_script_tool(mcp, get_workspace, script_tool_names)
+    # Settings > Agent > Script tool: the spawning CLI's env says when it is off.
+    if script_tool_allowed():
+        register_script_tool(mcp, get_workspace, script_tool_names)
 
     return mcp
 

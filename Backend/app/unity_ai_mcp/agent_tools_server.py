@@ -21,7 +21,8 @@ def create_server() -> MCPServer:
             "Gamachine sub-agents: start other connected CLI models as background helpers "
             "(agent_models, agent_start), message, stop, list and read them. Depth 1; start only "
             "what the job needs; ask the user before parallel writers in one folder; results "
-            "arrive in this chat by themselves, so do not poll."
+            "arrive in this chat by themselves: check agent_list when deciding or when the user "
+            "asks, and never poll it in a loop."
         ),
     )
     register_agent_tools(mcp)

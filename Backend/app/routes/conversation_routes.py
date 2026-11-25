@@ -1812,6 +1812,36 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
         require_conversation_owner(db, x_session_token, conv_id)
         return db.get_conversation_messages(conv_id)
 
+    @router.get("/conversations/{conv_id}/queue")
+    async def get_turn_queue(conv_id: int, x_session_token: str = Header(alias="X-Session-Token")):
+        """The chat's user messages accepted for a later turn and not taken by
+        one yet (turn_inputs), in the order they will run. A chat-stream
+        request still waiting at the gate is not listed (routes/SUBAGENTS_API.md)."""
+        require_conversation_owner(db, x_session_token, conv_id)
+        _refuse_side_chat(conv_id)
+        return {"conversation_id": conv_id, "queue": db.list_queued_user_inputs(conv_id)}
+
+    @router.delete("/conversations/{conv_id}/queue/{input_id}")
+    async def withdraw_turn_input(conv_id: int, input_id: int,
+                                  x_session_token: str = Header(alias="X-Session-Token")):
+        """Remove from queue: the message and its pending mark go together, so a
+        withdrawn message never runs; 409 once a turn has taken it."""
+        require_conversation_owner(db, x_session_token, conv_id)
+        _refuse_side_chat(conv_id)
+        outcome = db.withdraw_turn_input(conv_id, input_id)
+        if outcome == "missing":
+            raise HTTPException(status_code=404, detail="Queued message not found.")
+        if outcome == "claimed":
+            raise HTTPException(status_code=409, detail={
+                "code": "claimed", "message": "A turn has already taken this message."})
+        if outcome == "not_user":
+            raise HTTPException(status_code=409, detail={
+                "code": "not_user", "message": "Only your own queued messages can be removed."})
+        # A terminal agent waiting on this message's reply learns that none comes.
+        _end_turn_reply(conv_id, input_id, None, "stopped")
+        return {"status": "withdrawn", "id": input_id,
+                "queue": db.list_queued_user_inputs(conv_id)}
+
     @router.get("/conversations/{conv_id}/model")
     async def get_conversation_model(conv_id: int, x_session_token: str = Header(alias="X-Session-Token")):
         """The chat's provider/model, read fresh each time a window opens the
@@ -1989,6 +2019,7 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
         turn_events.drop(conv_id)
         turn_runner.forget(conv_id)
         _waiting_rows.pop(conv_id, None)
+        subagents.forget_progress(conv_id)
 
     async def _close_conversation_sessions(conv_id: int) -> None:
         # Canlı Claude/Codex session'ı varsa kapat (subprocess sızdırma önlemi).
@@ -2522,12 +2553,27 @@ Max 300 kelime. Türkçe yaz.
         reply = _TurnReply()
         errors: List[str] = []
         ran = cancelled = False
+        progress_failed = False
+
+        def _note(hook, *args) -> None:
+            # The progress record is for watching: its failure never ends the
+            # turn or holds back the result (logged once per turn).
+            nonlocal progress_failed
+            try:
+                hook(conv, *args)
+            except Exception:
+                if not progress_failed:
+                    logger.exception("[subagents] conv=%s progress not recorded", conv)
+                progress_failed = True
+
+        _note(subagents.note_turn_start)
         try:
             async for frame in _turn_stream(turn, None):
                 event = _sse_event(frame)
                 if event is not None:
                     ran = True
                     reply.add(event)
+                    _note(subagents.note_event, event)
                     if event.type == "error":
                         errors.append(str(event.data.get("message") or "error"))
                 yield frame
@@ -2538,6 +2584,7 @@ Max 300 kelime. Türkçe yaz.
             errors.append(f"{type(exc).__name__}: {exc}")
             raise
         finally:
+            _note(subagents.note_turn_end)
             if ran or cancelled:
                 subagents.child_turn_ended(conv, reply.value(), errors[-1] if errors else None,
                                            cancelled, floor,

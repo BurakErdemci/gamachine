@@ -4,6 +4,7 @@ import re
 
 ADDENDUM_SETTING_KEY = "agent_guide_addendum"
 ADDENDUM_MAX_CHARS = 4000
+SCRIPT_TOOL_SETTING_KEY = "script_tool_enabled"
 
 EXECUTE_CODE_LINE_EN = "- Prefer manage_* tools and batch_execute: in this approval mode every execute_code call (arbitrary C# in the Editor) opens an approval card; it adds implicit usings: write `UnityEngine.Object` in full."
 EXECUTE_CODE_LINE_TR = "- Önce manage_* araçlarını ve batch_execute'u dene: bu modda her execute_code çağrısı (Editor'de keyfi C#) onay kartı açar. Örtük using eklenir: `UnityEngine.Object` diye tam yaz."
@@ -192,8 +193,8 @@ def with_script_tool(guide: str) -> str:
     return _add_block(guide, SCRIPT_TOOL_LINE_EN, SCRIPT_TOOL_LINE_TR)
 
 
-SUBAGENTS_LINE_EN = "- Sub-agents: agent_models and agent_start run other connected CLI models as background helpers in this folder (agent_message, agent_stop, agent_list, agent_result); start only what the job needs, ask the user before parallel writers in one folder (offer a worktree), and do not poll: each result arrives here by itself."
-SUBAGENTS_LINE_TR = "- Alt ajanlar: agent_models ve agent_start, bağlı diğer CLI modellerini bu klasörde arka planda yardımcı olarak çalıştırır (agent_message, agent_stop, agent_list, agent_result); yalnız işin gerektirdiği kadarını başlat, aynı klasörde paralel yazan ajanlardan önce kullanıcıya sor (worktree öner) ve yoklama yapma: her sonuç buraya kendiliğinden gelir."
+SUBAGENTS_LINE_EN = "- Sub-agents: agent_models and agent_start run other connected CLI models as background helpers in this folder (agent_message, agent_stop, agent_list, agent_result); start only what the job needs, ask the user before parallel writers in one folder (offer a worktree); each result arrives here by itself: check agent_list (what each helper is doing now) when you decide or the user asks, never poll it in a loop."
+SUBAGENTS_LINE_TR = "- Alt ajanlar: agent_models ve agent_start, bağlı diğer CLI modellerini bu klasörde arka planda yardımcı olarak çalıştırır (agent_message, agent_stop, agent_list, agent_result); yalnız işin gerektirdiği kadarını başlat, aynı klasörde paralel yazan ajanlardan önce kullanıcıya sor (worktree öner); her sonuç buraya kendiliğinden gelir: karar verirken ya da kullanıcı sorduğunda agent_list'e bak (her yardımcının şu an ne yaptığı), döngüde yoklama yapma."
 
 
 def with_subagents(guide: str) -> str:
@@ -205,6 +206,21 @@ def bind_settings_store(store) -> None:
     """Use the app database supplied when the config router is created."""
     global _settings_store
     _settings_store = store
+
+
+def script_tool_enabled() -> bool:
+    """Settings > Agent > Script tool (app_settings `script_tool_enabled`); on
+    when unset or unreadable. Read when a session or turn starts."""
+    try:
+        value = (_settings_store.get_setting(SCRIPT_TOOL_SETTING_KEY)
+                 if _settings_store is not None else None)
+    except Exception:
+        return True
+    return not (isinstance(value, str) and value.strip().lower() in ("0", "false", "off", "no"))
+
+
+def set_script_tool_enabled(enabled: bool) -> None:
+    _settings_store.set_setting(SCRIPT_TOOL_SETTING_KEY, "1" if enabled else "0")
 
 
 def get_addendum() -> str | None:

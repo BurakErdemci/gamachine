@@ -1156,13 +1156,15 @@ class ClaudeSDKSession:
         if self.mcp_servers:
             opts_kwargs["mcp_servers"] = dict(self.mcp_servers)
             # run_script is added here, not by the runner: it is bound to this session's
-            # _can_use_tool, and it stays out of the mcp_servers that decide a rebuild.
+            # _can_use_tool, and it stays out of the mcp_servers that decide a rebuild
+            # (so Settings > Agent > Script tool reaches a session at its next start).
+            import agent_guide as _guides
             from unity_ai_mcp import script_server
-            script_entry = script_server.session_entry(self)
+            script_entry = (script_server.session_entry(self)
+                            if _guides.script_tool_enabled() else None)
             if script_entry is not None:
                 opts_kwargs["mcp_servers"][script_server.SERVER_NAME] = script_entry
                 if self.agent_guide:
-                    import agent_guide as _guides
                     opts_kwargs["system_prompt"]["append"] = (
                         _APP_SYSTEM_APPEND + "\n\n" + _guides.with_script_tool(self.agent_guide))
         if self.disallowed_tools:

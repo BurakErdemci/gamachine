@@ -9,12 +9,12 @@ A CLI main agent (Claude, Codex, agy, OpenCode, Cursor, Copilot, Kimi) can run o
 - agent_start(model, brief, effort="auto", name=""): starts a sub-agent. Write the brief so it stands alone (goal, files, limits, what to report). The sub-agent is told to end with a self-contained report.
 - agent_message(agent_id, text): a running sub-agent gets the text at its next turn boundary (it is never interrupted); a finished, stopped or interrupted one continues with it on its own session.
 - agent_stop(agent_id): stops its running turn and drops its queued messages; its open approval cards are refused.
-- agent_list(): this chat's sub-agents with model, effort and status (running, done, idle, error, stopped, interrupted).
-- agent_result(agent_id): the full last result.
-- Results arrive by themselves: when a sub-agent's turn ends, its last message reaches this chat as a system note naming the sub-agent (cut at about 6 KB; agent_result has the rest) and wakes this chat if it is idle. Several results that finish together arrive in one turn. Do not poll agent_list.
+- agent_list(): this chat's sub-agents with model, effort and status (running, done, idle, error, stopped, interrupted). Under a running one, one line on what it is doing now: phase (thinking, writing, running_tool, waiting_approval, queued), the current tool and its target with seconds, steps done and failed, elapsed time, its last line ("last said"), and "no activity for N min" after 90 s without an event.
+- agent_result(agent_id): the full last result; for a running sub-agent its live progress (phase, current step, last 5 steps, counts, elapsed, last said).
+- Results arrive by themselves: when a sub-agent's turn ends, its last message reaches this chat as a system note naming the sub-agent (cut at about 6 KB; agent_result has the rest) and wakes this chat if it is idle. Several results that finish together arrive in one turn. Check agent_list when you decide what to do next or when the user asks how the helpers are doing; never poll it in a loop.
 - A quota or provider error comes back as the result ("quota exhausted: ..." or "error: ...").
 - Depth 1: a sub-agent cannot start sub-agents. No count limit; start only what the job needs.
-- Fuse: at most 10 turns of this chat in a row are started by sub-agent results without a user message; later results wait in the chat and go to the AI with the user's next message.
+- Fuse: at most 10 turns of this chat in a row are started by sub-agent results without a user message; later results wait in the chat and go to the AI with the user's next message, or when the user presses Continue on the fuse notice (it resets the fuse).
 - Before starting two or more sub-agents that write files in the same folder, ask the user first (offer a separate worktree).
 - Approval cards stay in the sub-agent's chat and carry this chat's id and the sub-agent's label. Auto mode opens no card; Safe Auto decides by risk, as in any chat.
 - Stopping this chat stops its running sub-agents; deleting it deletes them. After an app restart a running sub-agent is "interrupted": nothing reruns it until agent_message.

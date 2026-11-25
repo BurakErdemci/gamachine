@@ -1107,6 +1107,53 @@ class DatabaseManager:
             conn.commit()
         return ids
 
+    def count_held_results(self, parent_conv: int) -> int:
+        """Held result rows of a chat whose message still exists."""
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            return conn.execute('SELECT COUNT(*) FROM subagent_held h JOIN messages m '
+                                'ON m.id = h.message_id WHERE h.parent_conv = ?',
+                                (parent_conv,)).fetchone()[0]
+
+    def list_queued_user_inputs(self, conv_id: int) -> List[Dict[str, Any]]:
+        """The chat's pending user-origin inputs, in the order a turn takes them:
+        [{id (the message id), text, created_at, order (1-based)}]."""
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            rows = conn.execute(
+                'SELECT t.message_id, m.content, m.timestamp FROM turn_inputs t '
+                'JOIN messages m ON m.id = t.message_id '
+                "WHERE t.conversation_id = ? AND t.origin = 'user' ORDER BY t.id ASC",
+                (conv_id,)).fetchall()
+        return [{"id": r[0], "text": r[1], "created_at": r[2], "order": i + 1}
+                for i, r in enumerate(rows)]
+
+    def withdraw_turn_input(self, conv_id: int, message_id: int) -> str:
+        """Withdraw a pending user input: its mark and its message go in one
+        transaction, so a turn either claimed it first or never sees it.
+        "withdrawn"; "claimed" (no longer pending: a turn took it); "not_user"
+        (a pending input of another origin); "missing" (no such message here)."""
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute('BEGIN IMMEDIATE')
+            marks = conn.execute(
+                'SELECT id, origin FROM turn_inputs WHERE conversation_id = ? AND message_id = ?',
+                (conv_id, message_id)).fetchall()
+            exists = conn.execute('SELECT 1 FROM messages WHERE id = ? AND conversation_id = ?',
+                                  (message_id, conv_id)).fetchone() is not None
+            if not exists:
+                conn.rollback()
+                return "missing"
+            if not marks:
+                conn.rollback()
+                return "claimed"
+            if any(origin != "user" for _, origin in marks):
+                conn.rollback()
+                return "not_user"
+            conn.execute('DELETE FROM turn_inputs WHERE conversation_id = ? AND message_id = ?',
+                         (conv_id, message_id))
+            conn.execute('DELETE FROM messages WHERE id = ? AND conversation_id = ?',
+                         (message_id, conv_id))
+            conn.commit()
+        return "withdrawn"
+
     # ===================== SIDE CHATS =====================
     def create_side_chat(self, main_id: int, user_id: int) -> Optional[int]:
         """The open side chat of `main_id`, created if there is none.

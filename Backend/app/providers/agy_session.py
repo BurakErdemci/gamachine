@@ -1353,8 +1353,9 @@ class AgyStreamSession(SaglayiciSahipligi):
                 agent_guide = guides.with_browser_use(agent_guide)
             if connectors_on:
                 agent_guide = guides.with_connectors(agent_guide)
-            # agy mounts the unityai server, which serves run_script.
-            agent_guide = guides.with_script_tool(agent_guide)
+            # agy mounts the unityai server, which serves run_script unless the setting is off.
+            if guides.script_tool_enabled():
+                agent_guide = guides.with_script_tool(agent_guide)
         # A queued turn rechecks the closed flag before spawning or writing.
         completed = False
         preserve_live_process = False

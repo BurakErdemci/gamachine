@@ -11,7 +11,8 @@ import urllib.request
 from fastapi import APIRouter, Body, Header, HTTPException, Query
 from typing import Literal
 
-from agent_guide import ADDENDUM_MAX_CHARS, ADDENDUM_SETTING_KEY, bind_settings_store, sections
+from agent_guide import (ADDENDUM_MAX_CHARS, ADDENDUM_SETTING_KEY, bind_settings_store, sections,
+                         script_tool_enabled, set_script_tool_enabled)
 
 from agentic import chat_model
 from auth_utils import _check_token, get_current_user, require_conversation_owner, require_user
@@ -272,6 +273,22 @@ def create_config_router(db):
             raise HTTPException(400, "text exceeds the agent guide addendum limit")
         db.set_setting(ADDENDUM_SETTING_KEY, text)
         return {"addendum": text}
+
+    # Settings > Agent > Script tool (app_settings `script_tool_enabled`, on when
+    # unset). A session reads it when it starts: a running one keeps its tools.
+    @router.get("/agent-settings/script-tool")
+    async def get_script_tool_setting(x_session_token: str = Header(alias="X-Session-Token", default="")):
+        _check_token(x_session_token)
+        return {"enabled": script_tool_enabled()}
+
+    @router.put("/agent-settings/script-tool")
+    async def put_script_tool_setting(body: object = Body(...),
+                                      x_session_token: str = Header(alias="X-Session-Token", default="")):
+        _check_token(x_session_token)
+        if not isinstance(body, dict) or not isinstance(body.get("enabled"), bool):
+            raise HTTPException(400, "enabled must be true or false")
+        set_script_tool_enabled(body["enabled"])
+        return {"enabled": script_tool_enabled()}
 
     @router.post("/save-ai-config")
     async def save_config(req: AIConfigRequest, x_session_token: str = Header(alias="X-Session-Token")):

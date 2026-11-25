@@ -27,15 +27,23 @@ a reply), idle (its last turn ended with nothing to report), error (its last
 turn failed; quota included), stopped, interrupted (running when the app
 stopped; `agent_message` continues it on its stored resume id).
 
+Progress: every event of a helper's turn is fed to `note_event` by the
+router; `progress` turns that in-memory record into what the UI and
+agent_list show (phase, current step, counts, last said). Nothing of it is
+written to the database.
+
 This module imports nothing from the router; the router binds its hooks
 through `configure`.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sys
 import threading
+import time
+from collections import deque
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from agentic import turn_runner
@@ -97,6 +105,28 @@ _PAUSED: set = set()
 # Child chats whose turns failed to open, in a row (the gate retries them).
 _OPEN_FAILS: Dict[int, int] = {}
 
+# ── live progress (in memory) ────────────────────────────────────────────────
+THINKING, WRITING, RUNNING_TOOL, WAITING_APPROVAL, QUEUED = (
+    "thinking", "writing", "running_tool", "waiting_approval", "queued")
+LAST_STEPS = 5
+TARGET_MAX_CHARS = 80
+SAID_MAX_CHARS = 160
+# agent_list adds "no activity for N min" from this many seconds without an event.
+IDLE_NOTE_S = 90
+# Open steps kept per turn: a provider that never reports some results must
+# not grow the record without bound.
+_OPEN_MAX = 16
+_TEXT_TAIL = 2000
+# Argument keys that name what a step works on, most telling first.
+_TARGET_KEYS = ("file_path", "path", "notebook_path", "command", "cmd", "script", "code",
+                "pattern", "url")
+_NESTED_KEYS = ("arguments", "input", "params", "changes")
+_GATE_EVENTS = ("command_approval_needed", "question_needed")
+# Clock of the progress record; tests replace it.
+_now: Callable[[], float] = time.time
+# Child chat -> its current (or last, frozen) turn's record.
+_PROGRESS: Dict[int, dict] = {}
+
 
 class SubagentError(Exception):
     """A refused call. `status` is the HTTP status the route answers with."""
@@ -121,6 +151,7 @@ def configure(db: Any, *, stop_child: Optional[Callable[[int], Awaitable[None]]]
         _FUSE_NOTED.clear()
         _PAUSED.clear()
         _OPEN_FAILS.clear()
+        _PROGRESS.clear()
     from agentic import cards
     cards.set_tagger(card_tag)
     try:
@@ -384,6 +415,64 @@ def _preview(text: Any, n: int = 120) -> str:
     return flat[:n] + ("…" if len(flat) > n else "")
 
 
+def _duration(seconds: int) -> str:
+    seconds = max(0, int(seconds))
+    if seconds < 60:
+        return f"{seconds} s"
+    if seconds < 3600:
+        return f"{seconds // 60} min {seconds % 60} s"
+    return f"{seconds // 3600} h {seconds % 3600 // 60} min"
+
+
+def _doing(p: dict) -> str:
+    """`<phase>, <tool target> (<s> s)`: what the helper does right now."""
+    text = p["phase"]
+    if p.get("card"):
+        text += f", {p['card']['title']} ({p['card']['waiting_s']} s)"
+    elif p.get("step"):
+        step = p["step"]
+        what = f"{step['tool']} {step['target']}".strip()
+        text += f", {what} ({step['seconds']} s)"
+    return text
+
+
+def progress_line(p: dict) -> str:
+    """agent_list's line under a running helper."""
+    line = (f"now: {_doing(p)} · {p['steps_done']} steps, {p['steps_failed']} failed"
+            f" · {_duration(p['elapsed_s'])}")
+    if p.get("last_said"):
+        line += f' · last said: "{p["last_said"]}"'
+    if p["idle_s"] >= IDLE_NOTE_S:
+        line += f" · no activity for {p['idle_s'] // 60} min"
+    return line
+
+
+def _progress_text(p: dict) -> str:
+    """agent_result's block for a running helper."""
+    lines = [f"Now: {_doing(p)}",
+             f"Steps: {p['steps_done']} done, {p['steps_failed']} failed; elapsed "
+             f"{_duration(p['elapsed_s'])}; last activity {_duration(p['idle_s'])} ago"]
+    if p.get("last_said"):
+        lines.append(f'Last said: "{p["last_said"]}"')
+    if p["last_steps"]:
+        lines.append("Last steps:")
+        for s in p["last_steps"]:
+            what = f"{s['tool']} {s['target']}".strip()
+            lines.append(f"- {what}: {'ok' if s['ok'] else 'failed'} ({s['seconds']} s)")
+    return "\n".join(lines)
+
+
+def row_progress(row: dict) -> Optional[dict]:
+    """A list row's `progress`: None unless the helper is running."""
+    if row.get("status") != RUNNING:
+        return None
+    try:
+        return progress(row["child_conv"])
+    except Exception:
+        logger.exception("[subagents] progress of chat %s not read", row.get("child_conv"))
+        return None
+
+
 def list_text(parent: int) -> str:
     rows = _DB.list_subagents(parent)
     if not rows:
@@ -394,18 +483,262 @@ def list_text(parent: int) -> str:
         if r.get("last_result"):
             line += f" - {_preview(r['last_result'])}"
         lines.append(line)
+        p = row_progress(r)
+        if p is not None:
+            lines.append("  " + progress_line(p))
     return "\n".join(lines)
 
 
 def result(parent: int, agent_id: Any) -> dict:
     row = _own_row(parent, agent_id)
+    head = f"Sub-agent #{row['id']} \"{row['name']}\" ({row['model_name']}), {row['status']}:\n"
     text = row.get("last_result")
-    if not text:
-        text = ("No result yet; it arrives in this chat by itself."
-                if row["status"] == RUNNING else "No result.")
-    return {"status": row["status"], "agent_id": row["id"],
-            "text": f"Sub-agent #{row['id']} \"{row['name']}\" ({row['model_name']}), "
-                    f"{row['status']}:\n{text}"}
+    p = row_progress(row)
+    if row["status"] == RUNNING:
+        parts = [_progress_text(p)] if p is not None else []
+        parts.append("Its result arrives in this chat by itself when it finishes; do not poll.")
+        if text:
+            parts.append(f"Previous result:\n{text}")
+        return {"status": row["status"], "agent_id": row["id"], "progress": p,
+                "text": head + "\n".join(parts)}
+    return {"status": row["status"], "agent_id": row["id"], "progress": None,
+            "text": head + (text or "No result.")}
+
+
+# ── live progress of a helper's turn ─────────────────────────────────────────
+def _one_line(text: Any, n: int) -> str:
+    flat = " ".join(str(text or "").split())
+    return flat if len(flat) <= n else flat[:n - 1] + "…"
+
+
+def _first_line(text: str) -> str:
+    return next((ln for ln in text.splitlines() if ln.strip()), "")
+
+
+def _target_of(value: Any, depth: int = 0) -> str:
+    """The path, command, script, pattern or url a tool call works on."""
+    if depth > 3:
+        return ""
+    if isinstance(value, str):
+        raw = value.strip()
+        if raw[:1] in ("{", "["):
+            try:
+                return _target_of(json.loads(raw), depth + 1)
+            except ValueError:
+                return ""
+        return ""
+    if isinstance(value, list):
+        for item in value[:8]:
+            found = _target_of(item, depth + 1)
+            if found:
+                return found
+        return ""
+    if not isinstance(value, dict):
+        return ""
+    for key in _TARGET_KEYS:
+        v = value.get(key)
+        if isinstance(v, list) and v and all(isinstance(x, str) for x in v):
+            v = " ".join(v)  # an argv
+        if isinstance(v, str) and v.strip():
+            return _first_line(v)
+    for key in _NESTED_KEYS:
+        found = _target_of(value.get(key), depth + 1)
+        if found:
+            return found
+    return ""
+
+
+def _step_target(data: dict) -> str:
+    found = _target_of(data.get("arguments")) or _target_of(data.get("input"))
+    if not found and isinstance(data.get("summary"), str):
+        found = _first_line(data["summary"])
+    return _one_line(found, TARGET_MAX_CHARS)
+
+
+def note_turn_start(conv: int) -> None:
+    """A turn of this helper chat begins: a fresh record (the last one goes)."""
+    now = _now()
+    with _LOCK:
+        _PROGRESS[conv] = {
+            "started": now, "ended": None, "event_at": now, "phase": THINKING,
+            "open": [], "done": 0, "failed": 0, "last": deque(maxlen=LAST_STEPS),
+            "said": "", "tail": "", "gate": False}
+
+
+def note_turn_end(conv: int) -> None:
+    """The turn ended: the record is frozen as it stands."""
+    now = _now()
+    with _LOCK:
+        rec = _PROGRESS.get(conv)
+        if rec is not None and rec["ended"] is None:
+            rec["ended"] = now
+
+
+def forget_progress(conv: int) -> None:
+    """A deleted chat."""
+    with _LOCK:
+        _PROGRESS.pop(conv, None)
+
+
+def _close_step(rec: dict, step: dict, ok: bool, now: float) -> None:
+    rec["done"] += 1
+    if not ok:
+        rec["failed"] += 1
+    rec["last"].append({"tool": step["tool"], "target": step["target"], "ok": ok,
+                        "seconds": max(0, int(now - step["started_at"]))})
+
+
+def note_event(conv: int, event: Any) -> None:
+    """One event of the helper's running turn (`type`, `data`, as the router
+    parses its SSE frames)."""
+    etype = getattr(event, "type", None)
+    data = getattr(event, "data", None)
+    if not isinstance(data, dict):
+        data = {}
+    now = _now()
+    with _LOCK:
+        rec = _PROGRESS.get(conv)
+        if rec is None or rec["ended"] is not None:
+            return
+        rec["event_at"] = now
+        if etype in _GATE_EVENTS:
+            rec["gate"] = True
+            return
+        if etype not in ("text", "thinking", "tool_call", "tool_result", "response"):
+            return  # status, usage...: activity, nothing else
+        rec["gate"] = False
+        if etype == "text":
+            content = data.get("content")
+            if not isinstance(content, str) or not content:
+                return
+            # A model writes after its tools returned; steps whose result was
+            # never reported (TodoWrite has none) end here.
+            for step in rec["open"]:
+                _close_step(rec, step, True, now)
+            rec["open"] = []
+            rec["phase"] = WRITING
+            rec["tail"] = (rec["tail"] + content)[-_TEXT_TAIL:]
+            last = next((ln for ln in reversed(rec["tail"].splitlines()) if ln.strip()), "")
+            if last:
+                rec["said"] = _one_line(last, SAID_MAX_CHARS)
+        elif etype == "response":
+            # Providers that stream no text say it all here.
+            content = data.get("content")
+            if not rec["said"] and isinstance(content, str):
+                last = next((ln for ln in reversed(content.splitlines()) if ln.strip()), "")
+                rec["said"] = _one_line(last, SAID_MAX_CHARS)
+        elif etype == "thinking":
+            if not rec["open"]:
+                rec["phase"] = THINKING
+        elif etype == "tool_call":
+            tool = _one_line(data.get("tool") or data.get("name") or "tool", 40)
+            rec["open"].append({"tool": tool, "target": _step_target(data), "started_at": now,
+                                "id": data.get("tool_id")})
+            del rec["open"][:-_OPEN_MAX]
+            rec["tail"] = ""
+            rec["phase"] = RUNNING_TOOL
+        else:  # tool_result
+            tool_id, tool = data.get("tool_id"), data.get("tool") or data.get("name")
+            open_steps = rec["open"]
+            index = next((i for i, s in enumerate(open_steps) if tool_id and s["id"] == tool_id), None)
+            if index is None:
+                index = next((i for i, s in enumerate(open_steps) if s["tool"] == tool), None)
+            if index is None and open_steps:
+                index = 0
+            if index is not None:
+                step = open_steps.pop(index)
+            else:
+                step = {"tool": _one_line(tool or "tool", 40), "target": _step_target(data),
+                        "started_at": now}
+            _close_step(rec, step, data.get("success") is not False, now)
+            rec["phase"] = RUNNING_TOOL if open_steps else THINKING
+
+
+def _pending_card(conv: int) -> Optional[dict]:
+    from agentic import cards
+    pending = cards.list_pending(conv)
+    if not pending:
+        return None
+    first = pending[0]
+    card = cards.get(first["card_id"])
+    created = getattr(card, "created_at", None)
+    waiting = max(0, int(time.time() - created)) if isinstance(created, (int, float)) else 0
+    title = " ".join(str(x) for x in (first.get("tool"), first.get("summary")) if x)
+    return {"title": _one_line(title or first.get("kind") or "approval", TARGET_MAX_CHARS),
+            "waiting_s": waiting}
+
+
+def _view(rec: dict, now: float, phase: Optional[str] = None,
+          card: Optional[dict] = None) -> dict:
+    end = rec["ended"] if rec["ended"] is not None else now
+    step = None
+    if rec["open"] and rec["ended"] is None:
+        current = rec["open"][-1]
+        step = {"tool": current["tool"], "target": current["target"],
+                "seconds": max(0, int(now - current["started_at"]))}
+    return {"phase": phase or rec["phase"], "step": step,
+            "steps_done": rec["done"], "steps_failed": rec["failed"],
+            "elapsed_s": max(0, int(end - rec["started"])), "last_said": rec["said"],
+            "idle_s": max(0, int(end - rec["event_at"])), "card": card,
+            "last_steps": [dict(s) for s in rec["last"]]}
+
+
+def progress(conv: int) -> Optional[dict]:
+    """What this helper chat is doing (the SUBAGENTS_API.md `progress`
+    object); None when it has never run a turn in this process and waits for
+    nothing. A running turn's record is live; an ended one is frozen; inputs
+    waiting with no turn running read as `queued`."""
+    now = _now()
+    with _LOCK:
+        rec = _PROGRESS.get(conv)
+        snap = None if rec is None else {**rec, "open": [dict(s) for s in rec["open"]],
+                                         "last": list(rec["last"])}
+    running = snap is not None and snap["ended"] is None
+    if running:
+        card = _pending_card(conv)
+        phase = WAITING_APPROVAL if card is not None or snap["gate"] else snap["phase"]
+        return _view(snap, now, phase, card)
+    if _DB is not None and _DB.count_turn_inputs(conv) > 0:
+        base = snap or {"started": now, "ended": now, "event_at": now, "phase": QUEUED,
+                        "open": [], "done": 0, "failed": 0, "last": [], "said": ""}
+        view = _view(base, now, QUEUED)
+        # Queued, not working: counts and times belong to the next turn.
+        view.update(steps_done=0, steps_failed=0, elapsed_s=0, idle_s=0)
+        return view
+    return None if snap is None else _view(snap, now)
+
+
+def fuse_state(parent: int) -> dict:
+    """The fuse as the UI shows it: tripped (FUSE_LIMIT automatic turns in a
+    row), paused (the user's Stop), and how many results wait."""
+    with _LOCK:
+        count = _FUSE.get(parent, 0)
+        paused = parent in _PAUSED
+    held = _DB.count_held_results(parent) if _DB is not None else 0
+    return {"tripped": count >= FUSE_LIMIT, "count": count, "limit": FUSE_LIMIT,
+            "paused": paused, "held": held}
+
+
+def continue_held(parent: int) -> dict:
+    """The fuse notice's Continue: the fuse resets and the held results ride
+    one parent turn (as with a user message, without its text). Must be
+    called on the backend's event loop."""
+    if _DB is None or _DB.count_held_results(parent) == 0:
+        raise SubagentError(409, "No sub-agent results are waiting in this chat.", "nothing_held")
+    with _LOCK:
+        _FUSE.pop(parent, None)
+        _FUSE_NOTED.discard(parent)
+        _PAUSED.discard(parent)
+    ids = _DB.take_held_results(parent)
+    if not ids:  # another Continue took them first
+        raise SubagentError(409, "No sub-agent results are waiting in this chat.", "nothing_held")
+    busy = turn_runner.busy(parent)
+    for mid in ids:
+        _DB.queue_turn_input(parent, mid, RESULT_ORIGIN)
+    turn_runner.kick(parent)
+    return {"status": "queued" if busy else "started", "released": len(ids),
+            "text": f"{len(ids)} sub-agent result(s) released to this chat's "
+                    + ("next turn." if busy else "turn.")}
 
 
 # ── a child's turn ended ─────────────────────────────────────────────────────
@@ -586,3 +919,4 @@ def reset() -> None:
         _FUSE_NOTED.clear()
         _PAUSED.clear()
         _OPEN_FAILS.clear()
+        _PROGRESS.clear()

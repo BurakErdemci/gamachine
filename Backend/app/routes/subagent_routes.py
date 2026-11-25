@@ -6,6 +6,10 @@ must be one of the local user's ordinary chats, not a side chat and not a
 sub-agent's own chat (depth 1); a sub-agent is only reachable from the chat
 that started it. Calls that change something also need a turn of the caller
 in flight: a tool call only comes out of a running turn.
+
+The desktop UI calls list, fuse and continue with the same app token; continue
+is the user's own click, so it needs no running turn. The JSON contract is in
+SUBAGENTS_API.md next to this file.
 """
 from __future__ import annotations
 
@@ -121,9 +125,34 @@ def create_subagent_router(db: Any,
     @router.get("/subagents/list")
     async def subagent_list(conversation_id: Optional[int] = None,
                             x_session_token: str = Header(alias="X-Session-Token", default="")):
+        # The desktop UI polls this too: same app token, no running turn needed.
         _caller(x_session_token, conversation_id)
-        return {"agents": db.list_subagents(conversation_id),
+        rows = db.list_subagents(conversation_id)
+        for row in rows:
+            row["progress"] = subagents.row_progress(row)
+        return {"agents": rows, "fuse": subagents.fuse_state(conversation_id),
                 "text": subagents.list_text(conversation_id)}
+
+    @router.get("/subagents/fuse")
+    async def subagent_fuse(conversation_id: Optional[int] = None,
+                            x_session_token: str = Header(alias="X-Session-Token", default="")):
+        _caller(x_session_token, conversation_id)
+        return subagents.fuse_state(conversation_id)
+
+    @router.post("/subagents/continue")
+    async def subagent_continue(body: dict,
+                                x_session_token: str = Header(alias="X-Session-Token", default="")):
+        """The fuse notice's Continue button (desktop UI): no turn of the chat
+        needs to run; the user's click is the go-ahead."""
+        _check_token(x_session_token)
+        parent = body.get("conversation_id") if isinstance(body, dict) else None
+        _caller(x_session_token, parent)
+        try:
+            return subagents.continue_held(parent)
+        except subagents.SubagentError as exc:
+            # The UI tells the refusals apart by code.
+            raise HTTPException(status_code=exc.status,
+                                detail={"message": exc.message, "code": exc.code, **exc.extra})
 
     @router.get("/subagents/result")
     async def subagent_result(conversation_id: Optional[int] = None, agent_id: Optional[int] = None,

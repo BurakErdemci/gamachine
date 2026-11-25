@@ -3023,8 +3023,10 @@ class AgentRunner:
                 _cli_guide = agent_guide.with_browser_use(_cli_guide)
             if _connectors_reg.stdio_entry() is not None:
                 _cli_guide = agent_guide.with_connectors(_cli_guide)
-            # Cursor, Copilot, OpenCode and Kimi mount the unityai server, which serves run_script.
-            _cli_guide = agent_guide.with_script_tool(_cli_guide)
+            # Cursor, Copilot, OpenCode and Kimi mount the unityai server, which serves run_script
+            # unless Settings > Agent > Script tool is off (spawn_env.SCRIPT_TOOL_ENV).
+            if agent_guide.script_tool_enabled():
+                _cli_guide = agent_guide.with_script_tool(_cli_guide)
             _cli_guide = self._with_subagents(_cli_guide)
         _note_text = "\n\n".join(text for _, text in self._turn_notes())
         _guide_units = len(((_cli_guide or "") + _note_text).encode("utf-16-le")) // 2
@@ -3797,8 +3799,9 @@ class AgentRunner:
                 _session_guide = agent_guide.with_browser_use(_session_guide)
             if desired_connectors[0]:
                 _session_guide = agent_guide.with_connectors(_session_guide)
-            # Codex mounts the unityai server, which serves run_script.
-            _session_guide = agent_guide.with_script_tool(_session_guide)
+            # Codex mounts the unityai server, which serves run_script unless the setting is off.
+            if agent_guide.script_tool_enabled():
+                _session_guide = agent_guide.with_script_tool(_session_guide)
             _session_guide = self._with_subagents(_session_guide)
         # The thread holds the guide from its first turn until a compaction
         # (codex_session forgets it there) or a new thread on a dead app-server.

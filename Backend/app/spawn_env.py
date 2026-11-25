@@ -257,13 +257,37 @@ def read_only_refusal() -> Optional[str]:
     return None
 
 
+# Settings > Agent > Script tool off: the unityai server leaves run_script out
+# (unity_ai_mcp/server.py). Unset means on.
+SCRIPT_TOOL_ENV = "GAMACHINE_SCRIPT_TOOL"
+
+
+def script_tool_env() -> Dict[str, str]:
+    """{SCRIPT_TOOL_ENV: "0"} while the app setting is off, else {}."""
+    try:
+        from agent_guide import script_tool_enabled
+        return {} if script_tool_enabled() else {SCRIPT_TOOL_ENV: "0"}
+    except Exception:
+        return {}
+
+
+def script_tool_allowed() -> bool:
+    """In a unityai server process: may run_script be registered?"""
+    return os.environ.get(SCRIPT_TOOL_ENV, "").strip() != "0"
+
+
 def conversation_env(conversation_id) -> Dict[str, str]:
     """`overrides` entry naming the chat a spawned CLI works for, or {}.
 
     Only for a process dedicated to one chat: ids <= 0 are throwaway one-shots
     and side calls have none, and a card owned by the wrong chat is worse than
     an unowned one. Same guard as the Claude session's header (agent_runner).
+
+    It also carries the Script tool switch when it is off: every CLI path
+    hands these names to its unityai child (Codex forwards exactly these as
+    `env_vars`, Copilot puts them in the entry, agy and the one-shot CLIs pass
+    their own env on).
     """
     if type(conversation_id) is int and conversation_id > 0:
-        return {CONVERSATION_ENV: str(conversation_id)}
+        return {CONVERSATION_ENV: str(conversation_id), **script_tool_env()}
     return {}

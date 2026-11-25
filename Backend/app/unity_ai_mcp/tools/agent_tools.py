@@ -35,7 +35,8 @@ _RULES = (
     "Depth 1: a sub-agent cannot start sub-agents. There is no count limit, but start only "
     "what the job needs. Before starting two or more sub-agents that write files in the same "
     "folder, ask the user (offer a separate worktree). A result arrives in this chat by "
-    "itself when the sub-agent finishes; do not poll agent_list in a loop.")
+    "itself when the sub-agent finishes; check agent_list when you decide what to do next "
+    "or the user asks how it goes, and do not poll agent_list in a loop.")
 
 
 def _detail(resp: httpx.Response) -> str:
@@ -133,13 +134,18 @@ def register_agent_tools(mcp: MCPServer) -> None:
 
     @mcp.tool(name=TOOL_LIST, description=(
         "Lists this chat's sub-agents with their model, effort, status (running, done, idle, "
-        "error, stopped, interrupted) and the start of their last result. Results arrive on "
-        "their own; do not call this in a loop to wait."))
+        "error, stopped, interrupted) and the start of their last result; under a running one, "
+        "what it is doing now (phase, current tool and target, steps done and failed, elapsed "
+        "time, its last line, and 'no activity for N min' after 90 s without an event). Check "
+        "it when you decide what to do next or the user asks. Results arrive on their own; do "
+        "not call this in a loop to wait."))
     async def agent_list_tool() -> str:
         return await agent_list()
 
     @mcp.tool(name=TOOL_RESULT, description=(
         "Returns the full last result of sub-agent `agent_id` (the result sent to this chat "
-        "is cut at about 6 KB)."))
+        "is cut at about 6 KB). For a running one: its live progress (phase, current step, "
+        "the last 5 steps, counts, elapsed time, its last line); its result still arrives by "
+        "itself, so do not call this in a loop."))
     async def agent_result_tool(agent_id: int) -> str:
         return await agent_result(agent_id)
