@@ -1030,7 +1030,9 @@ def test_cancel_during_discovery_closes_the_helper(helper, runtime, procs):
 
     took, alive = run(asyncio.wait_for(scenario(), 60))
     assert took < 15 and alive == []
-    assert procs == []  # the runner never started
+    # Only the runner counts: on POSIX asyncio starts the helper through the same patched Popen
+    # (measured on macOS, 25 Nov 2026).
+    assert [p for p in procs if "runner.mjs" in " ".join(map(str, p.args))] == []  # the runner never started
 
 
 def test_the_time_limit_covers_a_helper_that_never_answers(helper, runtime, procs):
