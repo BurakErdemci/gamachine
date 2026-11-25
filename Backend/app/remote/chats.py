@@ -21,8 +21,11 @@ AGENT_NAMES = {"claude": "Claude", "codex": "Codex", "agy": "Antigravity", "open
 KIND_TITLES = {"mcp": "Unity MCP", "mail": "Sohbetler arası not", "command": "Komut onayı",
                "question": "Soru"}
 
+# Side chats and sub-agents' hidden chats (agent_of) are neither listed nor
+# opened from the phone.
 _CHAT_COLS = ("SELECT c.id, c.title, c.updated_at, c.hidden "
-              "FROM conversations c WHERE c.user_id = ? AND c.side_of IS NULL")
+              "FROM conversations c WHERE c.user_id = ? AND c.side_of IS NULL "
+              "AND c.agent_of IS NULL")
 
 
 def effort_levels(provider_type: str, model_name: str) -> List[str]:
