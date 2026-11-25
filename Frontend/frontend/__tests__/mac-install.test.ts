@@ -135,17 +135,36 @@ describe('mac installer: staging', () => {
     const { inst, spawnDetached } = installer()
     const staged: any = await inst.stage('/cache/update.zip', '4.0.4')
     const dir = path.join(parent, leftovers()[0]!)
-    const log = staged.swap()
+    const log = staged.swap(true)
+    expect(staged.swap(false)).toBe(log)
     expect(log).toBe(path.join(root, 'logs', 'update-swap.log'))
-    staged.swap()
     expect(spawnDetached).toHaveBeenCalledTimes(1)
     const [cmd, args] = spawnDetached.mock.calls[0]!
     expect(cmd).toBe('/bin/bash')
-    expect(args).toEqual([path.join(dir, 'swap.sh'), '999999', target, path.join(dir, 'Gamachine.app'), dir, log, '60', '/usr/bin/open'])
+    expect(args).toEqual([path.join(dir, 'swap.sh'), '999999', target, path.join(dir, 'Gamachine.app'), dir, log, '60', '/usr/bin/open', '1'])
     expect(readFileSync(path.join(dir, 'swap.sh'), 'utf8')).toMatch(/^#!\/bin\/bash/)
     await staged.discard()
     expect(spawnDetached.mock.results[0]!.value.kill).toHaveBeenCalled()
     expect(existsSync(dir)).toBe(false)
+  })
+
+  it('swap(false) passes relaunch=0 to the helper', async () => {
+    const { inst, spawnDetached } = installer()
+    const staged: any = await inst.stage('/cache/update.zip', '4.0.4')
+    staged.swap(false)
+    expect(spawnDetached.mock.calls[0]![1].at(-1)).toBe('0')
+  })
+
+  it('discardSync stops a started helper and removes the staging dir at once', async () => {
+    const { inst, spawnDetached } = installer()
+    const staged: any = await inst.stage('/cache/update.zip', '4.0.4')
+    const dir = path.join(parent, leftovers()[0]!)
+    staged.swap(true)
+    staged.discardSync()
+    expect(spawnDetached.mock.results[0]!.value.kill).toHaveBeenCalled()
+    expect(existsSync(dir)).toBe(false)
+    expect(() => staged.discardSync()).not.toThrow()
+    expect(leftovers()).toEqual([])
   })
 })
 
@@ -166,7 +185,7 @@ describe.skipIf(process.platform === 'win32')('mac installer: the swap helper', 
       logger: { log() {}, error() {} }, run: fakeRun(), spawnDetached, launcher, helperWaitSeconds: opts.wait,
     })
     return {
-      inst, status: () => status,
+      inst, status: () => status, pid: opts.pid ?? exited,
       launches: () => (existsSync(launches) ? readFileSync(launches, 'utf8').trim().split('\n') : []),
       log: () => readFileSync(path.join(root, 'logs', 'update-swap.log'), 'utf8'),
     }
@@ -179,7 +198,7 @@ describe.skipIf(process.platform === 'win32')('mac installer: the swap helper', 
     const stagedApp = path.join(parent, leftovers()[0]!, 'Gamachine.app')
     const quarantined = process.platform === 'darwin'
       && spawnSync('xattr', ['-w', 'com.apple.quarantine', '0081;00000000;Test;', stagedApp]).status === 0
-    staged.swap()
+    staged.swap(true)
     expect(r.status()).toBe(0)
     expect(marker()).toBe('new')
     expect(leftovers()).toEqual([])
@@ -193,7 +212,7 @@ describe.skipIf(process.platform === 'win32')('mac installer: the swap helper', 
     const staged: any = await r.inst.stage('/cache/update.zip', '4.0.4')
     // A read-only staging dir: the old app moves aside, the new one cannot leave staging.
     chmodSync(path.join(parent, leftovers()[0]!), 0o555)
-    staged.swap()
+    staged.swap(true)
     expect(r.status()).toBe(1)
     expect(marker()).toBe('old')
     expect(r.launches()).toEqual([target])
@@ -205,7 +224,7 @@ describe.skipIf(process.platform === 'win32')('mac installer: the swap helper', 
   it('restores and relaunches the old app when the new one does not launch', async () => {
     const r = rig({ launcherFailsOnNew: true })
     const staged: any = await r.inst.stage('/cache/update.zip', '4.0.4')
-    staged.swap()
+    staged.swap(true)
     expect(r.status()).toBe(1)
     expect(marker()).toBe('old')
     expect(r.launches()).toEqual([target])
@@ -216,11 +235,63 @@ describe.skipIf(process.platform === 'win32')('mac installer: the swap helper', 
   it('changes nothing while the app is still running past the wait', async () => {
     const r = rig({ pid: process.pid, wait: 1 })
     const staged: any = await r.inst.stage('/cache/update.zip', '4.0.4')
-    staged.swap()
+    staged.swap(true)
     expect(r.status()).toBe(2)
     expect(marker()).toBe('old')
     expect(r.launches()).toEqual([])
     expect(leftovers()).toEqual([])
     expect(r.log()).toMatch(/still running/)
+  })
+
+  // "Later" (a normal quit): the helper swaps but never opens any app.
+  it('relaunch=0: swaps the new app in and does not open it', async () => {
+    const r = rig()
+    const staged: any = await r.inst.stage('/cache/update.zip', '4.0.4')
+    staged.swap(false)
+    expect(r.status()).toBe(0)
+    expect(marker()).toBe('new')
+    expect(r.launches()).toEqual([])
+    expect(leftovers()).toEqual([])
+    expect(r.log()).toMatch(/relaunch=0: the new app is not opened[\s\S]*update installed/)
+  })
+
+  it('relaunch=0: when the new app cannot be moved into place the old one is restored and not opened', async () => {
+    const r = rig()
+    const staged: any = await r.inst.stage('/cache/update.zip', '4.0.4')
+    chmodSync(path.join(parent, leftovers()[0]!), 0o555)
+    staged.swap(false)
+    expect(r.status()).toBe(1)
+    expect(marker()).toBe('old')
+    expect(r.launches()).toEqual([])
+    expect(r.log()).toMatch(/old app restored/)
+    expect(r.log()).toMatch(/relaunch=0: the old app is not opened/)
+    expect(readdirSync(parent).filter((n) => n.includes('backup'))).toEqual([])
+  })
+
+  it('relaunch=0: a launcher that would fail on the new app is never called', async () => {
+    const r = rig({ launcherFailsOnNew: true })
+    const staged: any = await r.inst.stage('/cache/update.zip', '4.0.4')
+    staged.swap(false)
+    expect(r.status()).toBe(0)
+    expect(marker()).toBe('new')
+    expect(r.launches()).toEqual([])
+  })
+
+  // The backup folder is named after the exited app's pid, so a leftover of the same name is predictable.
+  it.each([[true, 1], [false, 0]])('refuses before moving anything when the backup path already exists (relaunch=%s)', async (relaunch, opened) => {
+    const r = rig()
+    const staged: any = await r.inst.stage('/cache/update.zip', '4.0.4')
+    const stagedApp = path.join(parent, leftovers()[0]!, 'Gamachine.app')
+    const backup = path.join(parent, `.Gamachine.app.backup-${r.pid}`)
+    mkdirSync(backup)
+    writeFileSync(path.join(backup, 'keep'), 'precious')
+    staged.swap(relaunch)
+    expect(r.status()).toBe(1)
+    expect(marker()).toBe('old')
+    expect(readFileSync(path.join(backup, 'keep'), 'utf8')).toBe('precious')
+    expect(existsSync(stagedApp)).toBe(false)
+    expect(r.launches()).toHaveLength(opened)
+    expect(r.log()).toMatch(/already exists; nothing changed/)
+    expect(readdirSync(parent).sort()).toEqual(['.Gamachine.app.backup-' + r.pid, 'Gamachine.app'].sort())
   })
 })

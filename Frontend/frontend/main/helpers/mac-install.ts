@@ -6,7 +6,7 @@
 // module unpacks the verified zip next to the installed bundle, checks the unpacked app the
 // way Gatekeeper would, and a detached shell helper swaps the bundles once the app has exited.
 import { execFile, spawn } from 'node:child_process'
-import { constants as fsConstants, mkdirSync } from 'node:fs'
+import { constants as fsConstants, mkdirSync, rmSync } from 'node:fs'
 import { access, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
@@ -37,11 +37,15 @@ export interface MacInstallDeps {
 
 export interface StagedMacUpdate {
   version: string
-  // Starts the detached helper that waits for this process to exit, then swaps the bundles
-  // and launches the new app. Returns the helper's log file. At most once.
-  swap(): string
+  // Starts the detached helper that waits for this process to exit, then swaps the bundles.
+  // relaunch: "Restart now" - open the new app afterwards (and the old one again if the swap
+  // fails); false: a normal quit ("Later") - the app is not opened either way. Returns the
+  // helper's log file. At most once.
+  swap(relaunch: boolean): string
   // Stops a started helper and removes the staging dir.
   discard(): Promise<void>
+  // The same, synchronously: at will-quit there is no later event loop turn to wait on.
+  discardSync(): void
 }
 
 export interface MacInstaller {
@@ -82,20 +86,26 @@ const firstLine = (s: string) => s.trim().split('\n')[0] ?? ''
 // Positional arguments only: nothing from a path is ever interpolated into the script text.
 export const SWAP_SCRIPT = `#!/bin/bash
 # Gamachine update swap, written by main/helpers/mac-install.ts.
-# swap.sh <pid> <installed.app> <staged.app> <staging-dir> <log> <wait-seconds> <launcher>
+# swap.sh <pid> <installed.app> <staged.app> <staging-dir> <log> <wait-seconds> <launcher> <relaunch 1|0>
+# relaunch=1 ("Restart now"): open the new app, and the old one again when the swap fails.
+# relaunch=0 ("Later", a normal quit): the app is never opened; the user starts it when they like.
 set -u
-pid=$1 target=$2 staged=$3 staging=$4 log=$5 wait=$6 launcher=$7
-backup="$(dirname "$target")/.$(basename "$target").backup-$$"
+pid=$1 target=$2 staged=$3 staging=$4 log=$5 wait=$6 launcher=$7 relaunch=$8
+backup="$(dirname "$target")/.$(basename "$target").backup-$pid"
 say() { printf '%s [swap %s] %s\\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$$" "$*" >>"$log"; }
 cleanup() { rm -rf "$staging" 2>>"$log" || say "could not remove $staging"; }
 launch() { "$launcher" "$1" >>"$log" 2>&1; }
+launch_old() {
+  if [ "$relaunch" = 1 ]; then launch "$1" && say "old app relaunched" || say "could not relaunch the old app"
+  else say "relaunch=0: the old app is not opened"; fi
+}
 trap 'say "helper exit $?"' EXIT
 rollback() {
   say "FAILED: $1; restoring the old app"
   if [ -e "$target" ]; then mv "$target" "$staging/failed.app" 2>>"$log" || rm -rf "$target"; fi
   if mv "$backup" "$target" 2>>"$log"; then
     say "old app restored at $target"
-    if launch "$target"; then say "old app relaunched"; else say "could not relaunch the old app"; fi
+    launch_old "$target"
   else
     say "RESTORE FAILED: the old app is at $backup"
   fi
@@ -109,10 +119,16 @@ while kill -0 "$pid" 2>/dev/null; do
   if [ "$ticks" -le 0 ]; then say "the app is still running after \${wait}s; nothing changed"; cleanup; exit 2; fi
   sleep 0.1
 done
-if [ ! -d "$staged" ]; then say "FAILED: staged app missing; nothing changed"; launch "$target"; cleanup; exit 1; fi
+if [ ! -d "$staged" ]; then say "FAILED: staged app missing; nothing changed"; launch_old "$target"; cleanup; exit 1; fi
+if [ -e "$backup" ]; then
+  say "FAILED: $backup already exists; nothing changed"
+  launch_old "$target"
+  cleanup
+  exit 1
+fi
 if ! mv "$target" "$backup" 2>>"$log"; then
   say "FAILED: cannot move $target aside; nothing changed"
-  launch "$target" || say "could not relaunch the old app"
+  launch_old "$target"
   cleanup
   exit 1
 fi
@@ -121,8 +137,12 @@ mv "$staged" "$target" 2>>"$log" || rollback "cannot move the new app into place
 if xattr -p com.apple.quarantine "$target" >/dev/null 2>&1; then
   xattr -dr com.apple.quarantine "$target" 2>>"$log" && say "quarantine removed" || say "could not remove quarantine"
 fi
-launch "$target" || rollback "the new app did not launch"
-say "new app launched"
+if [ "$relaunch" = 1 ]; then
+  launch "$target" || rollback "the new app did not launch"
+  say "new app launched"
+else
+  say "relaunch=0: the new app is not opened"
+fi
 rm -rf "$backup" 2>>"$log" && say "backup removed" || say "could not remove $backup"
 cleanup
 say "update installed"
@@ -220,14 +240,18 @@ export function createMacInstaller(deps: MacInstallDeps): MacInstaller {
     const logFile = path.join(deps.logDir, 'update-swap.log')
     return {
       version,
-      swap: () => {
+      swap: (relaunch) => {
         if (helper) return logFile
         const script = path.join(staging, 'swap.sh')
         // Synchronous: at will-quit there is no later event loop turn to wait on.
         mkdirSync(deps.logDir, { recursive: true })
-        helper = spawnDetached('/bin/bash', [script, String(pid), target, staged, staging, logFile, String(deps.helperWaitSeconds ?? HELPER_WAIT_SECONDS), launcher])
-        logger.log('[updater] kurulum yardımcısı başlatıldı, günlük:', logFile)
+        helper = spawnDetached('/bin/bash', [script, String(pid), target, staged, staging, logFile, String(deps.helperWaitSeconds ?? HELPER_WAIT_SECONDS), launcher, relaunch ? '1' : '0'])
+        logger.log(`[updater] kurulum yardımcısı başlatıldı (relaunch=${relaunch ? 1 : 0}), günlük:`, logFile)
         return logFile
+      },
+      discardSync: () => {
+        helper?.kill()
+        try { rmSync(staging, { recursive: true, force: true }) } catch (e) { logger.error('[updater] hazırlık klasörü silinemedi:', (e as any)?.message || e) }
       },
       discard: async () => {
         helper?.kill()
