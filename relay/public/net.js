@@ -503,6 +503,7 @@ export function modeFailureNote(error, reply = {}, wanted = '') {
     const pids = reply?.params?.pids || '?';
     return t('mode.agyRefused', { target: t('mode.safeAutoTarget'), pids });
   }
+  if (error === 'mode_locked') return t('mode.locked');
   if (error === 'not_ready') return t('common.connectFirst');
   if (error === 'bad_mode') return t('mode.unknown');
   if (error === 'unavailable') return t('mode.unavailable');

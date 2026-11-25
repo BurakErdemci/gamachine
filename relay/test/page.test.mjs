@@ -638,6 +638,7 @@ test('a refused switch says why in plain Turkish; the agy refusal names the proc
   assert.match(modeFailureNote('agy_step_refused', reply, 'step'), /^Güvenli Otomatik moda geçilemedi/);
   assert.match(modeFailureNote('agy_step_refused', {}, 'balanced'), /pid \?/);
   assert.equal(modeFailureNote('bad_mode'), 'Bilinmeyen mod; hiçbir şey değişmedi.');
+  assert.match(modeFailureNote('mode_locked'), /kilitli/);
   assert.match(modeFailureNote('unavailable'), /değiştiremedi/);
   assert.match(modeFailureNote('not_ready'), /bağlanmalı/);
   assert.equal(modeFailureNote('boom'), 'Mod değiştirilemedi: boom');

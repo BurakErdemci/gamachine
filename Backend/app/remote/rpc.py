@@ -405,11 +405,15 @@ class Dispatcher:
 
     async def set_approval_mode(self, session: PhoneSession, req, rid):
         # Owner decision, 28 Sep 2026: a paired phone may change the mode, and
-        # so skips the UI secret the local route demands. That secret guards
-        # against the Unity MCP server and model-run children, which can read
-        # the app token; this path is reachable only through the paired
-        # device's end-to-end session keys. A phone app from before 4.0.3 may
-        # still send "step": it is applied, and announced, as balanced.
+        # skips the UI secret check the local route demands ONLY when a secret
+        # is configured (with no UI secret the backend stays in balanced and the
+        # mode cannot be changed). That secret guards against the Unity MCP
+        # server and model-run children, which can read the app token; this path
+        # is reachable only through the paired device's end-to-end session keys.
+        # A phone app from before 4.0.3 may still send "step": it is applied,
+        # and announced, as balanced.
+        if not approval_mode.ui_secret_configured():
+            raise RpcError("mode_locked")
         mode = approval_mode.normalize_mode(req.get("mode"))
         if mode is None:
             raise RpcError("bad_mode")

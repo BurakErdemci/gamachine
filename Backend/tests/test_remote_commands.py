@@ -205,6 +205,7 @@ def test_the_route_still_checks_the_token_before_any_catalog_work(monkeypatch):
 
 def real_mode_path(env):
     """The bridge gets the router's own apply function, as main.py wires it."""
+    approval_mode.set_ui_secret("ui-secret")
     router = create_conversation_router(env.db, {})
     env.bridge.apply_approval_mode = router.apply_approval_mode
     return router
@@ -234,6 +235,7 @@ async def test_get_config_reads_the_live_mode(env):
 
 
 async def test_set_approval_mode_needs_the_desktop_function(env):
+    approval_mode.set_ui_secret("ui-secret")
     phone = await pair_phone(env)
     r = await phone.request("set_approval_mode", mode="auto")
     assert r["ok"] is False and r["error"] == "unavailable"
@@ -372,12 +374,27 @@ async def test_a_failed_notification_does_not_undo_or_fail_the_switch(env, monke
     assert approval_mode.current_mode() == "auto"
 
 
-async def test_the_phone_switches_without_the_ui_secret_but_the_route_still_demands_it(env):
+async def test_the_phone_cannot_change_mode_without_the_ui_secret(env):
+    approval_mode.bind_store(env.db)
+    router = create_conversation_router(env.db, {})
+    env.bridge.apply_approval_mode = router.apply_approval_mode
+    approval_mode.set_ui_secret("")
+    assert not approval_mode.ui_secret_configured()
+    phone = await pair_phone(env)
+
+    for requested in ("auto", "balanced", "step", "bogus"):
+        r = await phone.request("set_approval_mode", mode=requested)
+        assert r["ok"] is False and r["error"] == "mode_locked", requested
+        assert approval_mode.current_mode() == "balanced"
+        assert env.db.get_setting("approval_mode") is None
+
+
+async def test_the_phone_switches_without_sending_secret_when_configured_while_route_demands_it(env):
     router = real_mode_path(env)
     app = FastAPI()
     app.include_router(router)
     client = TestClient(app)
-    assert not approval_mode.ui_secret_configured()
+    assert approval_mode.ui_secret_configured()
     phone = await pair_phone(env)
 
     refused = client.post("/approval-mode", json={"mode": "auto"})
