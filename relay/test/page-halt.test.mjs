@@ -45,7 +45,7 @@ async function boot({ haltError = null } = {}) {
         { chat_id: '7', title: 'Running chat', status: 'running', model: 'claude-opus-5' },
         { chat_id: '8', title: 'Idle chat', status: 'idle', model: 'claude-opus-5' },
       ] });
-      if (type === 'get_config') return result({ approval_mode: 'step', desktop_effort: null });
+      if (type === 'get_config') return result({ approval_mode: 'balanced', desktop_effort: null });
       if (type === 'halt_computer' && haltError) return { ok: false, error: haltError };
       if (type === 'pending_cards') return result({ cards: [] });
       if (type === 'open_chat') return result({ messages: [], events: [] });

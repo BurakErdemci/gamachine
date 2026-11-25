@@ -51,7 +51,7 @@ async function boot({ manualSettingsClock = false } = {}) {
   Object.assign(window, net);
   const pc = { defaultModel: 'claude-opus-5', chat8: 'gpt-6-luna', calls: [], link: null };
   const result = (value) => ({ ok: true, result: value });
-  const config = (model) => ({ approval_mode: 'step', desktop_effort: null, provider_type: 'subscription', model_name: model });
+  const config = (model) => ({ approval_mode: 'balanced', desktop_effort: null, provider_type: 'subscription', model_name: model });
   window.Link = class {
     constructor(options) { this.options = options; this.ready = false; pc.link = this; }
     start() { queueMicrotask(() => { this.ready = true; this.options.onStatus('ready'); }); }

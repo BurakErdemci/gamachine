@@ -107,7 +107,9 @@ test('real page follows get_config and ui_changed, preserves null and rerenders 
     assert.equal($('btn-send').textContent, 'Send');
     assert.equal($('status-text').textContent, 'Connected');
     assert.match($('chats').textContent, /Untitled chat/);
-    assert.equal($('mode-note').textContent, 'Shows an approval card for every change.');
+    // The desktop above answered the legacy 'step': the page shows it as Safe Auto.
+    assert.equal($('mode-select').value, 'balanced');
+    assert.equal($('mode-note').textContent, 'Works independently; asks for approval only for critical actions (recommended).');
     assert.equal(window.document.documentElement.dataset.theme, 'arena');
     link.options.onPush({ type: 'ui_changed', desktop_ui: null });
     assert.equal(window.document.documentElement.lang, 'en');
@@ -123,12 +125,12 @@ test('real page follows get_config and ui_changed, preserves null and rerenders 
 
 test('display maps and notes use the language at call time', () => {
   setLang('tr');
-  assert.equal(net.modeInfo('step').label, 'Adım Adım');
+  assert.equal(net.modeInfo('step').label, 'Güvenli Otomatik');
   assert.equal(net.effortLabel('high'), 'Yüksek');
   assert.equal(net.cardActions({ card_id: '1' }).buttons[0].label, 'Onayla');
   setLang('en');
   assert.equal(getLang(), 'en');
-  assert.equal(net.modeInfo('step').label, 'Step by Step');
+  assert.equal(net.modeInfo('step').label, 'Safe Auto');
   assert.equal(net.effortLabel('high'), 'High');
   assert.equal(net.cardActions({ card_id: '1' }).buttons[0].label, 'Approve');
   assert.equal(net.stopLine('no_session'), 'No running turn found.');

@@ -478,12 +478,17 @@ export function slashFailureNote(error) {
 export const APPROVAL_MODES = [
   { id: 'auto', get label() { return t('mode.auto'); }, get desc() { return t('mode.autoDescription'); } },
   { id: 'balanced', get label() { return t('mode.safeAuto'); }, get desc() { return t('mode.safeAutoDescription'); } },
-  { id: 'step', get label() { return t('mode.stepByStep'); }, get desc() { return t('mode.stepByStepDescription'); } },
 ];
 export const AUTO_MODE_WARNING = () => t('mode.autoWarning');
 
+// An old desktop may still answer 'step', the mode removed in 4.0.3; it is Safe Auto.
+export function normalizeMode(id) {
+  return id === 'step' ? 'balanced' : id;
+}
+
 export function modeInfo(id) {
-  return APPROVAL_MODES.find((m) => m.id === id) || null;
+  const mode = normalizeMode(id);
+  return APPROVAL_MODES.find((m) => m.id === mode) || null;
 }
 
 export function modeChangedNote(result) {
@@ -495,9 +500,8 @@ export function modeChangedNote(result) {
 // What the mode note says when set_approval_mode failed; the mode did not change.
 export function modeFailureNote(error, reply = {}, wanted = '') {
   if (error === 'agy_step_refused') {
-    const target = wanted === 'balanced' ? t('mode.safeAutoTarget') : t('mode.stepByStepTarget');
     const pids = reply?.params?.pids || '?';
-    return t('mode.agyRefused', { target, pids });
+    return t('mode.agyRefused', { target: t('mode.safeAutoTarget'), pids });
   }
   if (error === 'not_ready') return t('common.connectFirst');
   if (error === 'bad_mode') return t('mode.unknown');

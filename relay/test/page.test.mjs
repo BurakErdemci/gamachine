@@ -13,7 +13,7 @@ import {
   pair, Link, ReplyParts, mergeParts, PHONE_FRAME_MAX, ChatView, cardActions, answerFailure, turnEndLine, eventLine,
   sendFailureNote, sentNote,
   slashItems, filterSlash, withCommand, slashFailureNote, SLASH_SHOWN_MAX,
-  APPROVAL_MODES, AUTO_MODE_WARNING, modeInfo, modeChangedNote, modeFailureNote,
+  APPROVAL_MODES, AUTO_MODE_WARNING, modeInfo, normalizeMode, modeChangedNote, modeFailureNote,
   messageText, mergeChat, stopLine, ASK_ON_PC, cardsMissing, CLOSE_UNKNOWN_TOKEN, UNKNOWN_TOKEN_FINAL,
   UNKNOWN_TOKEN_GRACE_MS, CLOSE_TOKENS_PENDING,
 } from '../public/net.js';
@@ -602,10 +602,14 @@ test('list_slash_commands over the real Link: a split catalog arrives whole', as
 
 // ---------------------------------------------------------------- approval mode
 
-test('the mode selector offers the desktop\'s three modes with the desktop\'s Turkish words', () => {
-  assert.deepEqual(APPROVAL_MODES.map((m) => m.id), ['auto', 'balanced', 'step']);
-  assert.deepEqual(APPROVAL_MODES.map((m) => m.label), ['Otomatik', 'Güvenli Otomatik', 'Adım Adım']);
-  assert.equal(modeInfo('step').label, 'Adım Adım');
+test('the mode selector offers the desktop\'s two modes with the desktop\'s Turkish words', () => {
+  assert.deepEqual(APPROVAL_MODES.map((m) => m.id), ['auto', 'balanced']);
+  assert.deepEqual(APPROVAL_MODES.map((m) => m.label), ['Otomatik', 'Güvenli Otomatik']);
+  // An old desktop may still say 'step'; it reads as Safe Auto.
+  assert.equal(modeInfo('step').label, 'Güvenli Otomatik');
+  assert.equal(modeInfo('step').id, 'balanced');
+  assert.equal(normalizeMode('step'), 'balanced');
+  assert.equal(normalizeMode('auto'), 'auto');
   assert.equal(modeInfo('plan'), null);
   const i18n = new URL('../../Frontend/frontend/renderer/lib/i18n.tsx', import.meta.url);
   if (existsSync(i18n)) {
@@ -618,19 +622,21 @@ test('the mode selector offers the desktop\'s three modes with the desktop\'s Tu
 });
 
 test('a successful switch reads as a sentence, with the cards it approved', () => {
-  assert.equal(modeChangedNote({ mode: 'balanced', previous: 'step', approved_pending: 0 }), 'Mod değişti: Güvenli Otomatik.');
-  assert.equal(modeChangedNote({ mode: 'auto', previous: 'step', approved_pending: 2 }),
+  assert.equal(modeChangedNote({ mode: 'balanced', previous: 'auto', approved_pending: 0 }), 'Mod değişti: Güvenli Otomatik.');
+  assert.equal(modeChangedNote({ mode: 'step', previous: 'auto', approved_pending: 0 }), 'Mod değişti: Güvenli Otomatik.');
+  assert.equal(modeChangedNote({ mode: 'auto', previous: 'balanced', approved_pending: 2 }),
     'Mod değişti: Otomatik. Bekleyen 2 onay otomatik onaylandı.');
 });
 
 test('a refused switch says why in plain Turkish; the agy refusal names the process and the mode', () => {
   const reply = { ok: false, error: 'agy_step_refused', message: 'ham', params: { pids: '4242' } };
-  const step = modeFailureNote('agy_step_refused', reply, 'step');
-  assert.match(step, /^Adım adım onay moduna geçilemedi/);
-  assert.match(step, /pid 4242/);
-  assert.match(step, /Mod değişmedi/);
-  assert.match(modeFailureNote('agy_step_refused', reply, 'balanced'), /^Güvenli Otomatik moda geçilemedi/);
-  assert.match(modeFailureNote('agy_step_refused', {}, 'step'), /pid \?/);
+  const refusal = modeFailureNote('agy_step_refused', reply, 'balanced');
+  assert.match(refusal, /^Güvenli Otomatik moda geçilemedi/);
+  assert.match(refusal, /pid 4242/);
+  assert.match(refusal, /Mod değişmedi/);
+  // The code always means "could not switch to Safe Auto", whatever mode was asked for.
+  assert.match(modeFailureNote('agy_step_refused', reply, 'step'), /^Güvenli Otomatik moda geçilemedi/);
+  assert.match(modeFailureNote('agy_step_refused', {}, 'balanced'), /pid \?/);
   assert.equal(modeFailureNote('bad_mode'), 'Bilinmeyen mod; hiçbir şey değişmedi.');
   assert.match(modeFailureNote('unavailable'), /değiştiremedi/);
   assert.match(modeFailureNote('not_ready'), /bağlanmalı/);
@@ -639,14 +645,14 @@ test('a refused switch says why in plain Turkish; the agy refusal names the proc
 
 test('the Link keeps what a refused set_approval_mode reply carries', async () => {
   const { link, pcSend, lastRequest } = await connected();
-  const reply = link.request('set_approval_mode', { mode: 'step' });
+  const reply = link.request('set_approval_mode', { mode: 'balanced' });
   await until(() => lastRequest().type === 'set_approval_mode');
   const req = lastRequest();
-  assert.equal(req.mode, 'step');
+  assert.equal(req.mode, 'balanced');
   pcSend({ id: req.id, ok: false, error: 'agy_step_refused', message: 'ham', params: { pids: '9' } });
   const r = await reply;
   assert.equal(r.ok, false);
-  assert.match(modeFailureNote(r.error, r, 'step'), /pid 9/);
+  assert.match(modeFailureNote(r.error, r, 'balanced'), /pid 9/);
 });
 
 // ---------------------------------------------------------------- page markup
@@ -660,9 +666,10 @@ test('every element app.js looks up by id exists in index.html', () => {
   for (const id of ids) assert.ok(html.includes(`id="${id}"`), `index.html has no #${id}`);
 });
 
-test('the mode selector holds exactly the three modes, and inline commands precede the composer text', () => {
+test('the mode selector holds exactly the two modes, and inline commands precede the composer text', () => {
   const select = html.slice(html.indexOf('<select id="mode-select"'), html.indexOf('</select>'));
   assert.deepEqual([...select.matchAll(/value="([a-z]+)"/g)].map((m) => m[1]), APPROVAL_MODES.map((m) => m.id));
+  assert.ok(!select.includes('value="step"'), 'no step option');
   const form = html.slice(html.indexOf('<form id="composer">'), html.indexOf('</form>'));
   assert.ok(form.includes('id="btn-slash"') && form.includes('id="composer-text"'));
   assert.ok(form.includes('id="slash-panel"') && form.includes('id="slash-list"'));

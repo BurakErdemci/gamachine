@@ -8,7 +8,7 @@ import * as store from './store.js';
 import {
   pair, Link, wsOrigin, ChatView, cardActions, answerFailure, eventLine, messageText, mergeChat, stopLine, SEND_TEXT_MAX,
   sendFailureNote, sentNote, cardsMissing, slashItems, filterSlash, withCommand, slashFailureNote,
-  AUTO_MODE_WARNING, modeInfo, modeChangedNote, modeFailureNote,
+  AUTO_MODE_WARNING, modeInfo, normalizeMode, modeChangedNote, modeFailureNote,
   desktopEffort, effortLabel, effortOutcomeNote, effortSetNote, effortFailureNote, EFFORT_UNKNOWN_NOTE, configFailureNote,
   modelGroups, parseModelValue, modelChangedNote, modelFailureNote, modelListFailureNote, ULTRACODE_OPTION,
 } from './net.js';
@@ -362,8 +362,8 @@ function removeCard(cardId) {
 let currentMode = null;
 
 function showMode(mode) {
-  currentMode = mode;
-  $('mode-select').value = mode;
+  currentMode = normalizeMode(mode);
+  $('mode-select').value = currentMode;
   setText($('mode-note'), () => modeInfo(mode)?.desc || '');
 }
 
