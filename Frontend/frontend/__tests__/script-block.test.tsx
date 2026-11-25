@@ -162,7 +162,8 @@ describe('ScriptBlock', () => {
     expect(summary()).toBe('Script stopped at call 14 · 13 ok · 1 failed · 2.0 s')
     expect(container.querySelector('.t-bad')?.textContent).toBe('1 failed')
     const verdict = screen.getByTestId('script-verdict')
-    expect(verdict.textContent).toBe('Stopped at #14: Enemy_13 already has a Rigidbody from its prefab. The 13 changes before it stay.')
+    // The verdict names the error the script ended with; the call's own reason stays on its line.
+    expect(verdict.textContent).toBe('Stopped at #14: Enemy_13 already has a Rigidbody. The 13 changes before it stay.')
     // Opened, the sentence moves into the body: it is never shown twice.
     fireEvent.click(container.querySelector('summary')!)
     expect(screen.getAllByTestId('script-verdict')).toHaveLength(1)
@@ -209,6 +210,46 @@ describe('ScriptBlock', () => {
     render(<ScriptBlock output={OK + '\nFull output (9000 bytes) saved to: C:/p/run-1.txt'} success onOpenFile={p => opened.push(p)} />)
     fireEvent.click(screen.getByText('Full output'))
     expect(opened).toEqual(['C:/p/run-1.txt'])
+  })
+})
+
+// Turn 2, audit F5. Both texts are Backend/app/script_tool.py format_reply output, generated with
+// the blind audit's gen_verdict_cases.py against this lane's backend.
+const CAUGHT_THEN_THROWN = 'run_script stopped: the script threw an error after 3.1 s. 12 of 13 tool call(s) completed before it stopped; their effects stay (12 ok, 1 error).\nError:\nTypeError: x is undefined\nTool calls in order:\n1-2 get_scene_info ok (2); 3 write_file error (disk full); 4-13 manage_gameobject ok (10)'
+const UNCAUGHT = 'run_script stopped: the script threw an error after 3.1 s. 2 of 3 tool call(s) completed before it stopped; their effects stay (2 ok, 1 error).\nError:\nTypeError: x is undefined\nTool calls in order:\n1-2 get_scene_info ok (2); 3 write_file error (disk full)'
+
+describe('a script that threw (audit F5)', () => {
+  it('a failure it caught earlier is not where it stopped: the thrown error is named, every ok call stays', () => {
+    const { container } = render(<ScriptBlock output={CAUGHT_THEN_THROWN} success={false} />)
+    expect(summary()).toBe('Script stopped · 12 ok · 1 failed · 3.1 s')
+    expect(screen.getByTestId('script-verdict').textContent).toBe('Stopped on an error: TypeError: x is undefined. The 12 changes before it stay.')
+    fireEvent.click(container.querySelector('summary')!)
+    const failed = container.querySelector('.script-calls > li[data-s="error"]')!
+    expect(failed.textContent).toContain('#3')
+    expect(failed.querySelector('.call-why')?.textContent).toBe('disk full')
+  })
+
+  it('a failed last call is where it stopped, under the error the script threw', () => {
+    render(<ScriptBlock output={UNCAUGHT} success={false} />)
+    expect(summary()).toBe('Script stopped at call 3 · 2 ok · 1 failed · 3.1 s')
+    expect(screen.getByTestId('script-verdict').textContent).toBe('Stopped at #3: TypeError: x is undefined. The 2 changes before it stay.')
+  })
+})
+
+describe('"Console:" inside the returned value (audit F5)', () => {
+  const head = 'run_script finished in 0.1 s · 0 tool call(s)'
+  it('one "Console:" after the result is the logs', () => {
+    const r = parseScriptReply(`${head}\nResult:\nSummary\nConsole:\nActual runtime log`)!
+    expect(r.result).toBe('Summary')
+    expect(r.console).toBe('Actual runtime log')
+  })
+
+  it('two of them cannot be told apart: the reply is shown raw, never split wrong', () => {
+    const text = `${head}\nResult:\nSummary\nConsole:\nReturned text\nConsole:\nActual runtime log`
+    expect(parseScriptReply(text)).toBeNull()
+    const { container } = render(<ScriptBlock output={text} success />)
+    fireEvent.click(container.querySelector('summary')!)
+    expect(screen.getByTestId('script-raw').textContent).toContain('Returned text')
   })
 })
 

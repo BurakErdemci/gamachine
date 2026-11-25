@@ -173,6 +173,65 @@ describe('helper list from the backend', () => {
     const http = { get: vi.fn(async () => ({ data: { agents: [] } })), post: vi.fn(async () => ({ data: {} })) }
     const { result } = renderHook(() => useHelpers({ API: 'http://x', conversationId: 12, http, token: 'tok' }))
     await act(async () => { await result.current.stop('3') })
-    expect(http.post).toHaveBeenCalledWith('http://x/subagents/stop', { conversation_id: 12, agent_id: '3' }, { headers: { 'X-Session-Token': 'tok' } })
+    // Audit F2: the backend's helper id is a number.
+    expect(http.post).toHaveBeenCalledWith('http://x/subagents/stop', { conversation_id: 12, agent_id: 3 }, { headers: { 'X-Session-Token': 'tok' } })
+  })
+
+  it('a list read that left before Stop and lands after it does not bring the helper back (audit F1)', async () => {
+    let stopped = false
+    let hold: ((v: any) => void) | null = null
+    const row = (status: string) => ({ data: { agents: [{ id: 3, child_conv: 4, name: 'tester', status }] } })
+    const http = {
+      get: vi.fn(() => hold === null && !stopped && http.get.mock.calls.length === 2
+        ? new Promise(res => { hold = res })
+        : Promise.resolve(row(stopped ? 'stopped' : 'running'))),
+      post: vi.fn(async () => { stopped = true; return { data: {} } }),
+    }
+    const { result } = renderHook(() => useHelpers({ API: 'http://x', conversationId: 1, http, pollMs: 60000 }))
+    await act(async () => { await Promise.resolve() })
+    expect(result.current.helpers[0].status).toBe('running')
+    let older!: Promise<void>
+    act(() => { older = result.current.refresh() })
+    expect(hold).not.toBeNull()
+    await act(async () => { await result.current.stop('3') })
+    expect(result.current.helpers[0].status).toBe('stopped')
+    await act(async () => { hold!(row('running')); await older })
+    expect(result.current.helpers[0].status).toBe('stopped')
+  })
+
+  it('no timer when nothing runs and nothing is held, even with the fuse tripped (audit F4)', async () => {
+    vi.useRealTimers()
+    vi.useFakeTimers()
+    let fuse = { tripped: false, held: 1, paused: true }
+    const http = { get: vi.fn(async () => ({ data: { agents: [{ id: 3, child_conv: 4, name: 'a', status: 'done' }], fuse } })), post: vi.fn() }
+    const { result } = renderHook(() => useHelpers({ API: 'http://x', conversationId: 12, http }))
+    await act(async () => { await Promise.resolve() })
+    const held = http.get.mock.calls.length
+    await act(async () => { vi.advanceTimersByTime(2000); await Promise.resolve() })
+    expect(http.get.mock.calls.length).toBe(held + 1)
+    fuse = { tripped: true, held: 0, paused: false }
+    await act(async () => { await result.current.refresh(); await Promise.resolve() })
+    // the poll ending makes one last read to settle the state, then nothing
+    const settled = http.get.mock.calls.length
+    await act(async () => { vi.advanceTimersByTime(20000); await Promise.resolve() })
+    expect(http.get.mock.calls.length).toBe(settled)
+    expect(result.current.fuse).toMatchObject({ tripped: true, held: 0 })
+  })
+
+  it('the poll ending reads once more to settle (audit F1)', async () => {
+    vi.useRealTimers()
+    vi.useFakeTimers()
+    let status = 'running'
+    const http = { get: vi.fn(async () => ({ data: { agents: [{ id: 1, child_conv: 4, name: 'a', status }] } })), post: vi.fn() }
+    const { result } = renderHook(() => useHelpers({ API: 'http://x', conversationId: 12, http }))
+    await act(async () => { await Promise.resolve() })
+    const mounted = http.get.mock.calls.length
+    status = 'done'
+    // the tick reads "done"; the poll ends and reads once more to settle; then nothing
+    await act(async () => { vi.advanceTimersByTime(2000); await Promise.resolve(); await Promise.resolve() })
+    expect(result.current.helpers[0].status).toBe('done')
+    expect(http.get.mock.calls.length).toBe(mounted + 2)
+    await act(async () => { vi.advanceTimersByTime(20000); await Promise.resolve() })
+    expect(http.get.mock.calls.length).toBe(mounted + 2)
   })
 })

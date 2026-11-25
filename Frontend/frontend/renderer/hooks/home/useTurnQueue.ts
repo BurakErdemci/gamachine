@@ -61,6 +61,16 @@ export function useTurnQueue({ API, token, conversationId, active, local, remove
   const [gone, setGone] = useState<Set<string>>(() => new Set());
   const convRef = useRef(conversationId);
   convRef.current = conversationId;
+  // A queue read that lands after the turn ended (or after a withdraw) describes a past state: it
+  // would bring back a removable bubble for a message a turn already claimed, and nothing would
+  // correct it (audit F1). Reads are numbered; only one newer than the last applied read and than
+  // the last fence (turn end, chat switch, withdraw) is applied, and only while a turn runs.
+  const seqRef = useRef(0);
+  const appliedRef = useRef(0);
+  const barrierRef = useRef(0);
+  const activeRef = useRef(active);
+  activeRef.current = active;
+  const fence = () => { barrierRef.current = seqRef.current + 1; };
   // Only a real token goes on the call: an empty one would override the session header
   // useAuth puts on axios.defaults (the trap useAIConfig.ts documents).
   const headers = token ? { headers: { 'X-Session-Token': token } } : undefined;
@@ -68,9 +78,11 @@ export function useTurnQueue({ API, token, conversationId, active, local, remove
   const refresh = useCallback(async () => {
     const id = convRef.current;
     if (!API || id == null) return;
+    const seq = ++seqRef.current;
     try {
       const res = await http.get(`${API}/conversations/${id}/queue`, headers);
-      if (convRef.current !== id) return;
+      if (convRef.current !== id || !activeRef.current || seq <= appliedRef.current || seq < barrierRef.current) return;
+      appliedRef.current = seq;
       setServer(parseServerQueue(res?.data));
     } catch {
       // No queue route (older backend) or a blip: this window's own queue still shows.
@@ -78,10 +90,13 @@ export function useTurnQueue({ API, token, conversationId, active, local, remove
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [API, http, token]);
 
-  useEffect(() => { setServer([]); setNotes({}); setGone(new Set()); }, [conversationId]);
+  useEffect(() => { fence(); setServer([]); setNotes({}); setGone(new Set()); }, [conversationId]);
 
   useEffect(() => {
-    if (!active) { setServer([]); return; }
+    // The turn ended: whatever waited on the server is now the next turn's (or still waits for
+    // one, which this list does not show without a running turn). No reconcile read: its answer
+    // could only re-add what the ended turn's successor has already claimed.
+    if (!active) { fence(); setServer([]); return; }
     void refresh();
     const id = setInterval(() => { void refresh(); }, pollMs);
     return () => clearInterval(id);
@@ -105,6 +120,7 @@ export function useTurnQueue({ API, token, conversationId, active, local, remove
     if (item.source === 'local') { removeLocal(item.id as number); return; }
     const id = convRef.current;
     if (!API || id == null) return;
+    fence();
     try {
       await http.delete(`${API}/conversations/${id}/queue/${item.id}`, headers);
       setGone(prev => new Set(prev).add(item.key));

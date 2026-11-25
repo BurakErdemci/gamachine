@@ -121,6 +121,29 @@ describe('useTurnQueue', () => {
     expect(http.delete).not.toHaveBeenCalled()
   })
 
+  it('a queue read that lands after the turn ended does not bring a claimed message back (audit F1)', async () => {
+    let land!: (v: any) => void
+    const http = { get: vi.fn(() => new Promise(res => { land = res })), delete: vi.fn() }
+    const { result, rerender } = renderHook(({ active }) => useTurnQueue({
+      API, conversationId: 12, active, local: [], removeLocal: () => {}, http,
+    }), { initialProps: { active: true } })
+    expect(http.get).toHaveBeenCalledTimes(1)
+    rerender({ active: false })
+    await act(async () => { land({ data: { queue: [{ id: 7, text: 'already claimed', order: 1 }] } }); await Promise.resolve() })
+    expect(result.current.items).toEqual([])
+  })
+
+  it('an older read landing after a newer one does not replace it (audit F1)', async () => {
+    const lands: ((v: any) => void)[] = []
+    const http = { get: vi.fn(() => new Promise(res => { lands.push(res) })), delete: vi.fn() }
+    const { result } = renderHook(() => useTurnQueue({ API, conversationId: 12, active: true, local: [], removeLocal: () => {}, http }))
+    let second!: Promise<void>
+    act(() => { second = result.current.refresh() })
+    await act(async () => { lands[1]({ data: { queue: [] } }); await second })
+    await act(async () => { lands[0]({ data: { queue: [{ id: 7, text: 'old', order: 1 }] } }); await Promise.resolve() })
+    expect(result.current.items).toEqual([])
+  })
+
   it('accepts the bare list too and drops malformed rows', () => {
     expect(parseServerQueue([{ id: 1, text: 'a' }, { id: 2 }, null]).map(r => r.id)).toEqual([1])
   })

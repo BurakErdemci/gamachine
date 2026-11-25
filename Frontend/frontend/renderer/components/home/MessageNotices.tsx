@@ -48,35 +48,52 @@ export const MessageNotices: React.FC<{ notices?: MessageNotice[] }> = ({ notice
   );
 };
 
+
+/** What Continue answered: released, still running (409 while a turn runs), or failed. */
+export type ContinueAnswer = 'ok' | 'running' | 'failed';
+
 /**
- * The fuse (INFO_DESIGN.md C3, D5): after ten automatic turns in a row the backend holds the chat
- * and waits for the user. The one saturated element in the thread, because it waits for you:
- * one sentence and one button. Continue allows ten more; writing a message steers instead.
+ * Helper results the backend is holding, with Continue (INFO_DESIGN.md C3, D5). Two reasons:
+ * - the fuse: ten automatic turns in a row, so the chat waits for the user (`tripped`);
+ * - a Stop: results that arrived after it wait instead of starting turns (`paused`, audit F3).
+ * Shown whenever results are held. The one saturated element in the thread, because it waits for
+ * you: one sentence and one button. Writing a message steers instead and takes them along.
  */
-export const FuseNotice: React.FC<{ onContinue: () => Promise<boolean> }> = ({ onContinue }) => {
+export const FuseNotice: React.FC<{
+  onContinue: () => Promise<ContinueAnswer | boolean>;
+  /** The fuse tripped; otherwise results wait after a Stop. */
+  tripped?: boolean;
+  /** How many results are held (the Stop wording counts them). */
+  held?: number;
+}> = ({ onContinue, tripped = true, held = 0 }) => {
   const { t } = useLang();
   const [busy, setBusy] = React.useState(false);
-  const [failed, setFailed] = React.useState(false);
+  const [answer, setAnswer] = React.useState<ContinueAnswer | null>(null);
   const go = async () => {
     setBusy(true);
-    setFailed(false);
-    const ok = await onContinue().catch(() => false);
+    setAnswer(null);
+    const got = await onContinue().catch(() => 'failed' as const);
     setBusy(false);
-    if (!ok) setFailed(true);
+    setAnswer(got === true ? 'ok' : got === false ? 'failed' : got);
   };
+  const hint = answer === 'running' ? t('helper.continueRunning')
+    : answer === 'failed' ? t('helper.fuseFailed')
+    : tripped ? t('helper.fuseHint') : t('helper.heldHint');
   return (
     <div className="notices">
-      <div className="notice is-fuse" data-kind="fuse" data-testid="fuse-notice" role="status">
+      <div className={`notice is-fuse${tripped ? '' : ' is-held'}`} data-kind={tripped ? 'fuse' : 'held'} data-testid="fuse-notice" role="status">
         <div className="notice-row">
           <AlertTriangle size={14} className="notice-ic" aria-hidden="true" />
           <div className="min-w-0">
-            <div className="notice-k">{t('helper.fuseTitle')}</div>
-            <div className="notice-msg">{t('helper.fuseMsg')}</div>
+            <div className="notice-k">
+              {tripped ? t('helper.fuseTitle') : held === 1 ? t('helper.heldOne') : t('helper.held', { n: held })}
+            </div>
+            <div className="notice-msg">{tripped ? t('helper.fuseMsg') : t('helper.heldMsg')}</div>
             <div className="fuse-acts">
               <button type="button" className="btn btn-primary btn-sm" data-testid="fuse-continue" disabled={busy} onClick={() => void go()}>
                 {t('helper.fuseContinue')}
               </button>
-              <span className="hint">{failed ? t('helper.fuseFailed') : t('helper.fuseHint')}</span>
+              <span className="hint" data-testid="fuse-hint">{hint}</span>
             </div>
           </div>
         </div>

@@ -53,9 +53,12 @@ export interface HelpersApi {
   refresh: () => Promise<void>;
   stop: (agentId: string) => Promise<void>;
   stopAll: () => Promise<void>;
-  /** The fuse notice's Continue: allows ten more automatic turns. */
-  continueTurns: () => Promise<boolean>;
+  /** The held-results notice's Continue: releases them (and, after the fuse, allows ten more turns). */
+  continueTurns: () => Promise<ContinueResult>;
 }
+
+/** ok: released (or already released); running: a turn still runs, try when it stops; failed. */
+export type ContinueResult = 'ok' | 'running' | 'failed';
 
 type Http = { get: (...a: any[]) => Promise<any>; post: (...a: any[]) => Promise<any> };
 
@@ -91,6 +94,10 @@ export function parseHelperList(data: any): { helpers: Helper[]; fuse: FuseState
   return { helpers, fuse };
 }
 
+/** The id the backend's helper routes take: its numeric row id when the string is one. */
+export const helperIdParam = (agentId: string): number | string =>
+  /^\d+$/.test(agentId) ? Number(agentId) : agentId;
+
 export function useHelpers({ API, conversationId, token, http = axios as unknown as Http, nudge, pollMs = HELPER_POLL_MS }: {
   API?: string;
   conversationId: number | null | undefined;
@@ -104,6 +111,12 @@ export function useHelpers({ API, conversationId, token, http = axios as unknown
   const [fetchedAt, setFetchedAt] = useState(() => Date.now());
   const convRef = useRef(conversationId);
   convRef.current = conversationId;
+  // Reads can land out of order: a list read that left before a Stop and lands after the Stop's
+  // own read would show the helper Running again (audit F1). Every read is numbered; a response is
+  // applied only if it is newer than the last one applied and than the last action (Stop, Continue).
+  const seqRef = useRef(0);
+  const appliedRef = useRef(0);
+  const barrierRef = useRef(0);
   // Only a real token goes on the call: an empty one would override the session header
   // useAuth puts on axios.defaults (the trap useAIConfig.ts documents).
   const headers = token ? { headers: { 'X-Session-Token': token } } : undefined;
@@ -111,9 +124,11 @@ export function useHelpers({ API, conversationId, token, http = axios as unknown
   const refresh = useCallback(async () => {
     const id = convRef.current;
     if (!API || id == null) return;
+    const seq = ++seqRef.current;
     try {
       const res = await http.get(`${API}/subagents/list?conversation_id=${id}`, headers);
-      if (convRef.current !== id) return;
+      if (convRef.current !== id || seq <= appliedRef.current || seq < barrierRef.current) return;
+      appliedRef.current = seq;
       const parsed = parseHelperList(res?.data);
       setHelpers(parsed.helpers);
       setFuse(parsed.fuse);
@@ -124,17 +139,27 @@ export function useHelpers({ API, conversationId, token, http = axios as unknown
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [API, http, token]);
 
+  /** Reads already on their way when an action starts can only describe the state before it. */
+  const fence = () => { barrierRef.current = seqRef.current + 1; };
+
   // A different chat: forget the old one's helpers at once, then read the new one's.
   useEffect(() => {
     setHelpers([]);
     setFuse(null);
+    fence();
     void refresh();
   }, [conversationId, refresh]);
 
   useEffect(() => { if (nudge !== undefined) void refresh(); }, [nudge, refresh]);
 
-  const live = helpers.some(h => h.status === 'running') || !!fuse?.tripped || (fuse?.held ?? 0) > 0;
+  // Poll while a helper runs or results are held for Continue. A tripped fuse with nothing held
+  // waits on the user, not on the backend: no timer for it (audit F4).
+  const live = helpers.some(h => h.status === 'running') || (fuse?.held ?? 0) > 0;
+  const wasLive = useRef(live);
   useEffect(() => {
+    // The poll is ending: one last read settles what the final tick may have missed.
+    if (wasLive.current && !live) void refresh();
+    wasLive.current = live;
     if (!live) return;
     const id = setInterval(() => { void refresh(); }, pollMs);
     return () => clearInterval(id);
@@ -142,7 +167,11 @@ export function useHelpers({ API, conversationId, token, http = axios as unknown
 
   const stop = useCallback(async (agentId: string) => {
     if (!API) return;
-    try { await http.post(`${API}/subagents/stop`, { conversation_id: convRef.current, agent_id: agentId }, headers); } catch { /* the next read shows the truth */ }
+    fence();
+    try {
+      await http.post(`${API}/subagents/stop`, { conversation_id: convRef.current, agent_id: helperIdParam(agentId) }, headers);
+    } catch { /* the next read shows the truth */ }
+    fence();
     await refresh();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [API, http, token, refresh]);
@@ -150,24 +179,30 @@ export function useHelpers({ API, conversationId, token, http = axios as unknown
   const stopAll = useCallback(async () => {
     if (!API) return;
     const running = helpers.filter(h => h.status === 'running');
+    fence();
     await Promise.all(running.map(h =>
-      http.post(`${API}/subagents/stop`, { conversation_id: convRef.current, agent_id: h.agent_id }, headers).catch(() => {})));
+      http.post(`${API}/subagents/stop`, { conversation_id: convRef.current, agent_id: helperIdParam(h.agent_id) }, headers).catch(() => {})));
+    fence();
     await refresh();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [API, http, token, helpers, refresh]);
 
-  const continueTurns = useCallback(async () => {
+  const continueTurns = useCallback(async (): Promise<ContinueResult> => {
     const id = convRef.current;
-    if (!API || id == null) return false;
+    if (!API || id == null) return 'failed';
+    fence();
     try {
       await http.post(`${API}/subagents/continue`, { conversation_id: id }, headers);
     } catch (err: any) {
-      // 409 nothing_held: the results were already released (a second click, another window).
-      if (err?.response?.status !== 409) return false;
+      if (err?.response?.status !== 409) return 'failed';
+      // 409 nothing_held: already released (a second click, another window). Any other 409: a turn
+      // of the chat or one of its helpers still runs, and the results wait for it to stop.
+      if (err?.response?.data?.detail?.code !== 'nothing_held') return 'running';
     }
+    fence();
     setFuse(f => (f ? { ...f, tripped: false, paused: false, held: 0 } : f));
     await refresh();
-    return true;
+    return 'ok';
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [API, http, token, refresh]);
 

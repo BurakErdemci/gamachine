@@ -207,7 +207,8 @@ export default function Home() {
   });
   const helperAsking = useMemo(() => new Set(helperAskingIds), [helperAskingIds]);
   // Shown once the fuse holds results back; Continue is the backend's to release them.
-  const fuseShown = !!helpers.fuse?.tripped && helpers.fuse.held > 0;
+  // Results held back (the fuse, or a Stop): the notice and Continue show whenever any wait.
+  const fuseShown = (helpers.fuse?.held ?? 0) > 0;
   // The messages waiting for this chat's running turn, drawn in the thread (the tray is gone).
   const turnQueue = useTurnQueue({
     API, token: auth.user?.sessionToken, conversationId: chat.activeConvId, active: chat.loading,
@@ -1103,7 +1104,7 @@ export default function Home() {
     queued: turnQueue.items, onRemoveQueued: turnQueue.remove,
     queuePaused: chat.queuePaused, onResumeQueue: chat.resumeQueue,
     helpers: helpers.helpers, onOpenHelper: showHelper,
-    fuse: fuseShown ? { onContinue: helpers.continueTurns } : null,
+    fuse: fuseShown ? { onContinue: helpers.continueTurns, tripped: !!helpers.fuse?.tripped, held: helpers.fuse?.held ?? 0 } : null,
     helperStrip: (
       <HelperStrip
         helpers={helpers.helpers}

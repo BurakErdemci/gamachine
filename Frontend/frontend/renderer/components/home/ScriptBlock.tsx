@@ -41,12 +41,27 @@ const COUNT_KEY: [CallStatus, string, 'bad' | 'warn' | null][] = [
 
 type Part = { text: string; tone?: 'bad' | 'warn' | 'head' };
 
+/**
+ * The call the script stopped at, if one did. A refusal ends the script at the refused call. An
+ * error stops it at a call only when that failed call is the last one: a failure the script
+ * caught and went on from is shown on its own line but is not where the script stopped (audit F5).
+ */
+export function stopCall(reply: ScriptReply): ScriptCall | undefined {
+  if (reply.finished || reply.stopKind === 'timeout') return undefined;
+  if (reply.stopKind === 'refused') return [...reply.calls].reverse().find(c => c.status === 'refused');
+  const last = reply.calls[reply.calls.length - 1];
+  return last && (last.status === 'error' || last.status === 'timeout') ? last : undefined;
+}
+
+/** The thrown error's words, without the JavaScript "Error: " label. */
+const errorWords = (text: string) => stripBidi(text).replace(/^Error:\s*/, '').replace(/\.$/, '');
+
 /** The folded line: what it did, how many calls, how it ended, how long it took. */
 export function scriptSummary(reply: ScriptReply, t: T): Part[] {
   const counts = countBy(reply.calls);
   const secs = reply.seconds != null ? fmtSeconds(reply.seconds) : null;
   const parts: Part[] = [];
-  const firstBad = reply.calls.find(c => c.status !== 'ok' && c.status !== 'notawaited' && c.status !== 'notrun');
+  const stoppedAt = stopCall(reply);
   if (reply.finished) {
     parts.push({ text: t('script.ran'), tone: 'head' });
     parts.push({ text: t('script.calls', { n: reply.total }) });
@@ -57,7 +72,7 @@ export function scriptSummary(reply: ScriptReply, t: T): Part[] {
     parts.push({ text: t('script.timedOut', { s: secs ?? '' }), tone: 'head' });
     parts.push({ text: t('script.nOk', { n: counts.ok }) });
   } else {
-    parts.push({ text: firstBad ? t('script.stoppedAt', { n: firstBad.index }) : t('script.stopped'), tone: 'head' });
+    parts.push({ text: stoppedAt ? t('script.stoppedAt', { n: stoppedAt.index }) : t('script.stopped'), tone: 'head' });
     if (reply.calls.length) parts.push({ text: t('script.nOk', { n: counts.ok }) });
   }
   for (const [status, key, tone] of COUNT_KEY) {
@@ -103,20 +118,19 @@ export function scriptVerdict(reply: ScriptReply, t: T): { tone: 'stop' | 'soft'
       : keep;
     return { tone: 'stop', head, tail };
   }
-  const bad = reply.calls.find(c => c.status === 'refused' || c.status === 'error' || c.status === 'timeout');
+  const bad = stopCall(reply);
   if (bad && bad.status === 'refused') {
     return { tone: 'stop', head: t('script.verdict.refused', { n: bad.index, tool: bad.tool }), tail: keepSentence(okBefore(bad), t) };
   }
+  // The error the script ended with: the thrown message first, the call's own reason after it.
+  const thrown = errorWords(reply.error || (bad?.reason ?? '') || reply.kindText);
   if (bad) {
-    const why = stripBidi(bad.reason || reply.error || reply.kindText).replace(/\.$/, '');
-    return { tone: 'stop', head: `${t('script.verdict.failed', { n: bad.index, why })}.`, tail: keepSentence(okBefore(bad), t) };
+    return { tone: 'stop', head: `${t('script.verdict.failed', { n: bad.index, why: thrown })}.`, tail: keepSentence(okBefore(bad), t) };
   }
-  if (reply.calls.length === 0) {
-    const why = stripBidi(reply.error || reply.kindText).replace(/\.$/, '');
-    return { tone: 'stop', head: t('script.verdict.noCall', { why }) };
-  }
-  const why = stripBidi(reply.error || reply.kindText).replace(/\.$/, '');
-  return { tone: 'stop', head: `${why.charAt(0).toUpperCase()}${why.slice(1)}.`, tail: keepSentence(okAll, t) };
+  if (reply.calls.length === 0) return { tone: 'stop', head: t('script.verdict.noCall', { why: thrown }) };
+  // Thrown after its calls (a caught failure among them is not where it stopped): every call
+  // that ran ok stays.
+  return { tone: 'stop', head: t('script.verdict.threw', { why: thrown }), tail: keepSentence(okAll, t) };
 }
 
 const Verdict = ({ v }: { v: NonNullable<ReturnType<typeof scriptVerdict>> }) => (

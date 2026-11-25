@@ -6,6 +6,8 @@
  */
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import React from 'react'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { render, screen, cleanup, fireEvent, renderHook, act } from '@testing-library/react'
 
 import { FuseNotice } from '../renderer/components/home/MessageNotices'
@@ -38,7 +40,7 @@ describe('fuse notice', () => {
     expect((screen.getByTestId('fuse-continue') as HTMLButtonElement).disabled).toBe(false)
   })
 
-  it('continueTurns posts the parent chat and clears the fuse; 409 counts as already released', async () => {
+  it('continueTurns posts the parent chat and clears the fuse; 409 nothing_held counts as released, another 409 as still running', async () => {
     const http = {
       get: vi.fn(async () => ({ data: { agents: [], fuse: { tripped: true, held: 2, paused: false } } })),
       post: vi.fn(async () => ({ data: { status: 'started', released: 2 } })),
@@ -47,18 +49,47 @@ describe('fuse notice', () => {
     await flush()
     expect(result.current.fuse).toMatchObject({ tripped: true, held: 2 })
     http.get.mockResolvedValue({ data: { agents: [], fuse: { tripped: false, held: 0, paused: false } } })
-    let ok = false
+    let ok: string = ''
     await act(async () => { ok = await result.current.continueTurns() })
-    expect(ok).toBe(true)
+    expect(ok).toBe('ok')
     expect(http.post).toHaveBeenCalledWith('http://x/subagents/continue', { conversation_id: 12 }, undefined)
     expect(result.current.fuse).toMatchObject({ tripped: false, held: 0 })
 
     http.post.mockRejectedValueOnce({ response: { status: 409, data: { detail: { code: 'nothing_held' } } } })
     await act(async () => { ok = await result.current.continueTurns() })
-    expect(ok).toBe(true)
+    expect(ok).toBe('ok')
+    http.post.mockRejectedValueOnce({ response: { status: 409, data: { detail: { message: 'a turn runs', code: 'running' } } } })
+    await act(async () => { ok = await result.current.continueTurns() })
+    expect(ok).toBe('running')
     http.post.mockRejectedValueOnce({ response: { status: 500 } })
     await act(async () => { ok = await result.current.continueTurns() })
-    expect(ok).toBe(false)
+    expect(ok).toBe('failed')
+  })
+
+  // Audit F3: after a Stop the backend holds results with paused=true, tripped=false, held>0.
+  it('results held after a Stop: "N results are waiting" with Continue', async () => {
+    const onContinue = vi.fn(async () => 'ok' as const)
+    render(<FuseNotice onContinue={onContinue} tripped={false} held={2} />)
+    const notice = screen.getByTestId('fuse-notice')
+    expect(notice.dataset.kind).toBe('held')
+    expect(notice.textContent).toContain('2 results are waiting · they ride your next message')
+    expect(notice.textContent).not.toContain('automatic turns')
+    await act(async () => { fireEvent.click(screen.getByTestId('fuse-continue')) })
+    expect(onContinue).toHaveBeenCalledTimes(1)
+  })
+
+  it('Continue while something still runs says to try when it stops', async () => {
+    render(<FuseNotice onContinue={async () => 'running'} tripped={false} held={1} />)
+    expect(screen.getByTestId('fuse-notice').textContent).toContain('1 result is waiting')
+    await act(async () => { fireEvent.click(screen.getByTestId('fuse-continue')) })
+    expect(screen.getByTestId('fuse-hint').textContent).toBe('Something is still running; try again when it stops.')
+    expect((screen.getByTestId('fuse-continue') as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('home shows the notice whenever results are held, tripped or not', () => {
+    const home = readFileSync(resolve(__dirname, '../renderer/pages/home.tsx'), 'utf8')
+    expect(home).toContain('const fuseShown = (helpers.fuse?.held ?? 0) > 0;')
+    expect(home).toContain('tripped: !!helpers.fuse?.tripped, held: helpers.fuse?.held ?? 0')
   })
 })
 

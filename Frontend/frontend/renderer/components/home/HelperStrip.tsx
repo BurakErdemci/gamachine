@@ -219,7 +219,7 @@ export const HelperStrip = ({ helpers, fetchedAt, fuse, asking, openAgentId, onO
         <Chip key={h.agent_id} h={h} t={t} drift={drift} asking={asking} open={openAgentId === h.agent_id}
           onOpen={() => onOpen(h)} onStop={() => onStop(h.agent_id)} />
       ))}
-      {!many && fuse?.tripped && <span className="st" data-s="asks">{t('helper.sum.paused')}</span>}
+      {!many && (fuse?.held ?? 0) > 0 && <span className="st" data-s="asks">{t('helper.sum.paused')}</span>}
       {!many && (
         <button type="button" className="crew-more" aria-expanded={expanded} onClick={() => setExpanded(v => !v)}>
           {expanded ? t('helper.hide') : t('helper.all')}<ChevIc up={expanded} />
@@ -234,7 +234,7 @@ export const HelperStrip = ({ helpers, fetchedAt, fuse, asking, openAgentId, onO
             {count('error') > 0 && <><span className="sep">·</span><span className="st" data-s="error"><span className="st-l" />{t('helper.sum.error', { n: count('error') })}</span></>}
             {count('asks') > 0 && <><span className="sep">·</span><span className="st" data-s="asks"><span className="st-l" />{t('helper.sum.asks', { n: count('asks') })}</span></>}
             {rest > 0 && <><span className="sep">·</span><span>{t('helper.sum.rest', { n: rest })}</span></>}
-            {fuse?.tripped && <><span className="sep">·</span><span className="st" data-s="asks"><span className="st-l" />{t('helper.sum.paused')}</span></>}
+            {(fuse?.held ?? 0) > 0 && <><span className="sep">·</span><span className="st" data-s="asks"><span className="st-l" />{t('helper.sum.paused')}</span></>}
           </span>
           <button type="button" className="crew-more" aria-expanded={expanded} onClick={() => setExpanded(v => !v)}>
             {expanded ? t('helper.hide') : t('helper.showAll')}<ChevIc up={expanded} />

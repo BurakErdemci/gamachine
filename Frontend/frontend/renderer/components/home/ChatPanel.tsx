@@ -37,7 +37,7 @@ import type { QueuedView } from '../../hooks/home/useTurnQueue';
 import type { Helper } from '../../hooks/home/useHelpers';
 import { QueuedMessages } from './QueuedMessages';
 import { HelperResultCard, isHelperFuse, isHelperResult, parseHelperResult } from './HelperResultCard';
-import { FuseNotice } from './MessageNotices';
+import { FuseNotice, type ContinueAnswer } from './MessageNotices';
 
 /**
  * hh:mm for a message's author line. The backend stores naive local "YYYY-MM-DD HH:MM:SS" (no
@@ -218,7 +218,7 @@ interface ChatPanelProps {
   /** Opens a helper's read-only conversation in the workspace (by its id or its chat). */
   onOpenHelper?: (ref: { agentId?: string; chatId?: number | null }) => void;
   /** The fuse held this chat after too many automatic turns in a row. */
-  fuse?: { onContinue: () => Promise<boolean> } | null;
+  fuse?: { onContinue: () => Promise<ContinueAnswer | boolean>; tripped?: boolean; held?: number } | null;
 }
 
 export const ChatPanel: React.FC<ChatPanelProps> = ({
@@ -754,7 +754,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         {/* The queue's only place is the flow: dimmed bubbles, withdraw only (INFO_DESIGN.md C1). */}
         {queued && queued.length > 0 && <QueuedMessages items={queued} onRemove={item => onRemoveQueued?.(item)} paused={!loading && queuePaused} onResume={onResumeQueue} />}
 
-        {fuse && <FuseNotice onContinue={fuse.onContinue} />}
+        {fuse && <FuseNotice onContinue={fuse.onContinue} tripped={fuse.tripped} held={fuse.held} />}
 
         {/* MCP onay kartları — mesaj listesinin DIŞINDA, tek bileşende.
             Kartların markup'ı `McpApprovalCards`'ta duruyor çünkü aynı kartlar

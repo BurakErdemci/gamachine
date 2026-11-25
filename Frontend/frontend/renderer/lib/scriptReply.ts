@@ -126,7 +126,11 @@ export function parseScriptReply(text?: string | null): ScriptReply | null {
   else if (FULL_FAIL_RE.test(last)) end--;
 
   // Sections in their fixed order; once "Result:" starts only "Console:" can follow, so a
-  // returned value that itself contains "Note:" stays part of the value.
+  // returned value that itself contains "Note:" stays part of the value. A returned value can also
+  // hold a line "Console:"; with two such lines after "Result:" the reply alone cannot say which
+  // one starts the real logs (audit F5), so the whole reply is shown raw instead of split wrong.
+  const resultAt = lines.indexOf('Result:', 1);
+  if (resultAt >= 0 && resultAt < end && lines.slice(resultAt + 1, end).filter(l => l === 'Console:').length > 1) return null;
   const sections: { title: string; body: string[] }[] = [];
   let seenResult = false;
   for (let i = 1; i < end; i++) {
