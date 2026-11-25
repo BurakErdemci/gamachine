@@ -125,7 +125,7 @@ def test_permission_key_order_with_user_block_drops_allows_and_keeps_restricts(t
     ]
     assert perm["*"] == "deny"
     assert perm["webfetch2"] == "deny"
-    assert perm["read"] == EXPECTED_READ_RULE
+    assert perm["read"] == "deny"
     assert "probeother_*" not in perm
     assert "webfetch" not in perm
 
@@ -158,20 +158,24 @@ def test_user_managed_keys_and_gamachine_prefixes_are_skipped(tmp_path):
     existing = {
         "permission": {
             "*": "deny",
-            "edit": "ask",
+            "edit": "deny",
             "bash": "deny",
-            "read": "deny",
+            "read": "ask",
             "glob": "deny",
-            "grep": "ask",
+            "grep": "deny",
             "probeother_*": "deny",
             "unityai_*": "deny",
             "unityai_save_file": "deny",
-            "unityMCP_manage_scene": "ask",
+            "unityMCP_manage_scene": "deny",
             "gamachineComputer_computer_click": "deny",
             "gamachineBrowser_browser_click": "deny",
             "gamachineConnectors_blender": "deny",
             "question": "ask",
-            "task": {"*": "deny", "explore": "ask"},
+            "webfetch": "ask",
+            "external_directory": {"*": "ask"},
+            "task_mixed": {"*": "deny", "explore": "ask"},
+            "task": {"*": "deny", "explore": "deny"},
+            "webfetch2": "deny",
             "mixed": {"a": "deny", "b": "allow"},
         }
     }
@@ -179,8 +183,8 @@ def test_user_managed_keys_and_gamachine_prefixes_are_skipped(tmp_path):
     perm = cfg["permission"]
     assert list(perm.keys()) == [
         "*",
-        "question",
         "task",
+        "webfetch2",
         "read",
         "glob",
         "grep",
@@ -188,8 +192,8 @@ def test_user_managed_keys_and_gamachine_prefixes_are_skipped(tmp_path):
         "edit",
         "bash",
     ]
-    assert perm["question"] == "ask"
-    assert perm["task"] == {"*": "deny", "explore": "ask"}
+    assert perm["task"] == {"*": "deny", "explore": "deny"}
+    assert perm["webfetch2"] == "deny"
     assert perm["read"] == EXPECTED_READ_RULE
 
 
@@ -207,8 +211,10 @@ def test_agent_and_mode_permissions_keep_only_restricting_entries(tmp_path):
                     "probeother_*": "deny",
                     "unityai_read_file": "deny",
                     "webfetch": "allow",
+                    "webfetch_ask": "ask",
                     "webfetch2": "deny",
                     "question": {"*": "deny", "sub": "ask"},
+                    "task": {"*": "deny", "sub": "deny"},
                     "mixed": {"a": "deny", "b": "allow"},
                 }
             },
@@ -216,17 +222,74 @@ def test_agent_and_mode_permissions_keep_only_restricting_entries(tmp_path):
         },
         "mode": {
             "plan": {"permission": "ask"},
-            "custom": {"permission": {"task": "ask", "webfetch": "allow"}},
+            "custom": {"permission": {"task": "ask", "webfetch": "allow", "webfetch2": "deny"}},
         },
     }
     cfg = _register(tmp_path / "ws", existing=existing)
     assert cfg["agent"]["build"]["permission"] == {
         "webfetch2": "deny",
-        "question": {"*": "deny", "sub": "ask"},
+        "task": {"*": "deny", "sub": "deny"},
     }
     assert cfg["agent"]["str_agent"]["permission"] == {}
     assert cfg["mode"]["plan"]["permission"] == {}
-    assert cfg["mode"]["custom"]["permission"] == {"task": "ask"}
+    assert cfg["mode"]["custom"]["permission"] == {"webfetch2": "deny"}
+
+
+def test_user_read_deny_patterns_kept_inside_read_rule_in_order(tmp_path):
+    existing = {
+        "permission": {
+            "read": {
+                "secrets/*": "deny",
+                "docs/*": "allow",
+                "notes/*": "ask",
+                "keys/*.pem": "deny",
+                "*.env.example": "deny",
+            }
+        }
+    }
+    cfg = _register(tmp_path / "ws", existing=existing)
+    read_rule = cfg["permission"]["read"]
+    assert list(read_rule.keys()) == [
+        "*",
+        "secrets/*",
+        "keys/*.pem",
+        "*.env",
+        "*.env.*",
+        "*.env.example",
+    ]
+    assert read_rule == {
+        "*": "allow",
+        "secrets/*": "deny",
+        "keys/*.pem": "deny",
+        "*.env": "deny",
+        "*.env.*": "deny",
+        # The user denied it, so the default allow does not override them.
+        "*.env.example": "deny",
+    }
+
+
+def test_user_read_string_deny_makes_read_deny(tmp_path):
+    cfg = _register(tmp_path / "ws", existing={"permission": {"read": "deny"}})
+    assert cfg["permission"]["read"] == "deny"
+
+
+def test_user_read_object_deny_all_makes_read_deny(tmp_path):
+    cfg = _register(tmp_path / "ws", existing={"permission": {"read": {"*": "deny"}}})
+    assert cfg["permission"]["read"] == "deny"
+
+
+def test_user_deny_of_env_example_is_kept(tmp_path):
+    cfg = _register(tmp_path / "ws", existing={"permission": {"read": {"*.env.example": "deny"}}})
+    assert cfg["permission"]["read"]["*.env.example"] == "deny"
+
+
+def test_user_ask_entries_are_dropped(tmp_path):
+    cfg = _register(
+        tmp_path / "ws",
+        existing={"permission": {"webfetch": "ask", "external_directory": {"*": "ask"}}},
+    )
+    assert "webfetch" not in cfg["permission"]
+    assert "external_directory" not in cfg["permission"]
 
 
 def test_read_only_excludes_computer_servers_from_permission(tmp_path, monkeypatch):

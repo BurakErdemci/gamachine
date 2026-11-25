@@ -281,22 +281,25 @@ _GAMACHINE_SERVER_PREFIXES = tuple(f"{s}_" for s in _GAMACHINE_SERVERS)
 
 def _is_restricting_value(value) -> bool:
     if isinstance(value, str):
-        return value in ("deny", "ask")
+        return value == "deny"
     if isinstance(value, dict):
         return bool(value) and all(
-            isinstance(v, str) and v in ("deny", "ask")
+            isinstance(v, str) and v == "deny"
             for v in value.values()
         )
     return False
 
 
 def _restricting_permissions(perm) -> dict:
-    """Keep only user permission entries that restrict (deny/ask), excluding
-    keys Gamachine sets itself.
+    """Keep only user permission entries that strictly deny ("deny" or a
+    pattern object whose values are all "deny"), excluding keys Gamachine
+    sets itself.
 
-    Rules are evaluated last-match-wins in key order (permission/index.ts
-    evaluate/disabled use findLast). A string-form value ("allow"/"ask"/"deny")
-    means {"*": value} and contributes nothing.
+    "ask" and "allow" entries are dropped because rules are evaluated
+    last-match-wins in key order (permission/index.ts evaluate/disabled use
+    findLast), and "ask" would loosen Gamachine's leading "*": "deny".
+    A string-form value ("allow"/"ask"/"deny") means {"*": value} and
+    contributes nothing.
     """
     if not isinstance(perm, dict):
         return {}
@@ -314,6 +317,31 @@ def _restricting_permissions(perm) -> dict:
         if _is_restricting_value(v):
             kept[k] = dict(v) if isinstance(v, dict) else v
     return kept
+
+
+_READ_PROTECTED_PATTERNS = frozenset({"*", "*.env", "*.env.*", "*.env.example"})
+
+
+def _build_read_permission(user_permission):
+    """Build the `read` rule keeping user deny patterns and .env guards."""
+    user_read = user_permission.get("read") if isinstance(user_permission, dict) else None
+    if user_read == "deny":
+        return "deny"
+    user_denies = {}
+    if isinstance(user_read, dict):
+        if user_read.get("*") == "deny":
+            return "deny"  # the object form of denying every read
+        for pat, val in user_read.items():
+            if isinstance(pat, str) and pat not in _READ_PROTECTED_PATTERNS and val == "deny":
+                user_denies[pat] = "deny"
+    example = "deny" if isinstance(user_read, dict) and user_read.get("*.env.example") == "deny" else "allow"
+    return {
+        "*": "allow",
+        **user_denies,
+        "*.env": "deny",
+        "*.env.*": "deny",
+        "*.env.example": example,
+    }
 
 
 def _opencode_tool(tool: str) -> str:
@@ -536,12 +564,7 @@ class OpenCodeProvider(BaseCLIProvider):
             permission["*"] = "deny"
             for k, v in _restricting_permissions(user_permission).items():
                 permission[k] = v
-            permission["read"] = {
-                "*": "allow",
-                "*.env": "deny",
-                "*.env.*": "deny",
-                "*.env.example": "allow",
-            }
+            permission["read"] = _build_read_permission(user_permission)
             permission["glob"] = "allow"
             permission["grep"] = "allow"
             allowed_servers = ["unityai"]
