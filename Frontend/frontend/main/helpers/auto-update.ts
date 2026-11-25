@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import type { BrowserWindow, MessageBoxOptions, MessageBoxReturnValue } from 'electron'
-import { UPDATE_PUBLIC_KEYS } from './update-keys'
+import { MAC_UPDATE_PUBLIC_KEYS, UPDATE_PUBLIC_KEYS } from './update-keys'
 import { checkAvailable, verifyManifest } from './update-signature'
 import { mt } from './main-i18n'
 import type { MacInstaller, StagedMacUpdate } from './mac-install'
@@ -81,8 +81,10 @@ interface VerifiedUpdate { version: string; sha512: string[] }
 
 export function setupAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
   const { autoUpdater, dialog, stopBackend, logger, getMainWindow, relaunch, openExternal } = deps
-  const publicKeys = deps.publicKeys ?? UPDATE_PUBLIC_KEYS
   const platform = deps.platform ?? process.platform
+  // latest-mac.yml has its own key set: 4.0.0-4.0.3 Macs verify it with UPDATE_PUBLIC_KEYS, so they
+  // refuse a manifest signed for 4.0.4+ instead of crashing in Squirrel.Mac.
+  const publicKeys = deps.publicKeys ?? (platform === 'darwin' ? MAC_UPDATE_PUBLIC_KEYS : UPDATE_PUBLIC_KEYS)
   const getBytes = deps.fetchBytes ?? fetchBytes
   const hashFile = deps.hashFile ?? sha512Base64
   const removeFile = deps.removeFile ?? ((file: string) => rm(file, { force: true }))
@@ -99,8 +101,10 @@ export function setupAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
     const mac = autoUpdater as any
     if (typeof mac.updateDownloaded === 'function' && typeof mac.dispatchUpdateDownloaded === 'function') {
       mac.updateDownloaded = async (_zip: unknown, event: unknown) => { mac.dispatchUpdateDownloaded(event); return [] }
-    } else if (mac.nativeUpdater) {
-      logger.error('[updater] MacUpdater beklenen biçimde değil; Squirrel devre dışı bırakılamadı')
+    } else {
+      // Without the override a download would reach Squirrel.Mac, which crashes on our zip.
+      logger.error('[updater] MacUpdater beklenen biçimde değil; Squirrel devre dışı bırakılamadı, güncelleme kapatıldı')
+      return { dispose: () => {} }
     }
   }
   // NSIS web installers fetch archives listed under `packages:` with digests the signed manifest
@@ -164,6 +168,8 @@ export function setupAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
   // macOS: the unpacked, checked bundle of the verified update, and whether quitting swaps it in.
   let staged: StagedMacUpdate | null = null
   let swapOnQuit = false
+  // Whether the helper opens the new app after the swap: "Restart now" yes, "Later" (a normal quit) no.
+  let swapRelaunch = false
   // Versions this Mac refused to install; they are not downloaded again this session.
   const macRefused = new Set<string>()
   const forget = () => {
@@ -174,11 +180,21 @@ export function setupAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
     if (staged) void staged.discard()
     staged = null
   }
+  // The helper owns the staging dir once started; a repeated will-quit must not remove it.
+  let swapStarted = false
   deps.mac?.onWillQuit(() => {
-    if (!swapOnQuit || !staged) return
+    if (!staged || swapStarted) return
+    if (!swapOnQuit) {
+      // Quitting with a staged update that is not armed (dialog still open, or "Restart now" still
+      // stopping the backend): nothing will swap it in, so its ~2.4 GB folder must not stay behind.
+      staged.discardSync()
+      staged = null
+      return
+    }
     swapOnQuit = false
+    swapStarted = true
     try {
-      staged.swap()
+      staged.swap(swapRelaunch)
     } catch (e) {
       logger.error('[updater] kurulum yardımcısı başlatılamadı:', (e as any)?.message || e)
     }
@@ -190,6 +206,7 @@ export function setupAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
   const armInstallOnQuit = () => {
     if (platform === 'darwin') {
       swapOnQuit = staged !== null
+      swapRelaunch = false
       return
     }
     const register = (autoUpdater as any).addQuitHandler?.bind(autoUpdater)
@@ -299,6 +316,7 @@ export function setupAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
           return
         }
         staged = result
+        swapStarted = false
       }
       const { response } = await ask({
         type: 'info',
@@ -320,8 +338,12 @@ export function setupAutoUpdate(deps: AutoUpdateDeps): AutoUpdateHandle {
         // Not checked for dispose here: an install the user already accepted still runs during a quit.
         await stopBackend()
         if (platform === 'darwin') {
-          // will-quit starts the swap helper; Squirrel (quitAndInstall) is never involved.
-          swapOnQuit = true
+          // will-quit starts the swap helper; Squirrel (quitAndInstall) is never involved. A quit that
+          // already removed the unarmed staging dir during stopBackend leaves nothing to swap.
+          if (staged) {
+            swapOnQuit = true
+            swapRelaunch = true
+          }
           deps.mac!.quit()
         } else {
           autoUpdater.quitAndInstall(false, true)

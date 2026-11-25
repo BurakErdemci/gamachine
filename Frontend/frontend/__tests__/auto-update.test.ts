@@ -300,6 +300,8 @@ describe('setupAutoUpdate', () => {
       const updater: any = new EventEmitter()
       updater.checkForUpdates = vi.fn(() => Promise.resolve(null))
       updater.downloadUpdate = vi.fn()
+      updater.updateDownloaded = vi.fn()
+      updater.dispatchUpdateDownloaded = vi.fn()
       const fetchBytes = vi.fn(async () => { throw new Error('stop') })
       const handle = setupAutoUpdate({
         autoUpdater: updater, dialog: { showMessageBox: vi.fn(async () => ({ response: 1 })) } as any, stopBackend: vi.fn(),
@@ -461,9 +463,14 @@ describe('setupAutoUpdate on macOS', () => {
     const updater: any = new EventEmitter()
     updater.checkForUpdates = vi.fn(() => Promise.resolve(null))
     updater.downloadUpdate = vi.fn(() => Promise.resolve([]))
+    updater.updateDownloaded = vi.fn()
+    updater.dispatchUpdateDownloaded = vi.fn()
     updater.quitAndInstall = vi.fn()
     const order: string[] = []
-    const staged = { version: '9.9.9', swap: vi.fn(() => { order.push('swap'); return '/logs/update-swap.log' }), discard: vi.fn(async () => {}) }
+    const staged = {
+      version: '9.9.9', swap: vi.fn((_relaunch: boolean) => { order.push('swap'); return '/logs/update-swap.log' }),
+      discard: vi.fn(async () => {}), discardSync: vi.fn(() => { order.push('discardSync') }),
+    }
     const installer = {
       refusal: vi.fn(async () => opts.refusal),
       stage: vi.fn(async (_zip: string, _version: string): Promise<any> => opts.stage ?? staged),
@@ -474,10 +481,11 @@ describe('setupAutoUpdate on macOS', () => {
     const dialog = { showMessageBox: vi.fn(async (..._args: any[]): Promise<any> => ({ response: opts.response ?? 1, checkboxChecked: false })) }
     const relaunch = vi.fn()
     const openExternal = vi.fn(async () => {})
+    const logger = { log: vi.fn(), error: vi.fn() }
     const manifest = Buffer.from('version: 9.9.9\nfiles:\n  - url: Gamachine-Setup-9.9.9.exe\n    sha512: HASH==\npath: Gamachine-Setup-9.9.9.exe\nsha512: HASH==\n')
     const { publicKey, privateKey } = generateKeyPairSync('ed25519')
     const handle = setupAutoUpdate({
-      autoUpdater: updater, dialog: dialog as any, stopBackend, logger: { log: vi.fn(), error: vi.fn() }, getMainWindow: () => null,
+      autoUpdater: updater, dialog: dialog as any, stopBackend, logger, getMainWindow: () => null,
       relaunch, openExternal, platform: 'darwin',
       publicKeys: [publicKey.export({ type: 'spki', format: 'pem' }).toString()],
       fetchBytes: async (url: string) => (url.endsWith('.sig') ? sign64(manifest, privateKey) : manifest),
@@ -487,7 +495,7 @@ describe('setupAutoUpdate on macOS', () => {
     })
     const quitNow = () => willQuit.forEach((h) => h())
     const title = (n = 0) => dialog.showMessageBox.mock.calls[n]![0].title
-    return { updater, order, staged, installer, quit, quitNow, stopBackend, dialog, relaunch, openExternal, handle, title }
+    return { updater, order, staged, installer, quit, quitNow, stopBackend, dialog, relaunch, openExternal, handle, title, logger }
   }
 
   it('"now": stages the verified file, stops the backend, quits, and the swap starts on will-quit; no quitAndInstall', async () => {
@@ -500,6 +508,9 @@ describe('setupAutoUpdate on macOS', () => {
     m.quitNow()
     m.quitNow()
     expect(m.order).toEqual(['stopBackend', 'quit', 'swap'])
+    expect(m.staged.swap).toHaveBeenCalledTimes(1)
+    expect(m.staged.swap).toHaveBeenCalledWith(true)
+    expect(m.staged.discardSync).not.toHaveBeenCalled()
     expect(m.updater.quitAndInstall).not.toHaveBeenCalled()
     expect(m.updater.autoInstallOnAppQuit).toBe(false)
     m.handle.dispose()
@@ -511,7 +522,6 @@ describe('setupAutoUpdate on macOS', () => {
     m.dialog.showMessageBox.mockImplementation(() => new Promise((r) => { answer = r }) as any)
     await setupDownload(m.updater)
     await vi.waitFor(() => expect(answer).toBeTypeOf('function'))
-    m.quitNow()
     expect(m.staged.swap).not.toHaveBeenCalled()
     answer({ response: 1 })
     await vi.advanceTimersByTimeAsync(0)
@@ -520,7 +530,69 @@ describe('setupAutoUpdate on macOS', () => {
     m.handle.dispose()
     m.quitNow()
     expect(m.staged.swap).toHaveBeenCalledTimes(1)
+    // "Later" is a normal quit: the helper swaps but must not open the new app.
+    expect(m.staged.swap).toHaveBeenCalledWith(false)
+    expect(m.staged.discardSync).not.toHaveBeenCalled()
     expect(m.updater.quitAndInstall).not.toHaveBeenCalled()
+  })
+
+  it('quitting while the ready dialog is still open removes the staging dir synchronously and swaps nothing', async () => {
+    let answer!: (v: any) => void
+    const m = macSetup()
+    m.dialog.showMessageBox.mockImplementation(() => new Promise((r) => { answer = r }) as any)
+    await setupDownload(m.updater)
+    await vi.waitFor(() => expect(answer).toBeTypeOf('function'))
+    m.quitNow()
+    expect(m.staged.discardSync).toHaveBeenCalledTimes(1)
+    expect(m.staged.swap).not.toHaveBeenCalled()
+    // A late "Later" or a second will-quit finds nothing staged and does nothing.
+    answer({ response: 1 })
+    await vi.advanceTimersByTimeAsync(0)
+    m.quitNow()
+    expect(m.staged.discardSync).toHaveBeenCalledTimes(1)
+    expect(m.staged.swap).not.toHaveBeenCalled()
+    m.handle.dispose()
+  })
+
+  it('Cmd-Q while "Restart now" still awaits stopBackend removes the staging dir and never arms the swap', async () => {
+    let release!: () => void
+    const m = macSetup({ response: 0, stopImpl: () => new Promise<void>((r) => { release = r }) })
+    await setupDownload(m.updater)
+    await vi.waitFor(() => expect(m.stopBackend).toHaveBeenCalled())
+    m.quitNow()
+    expect(m.staged.discardSync).toHaveBeenCalledTimes(1)
+    expect(m.staged.swap).not.toHaveBeenCalled()
+    release()
+    await vi.waitFor(() => expect(m.quit).toHaveBeenCalledTimes(1))
+    m.quitNow()
+    expect(m.staged.swap).not.toHaveBeenCalled()
+    expect(m.staged.discardSync).toHaveBeenCalledTimes(1)
+    m.handle.dispose()
+  })
+
+  it('when MacUpdater cannot be overridden (no updateDownloaded) updating is switched off for the run', async () => {
+    const updater: any = new EventEmitter()
+    updater.checkForUpdates = vi.fn(() => Promise.resolve(null))
+    updater.downloadUpdate = vi.fn()
+    updater.dispatchUpdateDownloaded = vi.fn()
+    const logger = { log: vi.fn(), error: vi.fn() }
+    const onWillQuit = vi.fn()
+    const handle = setupAutoUpdate({
+      autoUpdater: updater, dialog: { showMessageBox: vi.fn() } as any, stopBackend: vi.fn(), logger, getMainWindow: () => null,
+      relaunch: vi.fn(), openExternal: vi.fn(), platform: 'darwin', publicKeys: ['k'], fetchBytes: vi.fn(),
+      mac: { installer: { refusal: async () => undefined, stage: async () => 'x' }, onWillQuit, quit: vi.fn() },
+    })
+    expect(logger.error).toHaveBeenCalledTimes(1)
+    expect(updater.checkForUpdates).not.toHaveBeenCalled()
+    expect(updater.listenerCount('update-available')).toBe(0)
+    expect(onWillQuit).not.toHaveBeenCalled()
+    expect(updater.autoDownload).toBe(false)
+    expect(updater.autoInstallOnAppQuit).toBe(false)
+    updater.emit('update-available', AVAILABLE)
+    await vi.advanceTimersByTimeAsync(6 * 60 * 60 * 1000)
+    expect(updater.checkForUpdates).not.toHaveBeenCalled()
+    expect(updater.downloadUpdate).not.toHaveBeenCalled()
+    expect(() => handle.dispose()).not.toThrow()
   })
 
   it('a copy that cannot replace itself downloads nothing and offers the release page once', async () => {
@@ -636,7 +708,7 @@ describe('with the real electron-updater classes', () => {
       showMessageBox: vi.fn(async () => ({ response: opts.response >= 0 ? opts.response : await new Promise<number>((r) => { answer = r }), checkboxChecked: false })),
     }
     const swap = vi.fn(() => '/logs/update-swap.log')
-    const stage = vi.fn(async (_zip: string, version: string) => ({ version, swap, discard: async () => {} }))
+    const stage = vi.fn(async (_zip: string, version: string) => ({ version, swap, discard: async () => {}, discardSync: () => {} }))
     const willQuit: Array<() => void> = []
     const quit = vi.fn(() => willQuit.forEach((h) => h()))
     const handle = setupAutoUpdate({
@@ -773,6 +845,7 @@ describe('with the real electron-updater classes', () => {
     expect(r.swap).not.toHaveBeenCalled()
     r.willQuit.forEach((h) => h())
     expect(r.swap).toHaveBeenCalledTimes(1)
+    expect(r.swap).toHaveBeenCalledWith(false)
     expect(r.updater.autoInstallOnAppQuit).toBe(false)
     squirrelUntouched(r.updater)
     r.handle.dispose()
@@ -782,6 +855,7 @@ describe('with the real electron-updater classes', () => {
     const r = await rig('mac', { response: 0 })
     await r.realCheck()
     await vi.waitFor(() => expect(r.swap).toHaveBeenCalledTimes(1))
+    expect(r.swap).toHaveBeenCalledWith(true)
     expect(r.stopBackend).toHaveBeenCalledTimes(1)
     expect(r.quit).toHaveBeenCalledTimes(1)
     squirrelUntouched(r.updater)
@@ -798,5 +872,58 @@ describe('with the real electron-updater classes', () => {
     expect(r.stage).not.toHaveBeenCalled()
     squirrelUntouched(r.updater)
     r.handle.dispose()
+  })
+})
+
+// Without deps.publicKeys the platform picks the key set: macOS verifies latest-mac.yml with the
+// Mac keys only, so 4.0.0-4.0.3 Macs (which use the Windows keys) refuse what 4.0.4+ accepts.
+describe('default public key set per platform', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers(); vi.doUnmock('../main/helpers/update-keys'); vi.resetModules() })
+
+  const pemOf = (k: any) => k.export({ type: 'spki', format: 'pem' }).toString()
+  const winPair = generateKeyPairSync('ed25519')
+  const macPair = generateKeyPairSync('ed25519')
+  const manifest = Buffer.from('version: 9.9.9\nfiles:\n  - url: Gamachine-Setup-9.9.9.exe\n    sha512: HASH==\npath: Gamachine-Setup-9.9.9.exe\nsha512: HASH==\n')
+
+  async function attempt(platform: 'darwin' | 'win32', signer: any, keys = { win: [pemOf(winPair.publicKey)], mac: [pemOf(macPair.publicKey)] }) {
+    vi.resetModules()
+    vi.doMock('../main/helpers/update-keys', () => ({ UPDATE_PUBLIC_KEYS: keys.win, MAC_UPDATE_PUBLIC_KEYS: keys.mac }))
+    const { setupAutoUpdate: fresh } = await import('../main/helpers/auto-update')
+    const updater: any = new EventEmitter()
+    updater.checkForUpdates = vi.fn(() => Promise.resolve(null))
+    updater.downloadUpdate = vi.fn(() => Promise.resolve([]))
+    updater.updateDownloaded = vi.fn()
+    updater.dispatchUpdateDownloaded = vi.fn()
+    const logger = { log: vi.fn(), error: vi.fn() }
+    const fetchBytes = vi.fn(async (url: string) => (url.endsWith('.sig') ? sign64(manifest, signer.privateKey) : manifest))
+    const handle = fresh({
+      autoUpdater: updater, dialog: { showMessageBox: vi.fn(async () => ({ response: 1 })) } as any, stopBackend: vi.fn(), logger,
+      getMainWindow: () => null, relaunch: vi.fn(), openExternal: vi.fn(), platform, fetchBytes,
+      mac: { installer: { refusal: async () => undefined, stage: async () => 'x' }, onWillQuit: () => {}, quit: vi.fn() },
+    })
+    updater.emit('update-available', AVAILABLE)
+    await vi.advanceTimersByTimeAsync(10)
+    handle.dispose()
+    return { downloaded: updater.downloadUpdate.mock.calls.length > 0, logger, fetchBytes }
+  }
+
+  it('macOS accepts a manifest signed with a Mac key and refuses one signed with a Windows key', async () => {
+    expect((await attempt('darwin', macPair)).downloaded).toBe(true)
+    const refused = await attempt('darwin', winPair)
+    expect(refused.downloaded).toBe(false)
+    expect(refused.logger.error).toHaveBeenCalledWith(expect.stringContaining('indirilmeyecek'), 'manifest imzası geçersiz')
+  })
+
+  it('Windows accepts a Windows-key manifest and refuses a Mac-key one', async () => {
+    expect((await attempt('win32', winPair)).downloaded).toBe(true)
+    expect((await attempt('win32', macPair)).downloaded).toBe(false)
+  })
+
+  it('macOS with no Mac key embedded refuses before fetching anything, even if Windows keys exist', async () => {
+    const r = await attempt('darwin', winPair, { win: [pemOf(winPair.publicKey)], mac: [] })
+    expect(r.downloaded).toBe(false)
+    expect(r.fetchBytes).not.toHaveBeenCalled()
+    expect(r.logger.error).toHaveBeenCalledWith(expect.stringContaining('indirilmeyecek'), 'imza anahtarı tanımlı değil')
   })
 })
