@@ -196,7 +196,7 @@ def test_settings_writes_require_secret_and_enabling_works_in_every_mode(env):
     assert response.status_code == 200 and response.json()["rejected_computer_use"] == 1
     assert result(env)["approved"] is False
     assert not settings.enabled(env.db)
-    for mode in ("balanced", "step", "auto"):
+    for mode in ("balanced", "auto"):
         approval_mode.set_mode(mode, source="test")
         assert client.post("/computer-use/settings", json={"enabled": False}).status_code == 200
         assert client.get("/computer-use/settings").json()["active"] is False

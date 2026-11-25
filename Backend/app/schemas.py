@@ -48,7 +48,7 @@ class ChatRequest(BaseModel):
     use_thinking: bool = False
     thinking_level: str = "medium" # off | low | medium | high
     generation_confirmed: bool = False
-    generation_mode: str = "auto"  # auto | plan | step
+    generation_mode: str = "auto"  # auto | balanced
     # 20 görsel: her eleman base64 data-URI, yani tanesi MB'larca olabiliyor. Tek
     # turda 20'den fazla ekran görüntüsü gönderen gerçek bir akış yok.
     images: Optional[List[str]] = Field(default=None, max_length=20)

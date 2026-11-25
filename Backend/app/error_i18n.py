@@ -154,7 +154,7 @@ EN: dict[str, str] = {
     "Mod bu kanaldan değiştirilemez.": "The mode cannot be changed through this channel.",
     "Çalışma modu yalnız uygulama arayüzünden değiştirilebilir.":
         "The operating mode can only be changed from the app interface.",
-    "mode 'auto', 'balanced' ya da 'step' olmalı.": "mode must be 'auto', 'balanced' or 'step'.",
+    "mode 'auto' ya da 'balanced' olmalı.": "mode must be 'auto' or 'balanced'.",
     "Not bulunamadı.": "Note not found.",
     "Unity Editor açık değil. Lütfen önce Unity'yi açın.": "Unity Editor is not open. Please open Unity first.",
     "Unity MCP sunucusu başlatılamadı.": "The Unity MCP server could not be started.",

@@ -39,7 +39,7 @@ EXPORTED_GROUPS = ("core", "playtest", "scripting_ext")
 CONVERSATION_META_KEY = "gamachine_conversation"
 
 # A write call waits in the server's approval gate for up to 10 s (POST) + 150 s
-# (card) in step mode, so the call budget must be larger or every slow click
+# (card) when it needs one, so the call budget must be larger or every slow click
 # would read as a timeout; the rest is left for the tool itself to run.
 CALL_TIMEOUT_S = 240.0
 CONNECT_TIMEOUT_S = 15.0

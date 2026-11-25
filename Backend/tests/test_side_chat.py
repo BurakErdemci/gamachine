@@ -150,13 +150,14 @@ def test_ordinary_routes_refuse_a_side_id(env, monkeypatch):
 # ── MCP approval: refused in step AND auto, before auto approval ────────────
 
 def _request_card(client, gate_id, conversation_id=None):
-    body = {"gate_id": gate_id, "tool": "manage_gameobject", "params": {"action": "create"}}
+    # A delete: critical, so balanced opens the card.
+    body = {"gate_id": gate_id, "tool": "manage_gameobject", "params": {"action": "delete"}}
     if conversation_id is not None:
         body["conversation_id"] = conversation_id
     return client.post("/mcp-approval-request", json=body, headers=H).json()
 
 
-@pytest.mark.parametrize("mode", ["step", "auto", "balanced"])
+@pytest.mark.parametrize("mode", ["auto", "balanced"])
 def test_mcp_approval_request_refuses_a_side_chat_in_both_modes(env, mode):
     db, client, _, _, _ = env
     main = _seed(db)
@@ -175,11 +176,11 @@ def test_mcp_approval_request_for_the_main_chat_is_unaffected(env):
     _open_side(client, main)
     approval_mode.set_mode("auto", source="test")
     assert _request_card(client, "main-auto", conversation_id=main)["approved"] is True
-    approval_mode.set_mode("step", source="test")
-    with ambient_turn(".", "step", main):
-        assert _request_card(client, "main-step", conversation_id=main) == {"status": "ok", "gate_id": "main-step"}
+    approval_mode.set_mode("balanced", source="test")
+    with ambient_turn(".", "balanced", main):
+        assert _request_card(client, "main-card", conversation_id=main) == {"status": "ok", "gate_id": "main-card"}
     pending = client.get("/mcp-pending", headers=H).json()["pending"]
-    assert pending["main-step"]["conversation_id"] == main
+    assert pending["main-card"]["conversation_id"] == main
 
 
 def test_mcp_approval_request_refuses_when_the_side_lookup_fails(env, monkeypatch):
@@ -327,7 +328,7 @@ def test_side_stream_caps_the_live_context_and_labels_a_running_turn(env, monkey
     side = _open_side(client, main)
     monkeypatch.setattr(cr, "AgentRunner", _FakeRunner)
     live = "A" * 20000 + "SON"
-    with ambient_turn(".", "step", main):
+    with ambient_turn(".", "balanced", main):
         _stream(client, side, live_context=live)
     msg = _FakeRunner.last.kw["side_turn"].text(full=False)
     assert "YARIM" in msg
@@ -389,7 +390,7 @@ def test_idle_sweep_deletes_old_idle_side_chats_only(env):
     _age(db, old_idle, 3600)
     _age(db, old_busy, 3600)
     _age(db, a, 3600)
-    with ambient_turn(".", "step", old_busy):
+    with ambient_turn(".", "balanced", old_busy):
         swept = asyncio.run(router.sweep_idle_side_chats())
     assert swept == [old_idle]
     assert closed == [old_idle]

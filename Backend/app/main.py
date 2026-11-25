@@ -518,7 +518,7 @@ def _read_ui_secret_from_stdin(timeout_s: float = 5.0) -> None:
         logger.info("[approval-mode] UI secret received from Electron main.")
     else:
         logger.error("[approval-mode] UI secret expected on stdin but not received; "
-                     "approval-mode writes will be refused.")
+                     "approval-mode writes will be refused and the mode stays balanced.")
 
 
 if __name__ == "__main__":

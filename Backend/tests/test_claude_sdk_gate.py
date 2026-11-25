@@ -171,7 +171,7 @@ def test_empty_workspace_is_never_inside():
     ("Grep", {"pattern": "PRIVATE KEY", "path": "/Users"}),
     ("NotebookRead", {"notebook_path": "/etc/secret.ipynb"}),
 ])
-async def test_step_mode_outside_read_shows_card(tool, inp, symlink_escape):
+async def test_balanced_outside_read_shows_card(tool, inp, symlink_escape):
     ws, _outside, _link = symlink_escape
     s = _mk_session(cwd=ws, auto_approve=False, approval_timeout=2.0)
     res, ev = await _drive_gate(s, tool, inp, approve=True)
@@ -180,7 +180,7 @@ async def test_step_mode_outside_read_shows_card(tool, inp, symlink_escape):
     assert _is_allow(res)
 
 
-async def test_step_mode_outside_read_denied_when_user_rejects(symlink_escape):
+async def test_balanced_outside_read_denied_when_user_rejects(symlink_escape):
     """Kart yalnız görünmesin — kullanıcının HAYIR'ı da etki etsin."""
     ws, _outside, _link = symlink_escape
     s = _mk_session(cwd=ws, auto_approve=False, approval_timeout=2.0)
@@ -194,7 +194,7 @@ async def test_step_mode_outside_read_denied_when_user_rejects(symlink_escape):
     ("LS", "path"),
     ("Grep", "path"),
 ])
-async def test_step_mode_inside_read_stays_cardless(tool, inp_key, symlink_escape):
+async def test_balanced_inside_read_stays_cardless(tool, inp_key, symlink_escape):
     """Bilerek: workspace içi her okumada kart çıkarmak refleks-onaya alıştırır."""
     ws, _outside, _link = symlink_escape
     s = _mk_session(cwd=ws, auto_approve=False, approval_timeout=2.0)
@@ -253,8 +253,8 @@ async def test_symlink_read_escape_shows_card(symlink_escape):
 
 @pytest.mark.parametrize("approve", [True, False])
 async def test_write_outside_through_a_link_goes_to_the_card(symlink_escape, approve):
-    """Owner decision (4 Nov 2026): an outside write is the card's decision in step
-    mode, not a silent deny; the link must not hide that the target is outside."""
+    """Owner decision (4 Nov 2026): an outside write is the card's decision
+    outside auto, not a silent deny; the link must not hide that the target is outside."""
     ws, _outside, link = symlink_escape
     s = _mk_session(cwd=ws, auto_approve=False, approval_timeout=2.0)
     res, ev = await _drive_gate(s, "Write", {"file_path": os.path.join(link, "x.cs"),
@@ -510,13 +510,6 @@ async def test_unity_mcp_reads_pass_without_a_card(tool, inp, symlink_escape):
 @pytest.mark.parametrize("tool,inp", [
     # Eski elle yazılmış listenin ÖLÜ girdisi: `manage_scene`'in get_info'su yok.
     ("mcp__unityMCP__manage_scene", {"action": "get_info"}),
-    # 29 Tem denetimi: bu action semantik olarak okuma ama `manage_scene.py:90`
-    # koşulsuz preflight refresh yapıyor → asset import + derleme + domain reload.
-    ("mcp__unityMCP__manage_scene", {"action": "get_hierarchy"}),
-    ("mcp__unityMCP__find_gameobjects", {"name": "Player"}),
-    # Eski liste `read_console`'un tamamını muaf tutuyordu; clear konsolu siler.
-    ("mcp__unityMCP__read_console", {"action": "clear"}),
-    ("mcp__unityMCP__manage_scene", {"action": "save"}),
     ("mcp__unityMCP__execute_code", {"action": "execute", "code": "// x"}),
     # safety_checks modelin kendi geçtiği bir bayrak — kapı girdisi değil.
     ("mcp__unityMCP__execute_code", {"action": "execute", "code": "// x", "safety_checks": False}),
@@ -528,6 +521,24 @@ async def test_unity_mcp_mutations_show_a_card(tool, inp, symlink_escape):
     res, ev = await _drive_gate(s, tool, inp, approve=True)
     assert ev is not None and ev["type"] == "command_approval_needed", \
         f"{tool} {inp} kartsız izin aldı"
+    assert _is_allow(res)
+
+
+@pytest.mark.parametrize("tool,inp", [
+    # 29 Tem denetimi: get_hierarchy is a read in meaning, but `manage_scene.py:90`
+    # always refreshes first; clear empties the console. The removed step
+    # mode carded these; balanced (the only gated mode since 4.0.3) runs them,
+    # since none is destructive.
+    ("mcp__unityMCP__manage_scene", {"action": "get_hierarchy"}),
+    ("mcp__unityMCP__find_gameobjects", {"name": "Player"}),
+    ("mcp__unityMCP__read_console", {"action": "clear"}),
+    ("mcp__unityMCP__manage_scene", {"action": "save"}),
+])
+async def test_unity_mcp_routine_actions_run_without_a_card_in_balanced(tool, inp, symlink_escape):
+    ws, _outside, _link = symlink_escape
+    s = _mk_session(cwd=ws, auto_approve=False, approval_timeout=2.0)
+    res, ev = await _drive_gate(s, tool, inp, approve=False)
+    assert ev is None, f"{tool} {inp} asked for a card"
     assert _is_allow(res)
 
 

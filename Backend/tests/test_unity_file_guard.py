@@ -468,7 +468,7 @@ def _agy_state(tmp_path, mode):
     return str(path)
 
 
-@pytest.mark.parametrize("mode", ["auto", "step"])
+@pytest.mark.parametrize("mode", ["auto", "balanced"])
 def test_agy_hook_refuses_in_every_mode(project, tmp_path, mode):
     from agy_step_gate import decide
     state = _agy_state(tmp_path, mode)

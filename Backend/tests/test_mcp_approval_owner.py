@@ -51,8 +51,9 @@ def _routes(db):
 
 
 def _card(gate_id, conversation_id="absent"):
+    # A delete: critical, so balanced (the default) opens the card.
     body = {"gate_id": gate_id, "tool": "manage_gameobject",
-            "params": {"action": "create"}, "workspace_path": ""}
+            "params": {"action": "delete"}, "workspace_path": ""}
     if conversation_id != "absent":
         body["conversation_id"] = conversation_id
     return body
@@ -79,7 +80,7 @@ def gates():
 
 def test_turn_registry_counts_per_conversation_and_nests():
     assert not conversation_turn_in_flight(5)
-    with ambient_turn(".", "step", 5):
+    with ambient_turn(".", "balanced", 5):
         assert conversation_turn_in_flight(5)
         with ambient_turn(".", "auto", 5):
             assert conversation_turn_in_flight(5)
@@ -91,14 +92,14 @@ def test_turn_registry_counts_per_conversation_and_nests():
 
 def test_turn_registry_releases_on_exception():
     with pytest.raises(RuntimeError):
-        with ambient_turn(".", "step", 5):
+        with ambient_turn(".", "balanced", 5):
             raise RuntimeError("boom")
     assert not conversation_turn_in_flight(5)
 
 
 @pytest.mark.parametrize("conversation_id", [None, 0, -1, "5", True])
 def test_turn_without_a_usable_id_registers_nothing(conversation_id):
-    with ambient_turn(".", "step", conversation_id):
+    with ambient_turn(".", "balanced", conversation_id):
         assert approval_policy._TURNS_BY_CONVERSATION == {}
 
 
@@ -106,7 +107,7 @@ def test_agent_runner_run_marks_its_conversation_in_flight_until_closed():
     """Every provider's turn goes through AgentRunner.run; closing the stream
     (Stop, disconnect) must end the in-flight mark, not only a clean finish."""
     runner = ar.AgentRunner(provider_type="subscription", api_key="", model_name="claude-x",
-                            workspace_path=".", conversation_id=5, generation_mode="step")
+                            workspace_path=".", conversation_id=5, generation_mode="balanced")
     seen = []
 
     async def inner(_message):
@@ -133,14 +134,14 @@ def test_agent_runner_run_marks_its_conversation_in_flight_until_closed():
 def test_owner_accepted_for_an_existing_chat_with_a_turn_in_flight(gates):
     routes = _routes(_db())
     gates.append("own-ok")
-    with ambient_turn(".", "step", 5):
+    with ambient_turn(".", "balanced", 5):
         req, pending = _raise(routes, _card("own-ok", 5))
     assert req == {"status": "ok", "gate_id": "own-ok"}
     assert GATE_OWNERS["own-ok"] == 5
     assert pending["own-ok"]["conversation_id"] == 5
     # Every field the UI already reads is still there.
     assert pending["own-ok"]["tool"] == "manage_gameobject"
-    assert pending["own-ok"]["params"] == {"action": "create"}
+    assert pending["own-ok"]["params"] == {"action": "delete"}
     assert pending["own-ok"]["workspace_path"] == ""
 
 
@@ -155,7 +156,7 @@ def test_no_turn_in_flight_means_unowned(gates):
 def test_a_turn_in_ANOTHER_chat_does_not_vouch_for_this_claim(gates):
     routes = _routes(_db())
     gates.append("other-turn")
-    with ambient_turn(".", "step", 2):
+    with ambient_turn(".", "balanced", 2):
         _req, pending = _raise(routes, _card("other-turn", 5))
     assert GATE_OWNERS.get("other-turn") is None
     assert pending["other-turn"]["conversation_id"] is None
@@ -168,7 +169,7 @@ def test_a_turn_in_ANOTHER_chat_does_not_vouch_for_this_claim(gates):
 def test_missing_or_foreign_conversation_is_unowned_even_with_a_turn(gates, owners):
     routes = _routes(_db(owners))
     gates.append("foreign")
-    with ambient_turn(".", "step", 5):
+    with ambient_turn(".", "balanced", 5):
         _req, pending = _raise(routes, _card("foreign", 5))
     assert GATE_OWNERS.get("foreign") is None
     assert pending["foreign"]["conversation_id"] is None
@@ -179,7 +180,7 @@ def test_db_failure_is_unowned_not_an_error(gates):
     db.get_conversation_owner.side_effect = OSError("db locked")
     routes = _routes(db)
     gates.append("db-fail")
-    with ambient_turn(".", "step", 5):
+    with ambient_turn(".", "balanced", 5):
         req, pending = _raise(routes, _card("db-fail", 5))
     assert req["status"] == "ok"
     assert GATE_OWNERS.get("db-fail") is None
@@ -190,7 +191,7 @@ def test_db_failure_is_unowned_not_an_error(gates):
 def test_junk_claims_are_unowned(gates, claimed):
     routes = _routes(_db())
     gates.append("junk")
-    with ambient_turn(".", "step", 5), ambient_turn(".", "step", 1):
+    with ambient_turn(".", "balanced", 5), ambient_turn(".", "balanced", 1):
         _req, pending = _raise(routes, _card("junk", claimed))
     assert GATE_OWNERS.get("junk") is None
     assert pending["junk"]["conversation_id"] is None
@@ -210,7 +211,7 @@ def test_auto_mode_still_answers_before_any_owner_check():
     db.get_conversation_owner.assert_called_once_with(5)
 
 
-@pytest.mark.parametrize("mode", ["step", "auto"])
+@pytest.mark.parametrize("mode", ["balanced", "auto"])
 def test_a_claim_naming_a_missing_chat_is_refused_without_a_card(gates, mode):
     """A deleted chat's child can outlive its rows; ids are never reused, so a
     claim naming a chat with no row is refused, never shown or auto-approved."""
@@ -222,7 +223,7 @@ def test_a_claim_naming_a_missing_chat_is_refused_without_a_card(gates, mode):
         gates.append("ghost")
         req, pending = _raise(routes, _card("ghost", 45678))
     finally:
-        approval_mode.set_mode("step", source="test")
+        approval_mode.set_mode("balanced", source="test")
     assert req["status"] == "resolved" and req["approved"] is False
     assert pending == {}
     assert "ghost" not in GATE_OWNERS
@@ -248,7 +249,7 @@ def test_stop_in_A_denies_A_and_unowned_cards_but_not_B(gates):
                    for g in ("a-card", "b-card", "nobody-card")}
         return before, stop, after, results
 
-    with ambient_turn(".", "step", 1), ambient_turn(".", "step", 2):
+    with ambient_turn(".", "balanced", 1), ambient_turn(".", "balanced", 2):
         before, stop, after, results = asyncio.run(run())
 
     assert {g: e["conversation_id"] for g, e in before.items()} == {
@@ -290,7 +291,7 @@ def _claude_session_kwargs(monkeypatch, tmp_path, conversation_id):
                         lambda cid, **kw: _FakeClaudeSession(captured, cid, kw))
     runner = ar.AgentRunner(provider_type="subscription", api_key="", model_name="claude-x",
                             workspace_path=str(tmp_path), conversation_id=conversation_id,
-                            generation_mode="step")
+                            generation_mode="balanced")
 
     async def run():
         async for _ev in runner._run_claude_session("hi"):

@@ -55,7 +55,7 @@ def _endpoint(router, path, method):
 
 
 def _mcp_card(client, gate_id, conv_id, command="rm -rf Library"):
-    with ambient_turn(".", "step", conv_id):
+    with ambient_turn(".", "balanced", conv_id):
         res = client.post("/mcp-approval-request", headers=H, json={
             "gate_id": gate_id, "tool": "bash", "params": {"command": command},
             "workspace_path": ".", "conversation_id": conv_id}).json()
@@ -70,29 +70,29 @@ def test_pending_cards_lists_every_kind_across_chats(env):
     a = db.create_conversation(1, "A")
     b = db.create_conversation(1, "B")
     _mcp_card(client, "mcp-1", a, "git push --force")
-    with ambient_turn(".", "step", a, 0):
+    # A note between chats is queued at once since 4.0.3: never a card.
+    with ambient_turn(".", "balanced", a, 0):
         mail = client.post("/mailbox/send", headers=H,
                            json={"conversation_id": a, "to": b, "body": "selam B"}).json()
-    assert mail["status"] == "pending"
+    assert mail["status"] == "queued"
     register_gate("cmd-1", b, tool="Bash", summary="npm publish", params={"command": "npm publish"},
                   risk="shell_publish")
     register_gate("q-1", b, kind="question", tool="AskUserQuestion", summary="Hangisi?")
 
     pending = cards.list_pending()
     by_id = {c["card_id"]: c for c in pending}
-    assert set(by_id) == {"mcp-1", mail["gate_id"], "cmd-1", "q-1"}
+    assert set(by_id) == {"mcp-1", "cmd-1", "q-1"}
     for card in pending:
         assert set(card) == {"card_id", "conversation_id", "kind", "tool", "summary", "risk",
                              "created_at"}
     assert (by_id["mcp-1"]["kind"], by_id["mcp-1"]["conversation_id"],
             by_id["mcp-1"]["summary"]) == ("mcp", a, "git push --force")
-    assert (by_id[mail["gate_id"]]["kind"], by_id[mail["gate_id"]]["conversation_id"]) == ("mail", a)
     assert (by_id["cmd-1"]["kind"], by_id["cmd-1"]["risk"], by_id["cmd-1"]["tool"]) == (
         "command", "shell_publish", "Bash")
     assert (by_id["q-1"]["kind"], by_id["q-1"]["conversation_id"]) == ("question", b)
     assert [c["card_id"] for c in cards.list_pending(b)] == ["cmd-1", "q-1"]
     opened = [e["card_id"] for e in turn_events.since(a)["events"] if e["kind"] == "card_opened"]
-    assert opened == ["mcp-1", mail["gate_id"]]
+    assert opened == ["mcp-1"]
 
 
 def test_answer_closes_the_card_and_writes_card_closed(env):

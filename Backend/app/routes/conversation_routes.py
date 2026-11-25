@@ -16,7 +16,6 @@ from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-import action_risk
 import chat_files
 from ai_providers import AIProviderManager
 from auth_utils import require_conversation_owner, require_user, get_current_user, _check_token
@@ -808,7 +807,6 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
             _mcp_result_ts[gate_id] = time()
             _mcp_pending.pop(gate_id, None)
             _release_gate(gate_id)
-            _settle_mail(gate_id, approved)
         return resolve
 
     def _computer_use_request(body, x_session_token):
@@ -1089,7 +1087,6 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
                         "approved": False,
                         "error": "Onay süresi doldu; isteği bekleyen taraf kalmadı.",
                     }
-                _settle_mail(gate_id, False)
             if age < MCP_RESULT_TTL:
                 continue
             _cards.close_card(gate_id, "timed_out")
@@ -1098,7 +1095,6 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
             _mcp_pending.pop(gate_id, None)
             _browser_gate_keys.pop(gate_id, None)
             _release_gate(gate_id)
-            _settle_mail(gate_id, False)
 
     def _sweep_card_gate(gate_id: str, device: str) -> Optional[dict]:
         """Sweep like /mcp-approval-respond, in the same order: another device's
@@ -1188,35 +1184,9 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
             _mcp_result_ts[gate_id] = time()
             _mcp_pending.pop(gate_id, None)
             _release_gate(gate_id)
-            _settle_mail(gate_id, False)
         return len(rejected)
 
-    # ── Chat mailbox: card settlement and wake re-arming ────────────────────
-    # gate_id -> (mail_id, from_conv, to_conv) of a note waiting on its card.
-    _mail_gates: Dict[str, tuple] = {}
-
-    def _settle_mail(gate_id: str, approved: bool) -> None:
-        """A note card was decided: queue and wake, or refuse. Idempotent.
-
-        Called wherever an MCP card is resolved (answer, sweep, Stop/delete,
-        switch to auto), so the row never stays `pending_approval` behind a
-        card that is gone. The decision is applied here, not when the sending
-        tool next polls: that tool may have died meanwhile.
-        """
-        entry = _mail_gates.pop(gate_id, None)
-        if entry is None:
-            return
-        mail_id, from_conv, to_conv = entry
-        try:
-            if approved:
-                if db.set_mail_status(mail_id, mailbox.STATUS_QUEUED, mailbox.STATUS_PENDING):
-                    from agentic import wake_queue
-                    wake_queue.enqueue(to_conv, mailbox.notice(from_conv))
-            else:
-                db.set_mail_status(mail_id, mailbox.STATUS_REJECTED, mailbox.STATUS_PENDING)
-        except Exception:
-            logger.exception("[mailbox] note %s not settled", mail_id)
-
+    # ── Chat mailbox: wake re-arming ─────────────────────────────────────────
     _sweep_key = _mail_sweep_key(db)
     with _MAIL_SWEEPS_LOCK:
         _sweep = _MAIL_SWEEPS.get(_sweep_key) if _sweep_key else None
@@ -1298,12 +1268,6 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
             _mcp_result_ts[gate_id] = time()
             _mcp_pending.pop(gate_id, None)
             _release_gate(gate_id)
-        _settle_mail(gate_id, False)
-
-    def _deny_mail_cards_of(conv_id: int) -> None:
-        for gate_id, (_mid, from_conv, to_conv) in list(_mail_gates.items()):
-            if conv_id in (from_conv, to_conv):
-                _deny_mail_card(gate_id, "Sohbet silindi; not gönderilmedi.")
 
     def _mail_target_ok(conv_id: Any, user_id: int) -> bool:
         """A chat that may be woken for this user: exists, theirs, not a side chat."""
@@ -1382,11 +1346,6 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
         if not body:
             logger.info("[mailbox] conv=%s reply not forwarded: no final message "
                         "(nothing after the last tool call)", conv_id)
-            return None
-        if approval_mode.needs_card({"kind": "mail"}).card:
-            # Step mode: a send would need a card with no turn to own it; the
-            # wake framing has to do the work there.
-            logger.info("[mailbox] conv=%s reply not forwarded: step mode", conv_id)
             return None
         # Any row to the sender counts, rejected or pending included: an
         # automatic copy must never go around a card the user refused.
@@ -1944,9 +1903,6 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
         # Its browser approvals go too; a step already approved is stopped by the gateway's state
         # read, which reports the chat as deleted.
         _forget_browser_approvals(conv_id)
-        # A note card is owned by its sender; one addressed to this chat is
-        # another chat's card and is denied here, since its target is gone.
-        _deny_mail_cards_of(conv_id)
         for gate_id in [g for g in (*_APPROVAL_GATES, *_QUESTION_GATES)
                         if _GATE_OWNERS.get(g) == conv_id]:
             _release_gate(gate_id, wake=True)
@@ -3295,7 +3251,6 @@ Max 300 kelime. Türkçe yaz.
             _mcp_result_ts[gate_id] = time()
             _mcp_pending.pop(gate_id, None)
             _release_gate(gate_id)
-            _settle_mail(gate_id, True)
             approved += 1
         for gate_id, event in list(_APPROVAL_GATES.items()):
             if event.is_set():
@@ -3320,9 +3275,7 @@ Max 300 kelime. Türkçe yaz.
         for gate_id, entry in list(_mcp_pending.items()):
             if entry.get("computer_use") or entry.get("browser_use"):
                 continue
-            if entry.get("kind") == "mail":
-                action = {"kind": "mail"}
-            elif "blender_code" in entry:
+            if "blender_code" in entry:
                 action = {"kind": "blender_code", "code": entry["blender_code"]}
             else:
                 action = _mcp_action(entry.get("tool"), entry.get("params"),
@@ -3337,7 +3290,6 @@ Max 300 kelime. Türkçe yaz.
             _mcp_result_ts[gate_id] = time()
             _mcp_pending.pop(gate_id, None)
             _release_gate(gate_id)
-            _settle_mail(gate_id, True)
             approved += 1
         return approved
 
@@ -3348,17 +3300,18 @@ Max 300 kelime. Türkçe yaz.
         (after its token, maintenance and UI-secret checks) and the phone's
         `set_approval_mode` (remote bridge, no UI secret by owner decision) both
         end here. Raises AgyStepGateError when the flip is refused. Runs on the
-        event loop: the drains resolve gates that set asyncio events.
+        event loop: the drains resolve gates that set asyncio events. The
+        legacy "step" an old client sends is applied, and reported, as
+        balanced.
         """
+        requested = mode
+        mode = approval_mode.normalize_mode(mode)
+        if mode is None:
+            raise ValueError(f"unknown approval mode: {requested!r}")
         previous = approval_mode.set_mode(mode, source=source)
         # Computer use is independent of the mode (owner decision, 15 Oct
         # 2026): a switch leaves its cards and session grants alone.
-        if mode == "auto":
-            drained = _approve_all_pending()
-        elif mode == "balanced":
-            drained = _approve_routine_pending()
-        else:
-            drained = 0
+        drained = _approve_all_pending() if mode == "auto" else _approve_routine_pending()
         if drained:
             logger.warning("[approval-mode] %d pending card(s) approved by the switch to %s",
                            drained, mode)
@@ -3523,10 +3476,8 @@ Max 300 kelime. Türkçe yaz.
         decision = approval_mode.needs_card(action)
         if not decision.card:
             return None, None
-        # Step mode carries no reason; the card still names a critical trigger when there is one.
-        risk = action_risk.classify(action)
         return None, {"owner": owner, "connector": body.get("connector"), "code": action["code"],
-                      "mode": decision.mode, "reason": risk.reason if risk.critical else ""}
+                      "mode": decision.mode, "reason": decision.reason}
 
     def _blender_card(owner: int, connector: Any, code: Any, mode: str, reason: str) -> str:
         """Open execute_blender_code's card through the MCP card machinery; returns its gate id."""
@@ -3758,15 +3709,16 @@ Max 300 kelime. Türkçe yaz.
                 status_code=403,
                 detail="Çalışma modu yalnız uygulama arayüzünden değiştirilebilir.",
             )
-        mode = body.get("mode")
-        if mode not in approval_mode.MODES:
+        # An old desktop may still send "step": it is applied as balanced.
+        mode = approval_mode.normalize_mode(body.get("mode"))
+        if mode is None:
             raise HTTPException(status_code=400,
-                                detail="mode 'auto', 'balanced' ya da 'step' olmalı.")
+                                detail="mode 'auto' ya da 'balanced' olmalı.")
         source = body.get("source") if body.get("source") in ("settings", "chat", "migrate") else "ui"
         try:
             return apply_approval_mode(mode, source)
         except AgyStepGateError as exc:
-            # The flip to step was refused because an agy child could still
+            # The flip to balanced was refused because an agy child could still
             # write; the message says why and what to do (Turkish, user-facing).
             raise HTTPException(status_code=409, detail={
                 "code": exc.code, "message": str(exc), **exc.params})
@@ -3841,47 +3793,15 @@ Max 300 kelime. Türkçe yaz.
         # A note from a turn the user started always expects a reply; replies
         # never do (Burak, 27 Sep 2026).
         expects_reply = depth == 1 and not auto_forwarded
-        # A note between chats is routine in balanced mode (Burak, 27 Sep 2026).
-        if not approval_mode.needs_card({"kind": "mail"}).card:
-            mail_id = db.add_mail(from_conv, to_conv, body, mailbox.STATUS_QUEUED, None, depth,
-                                  expects_reply=expects_reply, auto_forwarded=auto_forwarded)
-            if mail_id is None:
-                raise _MailRefused(404, f"#{to_conv} numaralı sohbet bulunamadı.")
-            from agentic import wake_queue
-            wake_queue.enqueue(to_conv, mailbox.notice(from_conv))
-            return {"status": mailbox.STATUS_QUEUED, "mail_id": mail_id, "to": to_conv}
-        if auto_forwarded:
-            # A card needs a running turn in the sender to own it; the
-            # forward runs after that turn ended.
-            raise _MailRefused(409, "Adım modunda otomatik iletim yok.")
-        gate_id = uuid.uuid4().hex
-        mail_id = db.add_mail(from_conv, to_conv, body, mailbox.STATUS_PENDING, gate_id, depth,
-                              expects_reply=expects_reply)
+        # A note between chats is routine in every mode (Burak, 27 Sep 2026;
+        # the mode that carded it was removed in 4.0.3), so it is queued at once.
+        mail_id = db.add_mail(from_conv, to_conv, body, mailbox.STATUS_QUEUED, None, depth,
+                              expects_reply=expects_reply, auto_forwarded=auto_forwarded)
         if mail_id is None:
             raise _MailRefused(404, f"#{to_conv} numaralı sohbet bulunamadı.")
-        # The same card store as the MCP bridges: `/mcp-pending` shows it in
-        # the sender's chat, Stop there denies it, switching to auto approves it.
-        _register_gate(gate_id, from_conv, kind="external")
-        _mcp_pending[gate_id] = {
-            "tool": mailbox.TOOL_SEND,
-            "kind": "mail",
-            "params": {
-                "from_id": from_conv,
-                "from_title": mailbox.clean_title(db.get_conversation_title(from_conv)),
-                "to_id": to_conv,
-                "to_title": mailbox.clean_title(db.get_conversation_title(to_conv)),
-                "body": body,
-            },
-            "workspace_path": "",
-            "conversation_id": from_conv,
-        }
-        _mcp_results[gate_id] = {"status": "pending"}
-        _mcp_result_ts[gate_id] = time()
-        _mail_gates[gate_id] = (mail_id, from_conv, to_conv)
-        _cards.open_card(gate_id, conversation_id=from_conv, kind="mail", tool=mailbox.TOOL_SEND,
-                         summary=f"#{from_conv} -> #{to_conv}: {body}",
-                         params=_mcp_pending[gate_id]["params"], resolver=_mcp_resolver(gate_id))
-        return {"status": "pending", "mail_id": mail_id, "gate_id": gate_id, "to": to_conv}
+        from agentic import wake_queue
+        wake_queue.enqueue(to_conv, mailbox.notice(from_conv))
+        return {"status": mailbox.STATUS_QUEUED, "mail_id": mail_id, "to": to_conv}
 
     def _own_mail(mail_id: Any, from_conv: Any) -> Optional[dict]:
         """The row of `mail_id` if `from_conv` sent it; None for any other chat's."""
@@ -3931,21 +3851,12 @@ Max 300 kelime. Türkçe yaz.
         return _mail_chats(conv_id, user_id)
 
     async def _service_send_and_wait(from_conv: Any, to_conv: Any, body: Any) -> dict:
-        """In-process twin of the MCP tool: send, then wait for the card."""
+        """In-process twin of the MCP tool. A note is queued at once (no card
+        since 4.0.3), so there is nothing to wait for."""
         try:
-            res = _mail_send(from_conv, to_conv, body, _local_token())
+            return _mail_send(from_conv, to_conv, body, _local_token())
         except _MailRefused as exc:
             return {"status": "refused", "error": exc.message}
-        if res["status"] != "pending":
-            return res
-        deadline = time() + mailbox.CARD_WAIT_S
-        while time() < deadline:
-            await asyncio.sleep(0.5)
-            status = _mail_status(res["mail_id"], from_conv)
-            if status["status"] != mailbox.STATUS_PENDING:
-                return status
-        _mail_cancel(res["mail_id"], from_conv, "Onay süresi doldu.")
-        return {"status": "timeout", "mail_id": res["mail_id"], "to": to_conv}
 
     @router.get("/mailbox/chats")
     async def mailbox_chats(conversation_id: Optional[int] = None,

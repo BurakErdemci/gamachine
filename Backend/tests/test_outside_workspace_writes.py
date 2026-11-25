@@ -384,7 +384,7 @@ def test_local_admin_share_spellings_of_a_secret_are_refused(home):
     assert action_risk.gamachine_secret_target(plain) is None
 
 
-@pytest.mark.parametrize("current", ["auto", "step", "balanced"])
+@pytest.mark.parametrize("current", ["auto", "balanced"])
 def test_agy_secret_write_is_refused_in_every_mode(ws, home, current):
     import agy_step_gate as gate
     state = os.path.join(ws, ".agents", "state.json")

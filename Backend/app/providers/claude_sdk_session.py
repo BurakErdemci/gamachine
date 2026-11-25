@@ -482,8 +482,8 @@ def _path_in_workspace(path: str, workspace: str) -> bool:
     return is_within(path, workspace)
 
 
-# Yol tabanlı salt-okuma araçları: hedefleri workspace dışına düşebilir, o yüzden
-# adım modunda onay kartına tabidirler (aşağıdaki `_read_target_outside_workspace`).
+# Path-based read tools: their target may fall outside the workspace, so there
+# they are subject to the approval card outside auto (`_read_target_outside_workspace` below).
 # `TodoWrite`/`ToolSearch` bilerek YOK — onların bir dosya sistemi hedefi yok.
 # `WebFetch`/`WebSearch` de YOK: ağ yüzeyi ayrı bir sorun, bu turda kapsam dışı.
 _PATH_READ_TOOLS = {"Read", "Glob", "Grep", "LS", "NotebookRead"}
@@ -967,8 +967,9 @@ class ClaudeSDKSession:
         # Reasoning effort (Claude-only): "low"|"medium"|"high"|"xhigh"|"max".
         # connect-time'da --effort olarak verilir; oturum ortasında DEĞİŞTİRİLEMEZ.
         self.effort = effort
-        # Oto mod: True ise araç onayı kartı GÖSTERİLMEZ, otomatik izin verilir
-        # (path-traversal koruması yine uygulanır). Adım modunda False → her işlemde kart.
+        # Auto mode: True shows no tool approval card and allows (the
+        # path-traversal guard still applies). False in balanced, where
+        # approval_mode.needs_card decides per call.
         self.auto_approve = auto_approve
         # Varsayılan da güvenli tarafta: çağıran unutursa kapı yine düşmesin.
         self.setting_sources = setting_sources if setting_sources is not None else list(CLAUDE_SETTING_SOURCES)
@@ -1241,14 +1242,14 @@ class ClaudeSDKSession:
         # Yol tabanlı okuma araçları workspace DIŞINI hedefliyorsa auto-allow'dan
         # DÜŞÜRÜLÜR ve aşağıdaki normal onay kartı akışına girer.
         # Ölçüldü (2026-07-28): auto-allow dalı workspace kontrolünden ÖNCE geldiği
-        # için adım modunda Read("/etc/passwd"), Glob("/Users/**/*.key"), LS("/")
+        # için kartlı modda Read("/etc/passwd"), Glob("/Users/**/*.key"), LS("/")
         # kartsız izin alıyordu.
         # Neden hard-deny DEĞİL: workspace dışı okuma meşru olabilir (Unity kurulum
         # dizini, paket önbelleği, log). Reddetmek çalışan kullanımı kırardı; karar
         # kullanıcıya bırakılıyor.
-        # Neden yalnız adım modunda: oto modda workspace dışına çıkabilmek kullanıcının
-        # açıkça kabul ettiği bir taviz (28 Tem 2026 kararı) — orada kart çıkmaz.
-        # Balanced mode counts it as critical too (read_outside_workspace).
+        # Why not in auto: leaving the workspace there is a trade-off the user
+        # accepted (decision of 28 Jul 2026), so no card. Balanced counts it as
+        # critical (read_outside_workspace).
         _outside_read = (
             mode != "auto"
             and _read_target_outside_workspace(tool_name, input_data, self.cwd or "")
@@ -1284,9 +1285,9 @@ class ClaudeSDKSession:
             logger.warning(f"[ClaudeSDKSession:{self.conversation_id}] read-only session denied {tool_name}")
             return PermissionResultDeny(message="Yan sohbet salt okunur; bu araç reddedildi.")
 
-        # Chat mailbox tools: the backend raises its own card for a note in
-        # step mode, so a second card here would ask twice. After the
-        # read-only branch on purpose, unlike `_AUTO_ALLOW_TOOLS`.
+        # Chat mailbox tools: a note between chats is routine, and the
+        # backend applies its own limits to it. After the read-only branch on
+        # purpose, unlike `_AUTO_ALLOW_TOOLS`.
         if tool_name in _MAIL_TOOLS:
             return PermissionResultAllow(updated_input=input_data)
         # The computer-use backend owns approval cards and denies outside auto mode.
@@ -1345,7 +1346,7 @@ class ClaudeSDKSession:
         if not decision.card:
             return PermissionResultAllow(updated_input=input_data)
 
-        # Normal araç → onay kartı (adım modu)
+        # A call that needs a card -> approval card
         # gate'i emit'ten ÖNCE kaydet
         ev = register_gate(gate_id, self.conversation_id, tool=tool_name,
                            summary=_describe_tool(tool_name, input_data),

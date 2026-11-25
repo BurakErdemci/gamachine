@@ -116,7 +116,7 @@ def _chat_title_runners_never_spawn(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _approval_mode_starts_in_step():
+def _approval_mode_starts_in_balanced():
     # Module-level state: a test that switches to auto must not leak it.
     from agentic import approval_mode
     approval_mode._reset_for_tests()

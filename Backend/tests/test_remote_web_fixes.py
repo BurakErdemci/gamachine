@@ -366,7 +366,7 @@ async def test_remote_card_answer_sweeps_expired_cards(card_app):
     async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
         for gate in ("web-exp-1", "web-exp-2"):
             res = await client.post("/mcp-approval-request", json={
-                "gate_id": gate, "tool": "bash", "params": {"command": "ls"}, "workspace_path": ".",
+                "gate_id": gate, "tool": "bash", "params": {"command": "rm -rf build"}, "workspace_path": ".",
                 "conversation_id": None}, headers={"X-Session-Token": TOKEN})
             assert res.json()["status"] == "ok", res.text
         later = cr.time() + 180
@@ -393,7 +393,7 @@ async def test_remote_answer_to_a_desktop_closed_card_says_already_answered(card
     transport = httpx.ASGITransport(app=card_app.app)
     async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
         res = await client.post("/mcp-approval-request", json={
-            "gate_id": "web-won-1", "tool": "bash", "params": {"command": "ls"}, "workspace_path": ".",
+            "gate_id": "web-won-1", "tool": "bash", "params": {"command": "rm -rf build"}, "workspace_path": ".",
             "conversation_id": None}, headers={"X-Session-Token": TOKEN})
         assert res.json()["status"] == "ok", res.text
         await client.post("/mcp-approval-respond/web-won-1", json={"approved": True},
@@ -435,7 +435,7 @@ async def test_device_browser_approval_grants_the_one_time_retry(tmp_path, monke
                                      base_url="http://127.0.0.1", headers=headers) as client:
             await client.post("/browser/runtime", json={"running": True, "port": 4711, "token": "ab" * 32})
             conv = db.create_conversation(1, "h1")
-            with approval_policy.ambient_turn("", "step", conversation_id=conv):
+            with approval_policy.ambient_turn("", "balanced", conversation_id=conv):
                 first = (await client.post("/browser/command", json=body_for(conv))).json()
                 assert first.get("needs_approval") is True, first
                 gate = next(c["card_id"] for c in cards.list_pending(conv))
@@ -452,8 +452,9 @@ async def test_device_browser_approval_grants_the_one_time_retry(tmp_path, monke
 
 # ── Turn 4: resend, expiry after result retention, legacy RPC sweep ─────
 async def _request_gate(client, gate):
+    # A delete: critical, so balanced (the default here) opens the card.
     res = await client.post("/mcp-approval-request", json={
-        "gate_id": gate, "tool": "bash", "params": {"command": "ls"}, "workspace_path": ".",
+        "gate_id": gate, "tool": "bash", "params": {"command": "rm -rf build"}, "workspace_path": ".",
         "conversation_id": None}, headers={"X-Session-Token": TOKEN})
     assert res.json()["status"] == "ok", res.text
 

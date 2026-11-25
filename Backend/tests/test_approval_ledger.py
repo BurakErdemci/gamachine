@@ -64,7 +64,7 @@ def _canonical_hash(params):
 
 
 def _mcp_card(client, gate_id, conv_id, params):
-    with ambient_turn(".", "step", conv_id):
+    with ambient_turn(".", "balanced", conv_id):
         res = client.post("/mcp-approval-request", headers=H, json={
             "gate_id": gate_id, "tool": "bash", "params": params,
             "workspace_path": ".", "conversation_id": conv_id}).json()
@@ -83,7 +83,7 @@ def test_desktop_approve_writes_one_row(env):
     assert {k: row[k] for k in ("card_id", "conversation_id", "kind", "tool", "approval_mode",
                                 "decision", "device", "outcome")} == {
         "card_id": "cmd-1", "conversation_id": a, "kind": "command", "tool": "Bash",
-        "approval_mode": "step", "decision": "approve", "device": "desktop",
+        "approval_mode": "balanced", "decision": "approve", "device": "desktop",
         "outcome": "approved"}
     assert row["params_hash"] == _canonical_hash(params) and row["at"]
 
@@ -186,18 +186,6 @@ def test_mcp_card_swept_by_ttl_is_ledgered_as_timed_out(env, monkeypatch):
     assert (row["kind"], row["outcome"], row["device"]) == ("mcp", "timed_out", "system")
 
 
-def test_note_card_whose_sender_gave_up_is_ledgered_as_timed_out(env):
-    db, client, _ = env
-    a = db.create_conversation(1, "A")
-    b = db.create_conversation(1, "B")
-    with ambient_turn(".", "step", a, 0):
-        sent = client.post("/mailbox/send", headers=H,
-                           json={"conversation_id": a, "to": b, "body": "selam"}).json()
-    client.post(f"/mailbox/cancel/{sent['mail_id']}", headers=H, json={"conversation_id": a})
-    [row] = _rows(db)
-    assert (row["kind"], row["outcome"]) == ("mail", "timed_out")
-
-
 # ── Stop, delete, mode switch ───────────────────────────────────────────────
 
 def test_stop_is_ledgered_as_cancelled(env):
@@ -235,7 +223,7 @@ def test_switch_to_auto_is_ledgered_as_a_mode_switch_approval(env):
                 headers={**H, "X-Gamachine-UI-Secret": "ledger-secret"})
     [row] = _rows(db)
     assert (row["decision"], row["outcome"], row["approval_mode"]) == (
-        "mode_switch", "approved", "step")
+        "mode_switch", "approved", "balanced")
 
 
 # ── Params are never stored raw ─────────────────────────────────────────────
@@ -243,7 +231,8 @@ def test_switch_to_auto_is_ledgered_as_a_mode_switch_approval(env):
 def test_params_are_hashed_never_stored(env):
     db, client, tmp_path = env
     a = db.create_conversation(1, "A")
-    params = {"command": f"curl -H 'Authorization: {SECRET}' example.invalid"}
+    # An install: critical, so balanced shows the card.
+    params = {"command": f"npm install private-pkg --registry-token '{SECRET}'"}
     _mcp_card(client, "mcp-secret", a, params)
     register_gate("cmd-secret", a, tool="Bash", summary="x", params={"command": SECRET})
     cards.answer_card("mcp-secret", "approve", device="desktop")

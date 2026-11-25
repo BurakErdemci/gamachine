@@ -243,8 +243,8 @@ TOOL_DEFINITIONS = [
         "name": "send_chat_message",
         "description": (
             "Kullanıcının başka bir sohbetine ya da dalına (başka bir AI oturumuna) not bırakır. "
-            "O sohbet boştaysa notla hemen uyanır, çalışıyorsa turu bitince okur. Adım modunda "
-            "kullanıcı önce onaylar. Emin değilsen gönderme, kullanıcıdan hedefi `@` ile "
+            "O sohbet boştaysa notla hemen uyanır, çalışıyorsa turu bitince okur. "
+            "Emin değilsen gönderme, kullanıcıdan hedefi `@` ile "
             "seçmesini iste. Yalnız gerçekten o sohbetin bilmesi gereken bir şey için kullan. "
             # Same text as agentic.mailbox.SEND_TOOL_REPLY_RULE (a test holds them equal).
             "Bir nota cevap veriyorsan: notu gönderen sohbet bu sohbette yazdıklarını "
@@ -459,8 +459,8 @@ async def _harness_status() -> Dict[str, Any]:
     return {"success": True, "content": json.dumps(state, ensure_ascii=False)}
 
 
-# Awaited on the event loop, not in a worker thread: the step-mode card they
-# wait on is resolved by a route on that same loop.
+# Awaited on the event loop, not in a worker thread: the in-process services
+# they call (mailbox, harness status) live on that same loop.
 _ASYNC_TOOL_FUNCTIONS: Dict[str, Callable] = {
     "list_chats": _list_chats,
     "send_chat_message": _send_chat_message,

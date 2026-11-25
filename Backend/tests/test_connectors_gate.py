@@ -234,7 +234,7 @@ def test_balanced_routine_code_goes_through_without_a_card(env):
     assert cards.list_pending() == []
 
 
-@pytest.mark.parametrize("mode,code", [("balanced", CRITICAL), ("step", ROUTINE)])
+@pytest.mark.parametrize("mode,code", [("balanced", CRITICAL)])
 def test_carded_code_runs_once_the_user_approves(env, mode, code):
     set_mode(env, mode)
     thread, out = gate_in_background(env, code)
@@ -244,10 +244,7 @@ def test_carded_code_runs_once_the_user_approves(env, mode, code):
     params = entry["params"]
     assert params["code"] == code and params["truncated"] is False and params["mode"] == mode
     assert params["connector"] == "blender"
-    if mode == "balanced":
-        assert params["reason"] == "blender_code: system module (os)" == entry["risk_reason"]
-    else:
-        assert params["reason"] == ""
+    assert params["reason"] == "blender_code: system module (os)" == entry["risk_reason"]
     assert [c["card_id"] for c in cards.list_pending(1)] == [gate_id]
     answer(env, gate_id, True)
     assert finish(thread, out) == {"ok": True}
@@ -255,8 +252,8 @@ def test_carded_code_runs_once_the_user_approves(env, mode, code):
 
 
 def test_a_rejected_card_refuses_the_call(env):
-    set_mode(env, "step")
-    thread, out = gate_in_background(env, ROUTINE)
+    set_mode(env, "balanced")
+    thread, out = gate_in_background(env, CRITICAL)
     (gate_id, _), = wait_for_card(env).items()
     answer(env, gate_id, False)
     reply = finish(thread, out)
@@ -273,8 +270,8 @@ def test_an_unanswered_card_closes_and_refuses_the_call(env, monkeypatch):
 
 
 def test_stop_during_the_card_refuses_the_call(env):
-    set_mode(env, "step")
-    thread, out = gate_in_background(env, ROUTINE)
+    set_mode(env, "balanced")
+    thread, out = gate_in_background(env, CRITICAL)
     wait_for_card(env)
     assert env.client.post("/computer-use/halt/1", headers=UI).status_code == 200
     reply = finish(thread, out)
@@ -283,8 +280,8 @@ def test_stop_during_the_card_refuses_the_call(env):
 
 
 def test_long_code_is_capped_on_the_card_with_a_note(env):
-    set_mode(env, "step")
-    code = "x = 1\n" * 5000
+    set_mode(env, "balanced")
+    code = "x = 1\n" * 5000 + "import os\n"
     thread, out = gate_in_background(env, code)
     (gate_id, entry), = wait_for_card(env).items()
     params = entry["params"]
@@ -294,28 +291,36 @@ def test_long_code_is_capped_on_the_card_with_a_note(env):
     finish(thread, out)
 
 
-def test_switching_to_balanced_reclassifies_the_full_code(env):
-    set_mode(env, "step")
+def test_switching_to_balanced_reclassifies_the_full_code(env, monkeypatch):
+    # Cards raised under a stricter rule (as the removed step mode did) are
+    # judged again on a flip to balanced.
+    real = approval_mode.needs_card
+    monkeypatch.setattr(approval_mode, "needs_card",
+                        lambda action, mode=None: approval_mode.CardDecision(True, "balanced"))
+    set_mode(env, "balanced")
     # The critical line sits past the shown part: the full text decides, never the cap.
     code = "x = 1\n" * 5000 + "import os\n"
     thread, out = gate_in_background(env, code)
     (gate_id, _), = wait_for_card(env).items()
+    monkeypatch.setattr(approval_mode, "needs_card", real)
     set_mode(env, "balanced")
     entry = env.client.get("/mcp-pending").json()["pending"][gate_id]
     assert entry["risk_reason"] == "blender_code: system module (os)"
     answer(env, gate_id, False)
     finish(thread, out)
 
-    set_mode(env, "step")
+    monkeypatch.setattr(approval_mode, "needs_card",
+                        lambda action, mode=None: approval_mode.CardDecision(True, "balanced"))
     thread, out = gate_in_background(env, ROUTINE)
     wait_for_card(env)
+    monkeypatch.setattr(approval_mode, "needs_card", real)
     set_mode(env, "balanced")
     assert finish(thread, out) == {"ok": True}
 
 
 @pytest.mark.parametrize("tool", ["get_scene_info", "look", "get_addon_status"])
-def test_read_tools_never_ask_even_in_step_mode(env, tool):
-    set_mode(env, "step")
+def test_read_tools_never_ask_even_in_balanced(env, tool):
+    set_mode(env, "balanced")
     assert gate(env, tool, args={"code": CRITICAL}) == {"ok": True}
     env.answers = [True]
     assert open_(env)["ok"] is True
@@ -324,8 +329,8 @@ def test_read_tools_never_ask_even_in_step_mode(env, tool):
 
 @pytest.mark.parametrize("change", ["switch_off", "chat_deleted", "install_removed"])
 def test_an_approved_card_is_refused_when_the_gate_changed_while_it_was_open(env, change):
-    set_mode(env, "step")
-    thread, out = gate_in_background(env, ROUTINE)
+    set_mode(env, "balanced")
+    thread, out = gate_in_background(env, CRITICAL)
     (gate_id, _), = wait_for_card(env).items()
     if change == "switch_off":
         settings.set_enabled(env.db, "blender", False)

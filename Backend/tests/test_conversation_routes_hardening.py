@@ -90,7 +90,9 @@ class TestMcpGateLifecycle(unittest.TestCase):
         resp = client.post("/mcp-approval-request", json={
             "gate_id": gate_id,
             "tool": "bash",
-            "params": {"command": "echo ok"},
+            # A critical command: Safe Auto, the default with no UI secret,
+            # opens no card for a routine one such as "echo ok".
+            "params": {"command": "rm -rf build"},
             "workspace_path": os.getcwd(),
         })
         self.assertEqual(resp.json()["status"], "ok")

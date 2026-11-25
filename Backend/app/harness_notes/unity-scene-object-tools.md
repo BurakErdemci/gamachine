@@ -10,7 +10,7 @@ These Unity MCP tools work on what is open in the Editor. They exist only while 
 - manage_gameobject, manage_components (action set_property), manage_prefabs: create, modify, parent, delete, instantiate, unpack.
 - manage_editor: editor state, play mode, preferences, undo and redo; undo_action reverts one agent action by its action_id while it is still the latest undo step.
 - manage_camera: cameras including Cinemachine; manage_ui: UI Toolkit (UXML, USS, UIDocument).
-- manage_scene, find_gameobjects, manage_gameobject, manage_components and manage_prefabs first refresh a project changed outside the Editor, so in step mode every action of them opens a card, pure queries included; auto mode shows none (see approval-modes).
+- manage_scene, find_gameobjects, manage_gameobject, manage_components and manage_prefabs first refresh a project changed outside the Editor. In balanced mode only their critical actions (deletes, removes, moves, renames and the others the tool ledger marks critical) open a card; auto mode shows none (see approval-modes).
 - manage_ui is in the opt-in ui group, so it is listed only when that group is enabled or on /mcp/full.
 - Every mutating call is one named Unity undo step; file operations are not fully undoable.
 

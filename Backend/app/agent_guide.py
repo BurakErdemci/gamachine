@@ -236,19 +236,17 @@ assert EXECUTE_CODE_LINE_TR.startswith("- " + EXECUTE_CODE_GATED_TR)
 
 _MODE_NOTES = {
     "en": {"auto": "Approval mode now: auto (no approval cards).",
-           "balanced": "Approval mode now: balanced (only critical actions open an approval card).",
-           "step": "Approval mode now: step (every change opens an approval card)."},
+           "balanced": "Approval mode now: balanced (only critical actions open an approval card)."},
     "tr": {"auto": "Onay modu şu an: otomatik (onay kartı yok).",
-           "balanced": "Onay modu şu an: dengeli (yalnız kritik işlemler onay kartı açar).",
-           "step": "Onay modu şu an: adım adım (her değişiklik onay kartı açar)."},
+           "balanced": "Onay modu şu an: dengeli (yalnız kritik işlemler onay kartı açar)."},
 }
 
 
 def mode_note(language: str, mode: str, unity_tools: bool) -> str:
     """The approval mode as a note: stated once per session and again only when it changes.
-    An unknown mode reads as step, the cautious one."""
+    An unknown mode reads as balanced, the cautious one."""
     lang = "en" if language == "en" else "tr"
-    mode = mode if mode in ("auto", "balanced", "step") else "step"
+    mode = mode if mode in ("auto", "balanced") else "balanced"
     note = _MODE_NOTES[lang][mode]
     if unity_tools and mode != "auto":
         note += " " + (EXECUTE_CODE_GATED_EN if lang == "en" else EXECUTE_CODE_GATED_TR)

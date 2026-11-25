@@ -10,7 +10,7 @@ Providers fall into three groups: subscription CLI agents (Claude Code, Codex, A
 - Claude chats mount no unityai server: harness_* come from the gamachineHarness server (also in read-only sessions) and list_chats / send_chat_message from gamachineMail. agy side turns get no harness_* tools.
 - Unity MCP tools: API providers see them by their own names; CLI providers see mcp__unityMCP__<name>.
 - Computer use and browser tools: the API loop sees gm_computer__<tool> and gm_browser__<tool> (via stdio servers started per run); CLI providers use the gamachineComputer and gamachineBrowser MCP servers.
-- Writes: CLI providers show a diff card in step mode; API write_file does not, and in balanced mode asks only for a protected path (see approval-modes).
+- Writes: in balanced mode both CLI providers (diff card) and API write_file ask only for a critical write, such as a protected path (see approval-modes); auto mode asks for none.
 - Ollama cannot call tools for computer use and browser; other tool support depends on the model.
 
 Sources: docs/providers.md, docs/architecture.md, docs/computer-use-providers.md, Backend/app/agentic/stdio_toolset.py, Backend/app/unity_ai_mcp/server.py, Backend/app/unity_ai_mcp/harness_server.py, Backend/app/agentic/agent_runner.py (_run_claude_session), docs/security.md.

@@ -1,7 +1,7 @@
 """Every open approval / question card, across chats and kinds, behind one answer path.
 
 Kinds: `mcp` (unityai / Unity MCP bridge gates, `/mcp-approval-request`),
-`mail` (a note between chats in step mode), `command` (in-stream approval cards
+`mail` (a note between chats; history only since 4.0.3), `command` (in-stream approval cards
 of Claude, Codex and the API loops) and `question` (Claude's AskUserQuestion).
 
 `answer_card` is the only way a person's answer reaches a card, from the desktop

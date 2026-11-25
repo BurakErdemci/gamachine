@@ -1,10 +1,11 @@
 """The balanced approval mode ("Güvenli Otomatik" in the UI) at every approval point.
 
-Owner decision (Burak, 27 Sep 2026): a third global mode between step and
-auto. The AI works on its own and only actions action_risk calls critical
-raise the card; it is the fresh-install default and a saved mode is never
-migrated to it. These tests hold each approval point to that: routine passes
-with no card, critical raises exactly one card that carries its reason, and
+Owner decision (Burak, 27 Sep 2026): a global mode beside auto. The AI works
+on its own and only actions action_risk calls critical raise the card; it is
+the fresh-install default. Since 4.0.3 it is also where the removed "step"
+mode goes: a saved or sent "step" is balanced. These tests hold each approval
+point to that: routine passes with no card, critical raises exactly one card
+that carries its reason, and
 the refusals that come before the mode (side chat, deleted chat, the fixed
 Unity file rule) still come first.
 """
@@ -71,12 +72,12 @@ def test_fresh_install_with_a_ui_secret_is_balanced_and_nothing_is_stored():
     assert approval_mode.is_stored() is False and store.rows == {}
 
 
-def test_fresh_install_without_a_ui_secret_is_step():
+def test_fresh_install_without_a_ui_secret_is_balanced():
     approval_mode.bind_store(_Store())
-    assert approval_mode.current_mode() == "step"
+    assert approval_mode.current_mode() == "balanced"
 
 
-@pytest.mark.parametrize("stored", ["auto", "step", "balanced"])
+@pytest.mark.parametrize("stored", ["auto", "balanced"])
 def test_a_stored_mode_is_never_migrated(stored):
     store = _Store(stored)
     approval_mode.set_ui_secret(UI_SECRET)
@@ -85,26 +86,33 @@ def test_a_stored_mode_is_never_migrated(stored):
     assert store.rows == {"approval_mode": stored}
 
 
-def test_stored_balanced_reads_as_step_without_a_ui_secret():
-    """Like a stored auto: a no-secret process could never switch it."""
+def test_a_stored_step_is_migrated_to_balanced_once():
+    store = _Store("step")
+    approval_mode.set_ui_secret(UI_SECRET)
+    approval_mode.bind_store(store)
+    assert approval_mode.current_mode() == "balanced"
+    assert store.rows == {"approval_mode": "balanced"}
+
+
+def test_stored_balanced_stays_balanced_without_a_ui_secret():
     store = _Store("balanced")
     approval_mode.bind_store(store)
-    assert approval_mode.current_mode() == "step"
+    assert approval_mode.current_mode() == "balanced"
     assert store.rows == {"approval_mode": "balanced"}
 
 
 @pytest.mark.parametrize("value", ["plan", "Balanced", "balanced ", "", 7])
-def test_an_unknown_stored_value_is_step(value):
+def test_an_unknown_stored_value_is_balanced(value):
     approval_mode.set_ui_secret(UI_SECRET)
     approval_mode.bind_store(_Store(value))
-    assert approval_mode.current_mode() == "step"
+    assert approval_mode.current_mode() == "balanced"
 
 
 def test_set_mode_balanced_persists_and_survives_a_restart():
     store = _Store()
     approval_mode.set_ui_secret(UI_SECRET)
     approval_mode.bind_store(store)
-    approval_mode.set_mode("step", source="test")
+    approval_mode.set_mode("auto", source="test")
     approval_mode.set_mode("balanced", source="test")
     assert store.rows == {"approval_mode": "balanced"}
     approval_mode._reset_for_tests()
@@ -116,13 +124,17 @@ def test_set_mode_balanced_persists_and_survives_a_restart():
 def test_needs_card_per_mode():
     delete = {"kind": "file_delete", "paths": ["x"]}
     mail = {"kind": "mail"}
-    assert approval_mode.needs_card(mail, mode="step").card is True
     assert approval_mode.needs_card(delete, mode="auto").card is False
     assert approval_mode.needs_card(mail, mode="balanced").card is False
     decision = approval_mode.needs_card(delete, mode="balanced")
     assert decision.card is True and decision.reason == "file_delete"
-    # A mode this module does not know asks (fail closed).
-    assert approval_mode.needs_card(mail, mode="plan").card is True
+    # A mode this module does not know (the removed "step" included) is
+    # judged like balanced: the classifier decides, never "no card".
+    for unknown in ("plan", "step", ""):
+        assert approval_mode.needs_card(mail, mode=unknown).card is False
+        decision = approval_mode.needs_card(delete, mode=unknown)
+        assert decision == (True, "balanced", "file_delete", "x")
+        assert approval_mode.needs_card({"kind": "no_such_kind"}, mode=unknown).card is True
 
 
 def test_the_route_accepts_balanced_and_still_refuses_unknown_modes():
@@ -132,7 +144,7 @@ def test_the_route_accepts_balanced_and_still_refuses_unknown_modes():
                          headers={"X-Gamachine-UI-Secret": UI_SECRET})
         assert ok.status_code == 200 and ok.json()["mode"] == "balanced"
         assert client.get("/approval-mode").json()["mode"] == "balanced"
-        for bad in ("plan", "safe_auto", "BALANCED"):
+        for bad in ("plan", "safe_auto", "BALANCED", "Step", None, 7):
             resp = client.post("/approval-mode", json={"mode": bad},
                                headers={"X-Gamachine-UI-Secret": UI_SECRET})
             assert resp.status_code == 400
@@ -180,11 +192,6 @@ def test_critical_requests_raise_one_card_with_the_reason(balanced, ws, tool, pa
         client.post("/mcp-approval-respond/c-1", json={"approved": False})
 
 
-def test_step_cards_carry_no_reason(ws):
-    with _client() as client:
-        assert _request(client, "s-1", "manage_gameobject", {"action": "create"})["status"] == "ok"
-        assert "risk_reason" not in client.get("/mcp-pending").json()["pending"]["s-1"]
-        client.post("/mcp-approval-respond/s-1", json={"approved": False})
 
 
 def test_a_deleted_chat_is_refused_before_balanced_approves():
@@ -200,12 +207,18 @@ def test_a_deleted_chat_is_refused_before_balanced_approves():
 
 # ── switching modes ──────────────────────────────────────────────────────────
 
-def test_step_to_balanced_approves_routine_cards_and_keeps_critical_ones(ws):
+def test_a_flip_to_balanced_approves_routine_cards_and_keeps_critical_ones(ws, monkeypatch):
     approval_mode.set_ui_secret(UI_SECRET)
     with _client() as client:
+        # Cards a stricter rule raised (as the removed step mode did): the
+        # flip judges each pending card again.
+        real = approval_mode.needs_card
+        monkeypatch.setattr(approval_mode, "needs_card",
+                            lambda action, mode=None: approval_mode.CardDecision(True, "balanced"))
         assert _request(client, "routine", "manage_gameobject", {"action": "create"})["status"] == "ok"
         assert _request(client, "critical", "manage_gameobject", {"action": "delete"})["status"] == "ok"
         assert _request(client, "shell-ok", "bash", {"command": "git status"}, ws)["status"] == "ok"
+        monkeypatch.setattr(approval_mode, "needs_card", real)
 
         async def _in_process_gate():
             return register_gate("inproc-b", 7)
@@ -215,7 +228,7 @@ def test_step_to_balanced_approves_routine_cards_and_keeps_critical_ones(ws):
             resp = client.post("/approval-mode", json={"mode": "balanced"},
                                headers={"X-Gamachine-UI-Secret": UI_SECRET})
             assert resp.status_code == 200, resp.text
-            assert resp.json() == {"mode": "balanced", "previous": "step", "approved_pending": 2}
+            assert resp.json() == {"mode": "balanced", "previous": "balanced", "approved_pending": 2}
             pending = client.get("/mcp-pending").json()["pending"]
             assert list(pending) == ["critical"]
             assert pending["critical"]["risk_reason"] == "unity_critical_action"
@@ -275,18 +288,14 @@ def test_api_loop_card_event_carries_the_reason(balanced, ws):
         assert event.type == "command_approval_needed"
         assert event.data["risk_reason"] == "shell_installer"
         assert event.data["command"] == "npm install x"
-    # A later card (a step-mode one) does not inherit the reason.
-    approval_mode.set_mode("step", source="test")
+    # A later card carries its own reason, never the previous one's.
+    assert r._approval_prompt("read_file", {"file_path": "Assets/X.cs"}) is None
+    assert r._approval_risk is None
     text = r._approval_prompt("delete_file", {"file_path": "Assets/X.cs"})
     with r._approval_gate(text) as (event, _gid):
-        assert "risk_reason" not in event.data
+        assert event.data["risk_reason"] == "file_delete"
 
 
-def test_api_loop_step_mode_is_unchanged(ws):
-    r = _runner(ws)
-    assert r._approval_prompt("write_file", {"file_path": ".git/config", "content": "x"}) is None
-    assert r._approval_prompt("run_command", {"command": "npm test"}) == "npm test"
-    assert r._approval_prompt("delete_file", {"file_path": "Assets/X.cs"})
 
 
 @pytest.mark.parametrize("mode,interactive", [
@@ -505,13 +514,13 @@ def test_codex_bare_guard_keeps_shell_and_uses_permission_action(ws, command):
     assert approval_mode.needs_card_many(actions, mode="balanced").card is True
 
 
-@pytest.mark.parametrize("mode,expected", [("step", "decline"), ("auto", "accept")])
-async def test_codex_bare_refused_read_preserves_step_and_auto(ws, mode, expected):
+@pytest.mark.parametrize("mode,expected", [("balanced", "decline"), ("auto", "accept")])
+async def test_codex_bare_refused_read_in_balanced_and_auto(ws, mode, expected):
     approval_mode.set_mode(mode, source="test")
     decision, ev = await _codex_drive(_codex(ws), "item/commandExecution/requestApproval",
                                       {"command": "grep -R x Assets", "cwd": ws})
     assert decision == expected
-    if mode == "step":
+    if mode == "balanced":
         assert ev is not None and ev["type"] == "command_approval_needed"
     else:
         assert ev is None
@@ -639,7 +648,7 @@ async def test_codex_balanced_plain_read_runs_without_a_card(balanced, ws, comma
     '/bin/bash -lc \'"dotnet" build\'',
     _CODEX_PS + '\'"dotnet" build\'',
 ])
-@pytest.mark.parametrize("mode", ["balanced", "step"])
+@pytest.mark.parametrize("mode", ["balanced"])
 async def test_codex_wrapped_quoted_or_invoked_verb_asks(balanced, ws, command, mode):
     from providers.codex_session import _classified_command
 
@@ -811,7 +820,7 @@ LAUNCHER = "C:\\Gamachine\\unityai.cmd"
 def agy_ws(ws, tmp_path_factory, monkeypatch):
     import agy_step_gate as gate
     monkeypatch.setattr(gate.agy_native_approval, "request_native_write",
-                        lambda *args: (False, "native approval denied"))
+                        lambda *args, **kwargs: (False, "native approval denied"))
 
     agents = os.path.join(ws, ".agents")
     os.makedirs(agents)
@@ -825,7 +834,9 @@ def _decide(state, mode, payload, cwd):
     import agy_step_gate as gate
 
     gate.write_state(state, mode, LAUNCHER, workspace=cwd)
-    return gate.decide(json.dumps({"toolCall": payload}).encode(), state, windows=True, cwd=cwd)
+    # agy names its workspace in every hook payload (measured, agy 1.5.15).
+    raw = json.dumps({"toolCall": payload, "workspacePaths": [cwd]}).encode()
+    return gate.decide(raw, state, windows=True, cwd=cwd)
 
 
 def _run(command, cwd=None):
@@ -868,7 +879,11 @@ def test_agy_balanced_denies_critical_calls_and_points_to_the_bridge(agy_ws, pay
     ws, state = agy_ws
     out = _decide(state, "balanced", payload, ws)
     assert out["decision"] == "deny"
-    if payload["name"] == "write_to_file" and "Refused" not in out["reason"]:
+    if out["reason"].startswith("Refused"):
+        # The fixed Unity file rule: a relative path now resolves against the
+        # agy workspace (a Unity project here), so it sees ProjectSettings.
+        assert payload["name"] == "write_to_file"
+    elif payload["name"] == "write_to_file":
         assert "native approval" in out["reason"]
     else:
         assert "unityai" in out["reason"]
@@ -884,7 +899,7 @@ def test_agy_balanced_critical_write_obeys_native_approval(agy_ws, monkeypatch):
         monkeypatch.setattr(gate.agy_native_approval, "request_native_write", ask)
         out = _decide(state, "balanced", payload, ws)
         assert out["decision"] == ("allow" if approved else "deny")
-        ask.assert_called_once_with("write_to_file", payload["args"], ws)
+        ask.assert_called_once_with("write_to_file", payload["args"], ws, base=ws)
 
 
 def test_agy_balanced_routine_write_does_not_ask(agy_ws, monkeypatch):
@@ -898,16 +913,14 @@ def test_agy_balanced_routine_write_does_not_ask(agy_ws, monkeypatch):
 
 
 @pytest.mark.parametrize("payload", CRITICAL_AGY_CALLS)
-def test_agy_balanced_is_never_looser_than_step_for_critical_calls(agy_ws, payload):
+def test_agy_a_step_state_an_older_backend_left_denies_every_critical_call(agy_ws, payload):
     ws, state = agy_ws
     assert _decide(state, "step", payload, ws)["decision"] == "deny"
-    assert _decide(state, "balanced", payload, ws)["decision"] == "deny"
 
 
 def test_agy_balanced_still_allows_the_bridge_call_shapes(agy_ws):
     ws, state = agy_ws
     bridge = _run(f'& "{LAUNCHER}" bash --command "git status"')
-    assert _decide(state, "step", bridge, ws)["decision"] == "allow"
     assert _decide(state, "balanced", bridge, ws)["decision"] == "allow"
 
 

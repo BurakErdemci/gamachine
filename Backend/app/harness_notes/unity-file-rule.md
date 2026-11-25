@@ -7,7 +7,7 @@ Inside a Unity project (a folder with Assets/ and ProjectSettings/) agents may n
 
 - .meta files: no write, create, delete, move or rename. A lost or duplicated .meta breaks the asset GUID and every reference to it.
 - Unity YAML assets (.unity, .prefab, .asset, .mat, .controller, .anim, .physicMaterial ...): no raw-text write, and no raw delete or move.
-- This is a rule, not an approval card. It is checked before the approval mode, so auto, balanced and step all refuse. Outside a Unity project nothing is refused.
+- This is a rule, not an approval card. It is checked before the approval mode, so auto and balanced both refuse. Outside a Unity project nothing is refused.
 - What to use instead: the Unity MCP tools (manage_asset for move, rename and delete; manage_scene; manage_prefabs; manage_material ...). They make Unity write the file and move the .meta with it.
 - Shell commands are checked by a heuristic: direct forms are caught, indirect ones (variables, scripts, python -c) can slip through. execute_code and execute_menu_item cannot be checked.
 - The Unity MCP server refuses any call that would write a .meta file, before any card.

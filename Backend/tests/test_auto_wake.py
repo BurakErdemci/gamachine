@@ -356,7 +356,8 @@ def test_closing_a_claude_session_releases_its_pending_gate():
         )
         session._out_q = asyncio.Queue()
         bekleyen = asyncio.create_task(
-            session._can_use_tool("Bash", {"command": "echo probe"}, None)
+            # A delete: critical, so balanced asks for the card.
+            session._can_use_tool("Bash", {"command": "rm -rf probe"}, None)
         )
         olay = await asyncio.wait_for(session._out_q.get(), timeout=1.0)
         kapi["id"] = olay["gate_id"]
@@ -395,8 +396,9 @@ def test_stop_denies_only_the_stopping_conversations_mcp_gates():
 
     async def run_it():
         for gate_id, conv in zip(kapilar, (1, 2, None)):
+            # A delete: critical, so balanced opens each card.
             govde = {"gate_id": gate_id, "tool": "bash",
-                     "params": {"command": "echo x"}, "workspace_path": os.getcwd()}
+                     "params": {"command": "rm -rf x"}, "workspace_path": os.getcwd()}
             if conv is not None:
                 govde["conversation_id"] = conv
             assert (await istek.endpoint(body=govde, x_session_token="t"))["status"] == "ok"
@@ -405,7 +407,7 @@ def test_stop_denies_only_the_stopping_conversations_mcp_gates():
                 for gid in kapilar}
 
     try:
-        with ambient_turn(".", "step", 1), ambient_turn(".", "step", 2):
+        with ambient_turn(".", "balanced", 1), ambient_turn(".", "balanced", 2):
             sonuc = asyncio.run(run_it())
     finally:
         for gid in kapilar:

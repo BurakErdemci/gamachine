@@ -106,7 +106,7 @@ def test_status_has_live_fields_and_no_secrets(unity_stub):
     state = asyncio.run(harness_notes.status(context, tools=["read_file"]))
     assert state["provider"] == "anthropic" and state["model"] == "m"
     assert state["language"] == "tr" and state["read_only"] is False
-    assert state["approval_mode"] in ("auto", "balanced", "step")
+    assert state["approval_mode"] in ("auto", "balanced")
     assert state["unity_mcp"] == "connected"
     assert state["enabled_tools"] == ["read_file"]
     dumped = json.dumps(state)
@@ -293,7 +293,7 @@ def test_the_mcp_server_subcommand_starts_the_harness_server_with_its_flag(monke
     assert started == [("harness", "stdio"), ("unityai", "stdio")]
 
 
-@pytest.mark.parametrize("mode", ["auto", "balanced", "step"])
+@pytest.mark.parametrize("mode", ["auto", "balanced"])
 def test_claude_allows_the_harness_tools_in_read_only_and_still_denies_writes(monkeypatch, tmp_path, mode):
     import os
     from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny

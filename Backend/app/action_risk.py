@@ -17,7 +17,8 @@ commands are therefore judged by a list of dangerous forms (delete/move,
 network sends, installs, irreversible git, permissions, tool config paths,
 leaving the workspace, control characters); any other program inside the
 workspace is routine. Such a list was measured to be bypassable by spelling
-(5 of 11 PowerShell forms, 27 Sep 2026); step mode keeps the safe list.
+(5 of 11 PowerShell forms, 27 Sep 2026); the owner accepted that for
+balanced.
 
 The fixed Unity file rules (unity_file_guard: .meta files, raw writes to Unity
 YAML) run BEFORE this in every mode; nothing here relaxes them.
@@ -368,7 +369,7 @@ UNITY_PREFIX = "mcp__unityMCP__"
 
 
 # Owner decision (2 Nov 2026): these writes are critical in the shared ledger
-# (tool_actions.json, which step mode and the Unity server also read) but are
+# (tool_actions.json, which the Unity server also reads) but are
 # not destructive, so balanced runs them without a card. Deletes, removes,
 # moves, renames, code, packages, dialogs and Save As stay critical.
 _UNITY_BALANCED_ROUTINE = {
@@ -470,7 +471,7 @@ def _classify_unity_batch(bare: str, args: Mapping, depth: int) -> Risk:
 # (objects, materials, modifiers, single deletes, selections) runs with no card;
 # only code that reaches outside the scene asks. This reads the code, it does
 # not sandbox it: getattr on bpy objects with names the code builds at run time
-# can still hide intent, and the card in step mode is the stronger guard.
+# can still hide intent; auto mode runs every call with no card at all.
 _BLENDER_SYSTEM_MODULES = frozenset({
     "os", "sys", "subprocess", "shutil", "socket", "ctypes", "urllib", "http", "requests",
     "pathlib", "importlib", "multiprocessing", "threading", "webbrowser",
@@ -946,7 +947,7 @@ def classify_shell(command: Any, *, cwd: str = "", workspace: str = "", _depth: 
 # path, leaves the workspace, or chains with control characters; any other
 # program inside the workspace runs. This is a danger list, so it can be
 # bypassed by spelling (measured 27 Sep 2026); the owner accepted that for
-# balanced, and step mode keeps the safe list.
+# balanced.
 _WORDS = re.compile(r"[\s;|&(){}<>`,]+")
 _INNER_WORDS = re.compile(r"[\s;|&(){}<>`,\[\]=+:]+")
 _DELETE_MOVE = frozenset({

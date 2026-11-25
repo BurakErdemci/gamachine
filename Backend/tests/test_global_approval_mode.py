@@ -1,7 +1,7 @@
 """Global approval mode (closed-loop.md §5, P1 part A).
 
-Auto mode: no approval card anywhere, external MCP clients included. Step mode:
-cards exactly as before. Only the app UI (Electron main holding the UI secret)
+Auto mode: no approval card anywhere, external MCP clients included. Balanced
+(Safe Auto): a card for a critical action. Only the app UI (Electron main holding the UI secret)
 may flip the mode; LOCAL_APP_TOKEN alone, which the Unity MCP server and model
 children can read, must not be enough.
 """
@@ -30,8 +30,9 @@ def _client(db=None):
 
 
 def _request_card(client, gate_id, **extra):
+    # A delete: critical, so balanced (the default here) shows the card.
     body = {"gate_id": gate_id, "tool": "manage_gameobject",
-            "params": {"action": "create", "name": "Cube"}, "workspace_path": ""}
+            "params": {"action": "delete", "name": "Cube"}, "workspace_path": ""}
     body.update(extra)
     return client.post("/mcp-approval-request", json=body).json()
 
@@ -65,18 +66,18 @@ def test_auto_mode_approves_request_with_conversation_too():
         assert client.get("/mcp-pending").json()["pending"] == {}
 
 
-def test_step_mode_creates_a_card_as_before():
-    assert approval_mode.current_mode() == "step"
+def test_balanced_mode_creates_a_card_for_a_critical_request():
+    assert approval_mode.current_mode() == "balanced"
     with _client() as client:
-        result = _request_card(client, "ext-step")
-        assert result == {"status": "ok", "gate_id": "ext-step"}
-        assert "ext-step" in client.get("/mcp-pending").json()["pending"]
-        assert client.get("/mcp-approval-result/ext-step").json() == {"status": "pending"}
-        client.post("/mcp-approval-respond/ext-step", json={"approved": False})
+        result = _request_card(client, "ext-balanced")
+        assert result == {"status": "ok", "gate_id": "ext-balanced"}
+        assert "ext-balanced" in client.get("/mcp-pending").json()["pending"]
+        assert client.get("/mcp-approval-result/ext-balanced").json() == {"status": "pending"}
+        client.post("/mcp-approval-respond/ext-balanced", json={"approved": False})
 
 
-def test_running_auto_turn_no_longer_approves_in_step_mode():
-    """A turn that started in auto must not keep approving after a flip to step."""
+def test_running_auto_turn_no_longer_approves_in_balanced_mode():
+    """A turn that started in auto must not keep approving after a flip to balanced."""
     from agentic.approval_policy import ambient_turn
 
     with ambient_turn("/ws", "auto"), _client() as client:
@@ -112,12 +113,17 @@ def test_switching_to_auto_resolves_pending_cards_as_approved():
     assert approval_mode.current_mode() == "auto"
 
 
-def test_switching_to_step_leaves_pending_cards_alone():
+@pytest.mark.parametrize("sent", ["balanced", "step"])
+def test_switching_to_balanced_leaves_critical_cards_alone(sent):
+    # "step" is what a desktop from before 4.0.3 sends: applied as balanced.
     approval_mode.set_ui_secret(UI_SECRET)
+    approval_mode.set_mode("auto", source="test")
+    approval_mode.set_mode("balanced", source="test")
     with _client() as client:
         assert _request_card(client, "keep-1")["status"] == "ok"
-        resp = _flip(client, "step")
+        resp = _flip(client, sent)
         assert resp.status_code == 200
+        assert resp.json()["mode"] == "balanced"
         assert resp.json()["approved_pending"] == 0
         assert "keep-1" in client.get("/mcp-pending").json()["pending"]
         client.post("/mcp-approval-respond/keep-1", json={"approved": False})
@@ -134,8 +140,8 @@ def test_write_with_plain_local_app_token_is_refused(monkeypatch):
         assert resp.status_code == 403
         # Reads stay on the normal token.
         read = client.get("/approval-mode", headers={"X-Session-Token": "app-token"})
-        assert read.status_code == 200 and read.json()["mode"] == "step"
-    assert approval_mode.current_mode() == "step"
+        assert read.status_code == 200 and read.json()["mode"] == "balanced"
+    assert approval_mode.current_mode() == "balanced"
 
 
 def test_write_with_maintenance_header_is_refused_even_with_the_ui_secret(monkeypatch):
@@ -145,14 +151,14 @@ def test_write_with_maintenance_header_is_refused_even_with_the_ui_secret(monkey
         resp = _flip(client, "auto", **{"X-Session-Token": "app-token",
                                         "X-UnityAI-Maintenance": "app-token"})
         assert resp.status_code == 403
-    assert approval_mode.current_mode() == "step"
+    assert approval_mode.current_mode() == "balanced"
 
 
 def test_write_is_refused_when_no_ui_secret_was_configured():
     with _client() as client:
         assert _flip(client, "auto", secret="").status_code == 403
         assert _flip(client, "auto", secret="anything").status_code == 403
-    assert approval_mode.current_mode() == "step"
+    assert approval_mode.current_mode() == "balanced"
 
 
 def test_write_through_the_ipc_path_is_accepted(monkeypatch):
@@ -164,9 +170,10 @@ def test_write_through_the_ipc_path_is_accepted(monkeypatch):
         assert wrong_token.status_code == 401
         ok = _flip(client, "auto", **{"X-Session-Token": "app-token"})
         assert ok.status_code == 200
-        assert ok.json()["mode"] == "auto" and ok.json()["previous"] == "step"
+        assert ok.json()["mode"] == "auto" and ok.json()["previous"] == "balanced"
         bad_mode = _flip(client, "plan", **{"X-Session-Token": "app-token"})
         assert bad_mode.status_code == 400
+        assert bad_mode.json()["detail"] == "mode 'auto' ya da 'balanced' olmalı."
     assert approval_mode.current_mode() == "auto"
 
 
@@ -199,16 +206,20 @@ def test_mode_is_persisted_across_restarts(tmp_path):
     assert approval_mode.is_stored() is True
 
 
-def test_explicit_step_survives_a_restart_despite_the_balanced_default(tmp_path):
+def test_a_legacy_step_flip_is_saved_as_balanced_and_survives_a_restart(tmp_path):
     from database import DatabaseManager
 
     approval_mode.set_ui_secret(UI_SECRET)
+    db = DatabaseManager(db_path=str(tmp_path / "t.db"))
+    approval_mode.bind_store(db)
+    assert approval_mode.current_mode() == "balanced"
+    approval_mode.set_mode("auto", source="test")
+    approval_mode.set_mode("step", source="test")  # an old desktop
+    assert db.get_setting("approval_mode") == "balanced"
+    approval_mode._reset_for_tests()
+    approval_mode.set_ui_secret(UI_SECRET)
     approval_mode.bind_store(DatabaseManager(db_path=str(tmp_path / "t.db")))
     assert approval_mode.current_mode() == "balanced"
-    approval_mode.set_mode("step", source="test")
-    approval_mode._reset_for_tests()
-    approval_mode.bind_store(DatabaseManager(db_path=str(tmp_path / "t.db")))
-    assert approval_mode.current_mode() == "step"
     assert approval_mode.is_stored() is True
 
 
@@ -223,44 +234,44 @@ class _FreshStore:
         self.rows[key] = value
 
 
-def test_fresh_install_without_a_ui_secret_starts_in_step():
+def test_fresh_install_without_a_ui_secret_starts_in_balanced():
     """Docker backend / uvicorn reload worker: no secret, so auto could never be left."""
     store = _FreshStore()
     approval_mode.bind_store(store)
-    assert approval_mode.current_mode() == "step"
+    assert approval_mode.current_mode() == "balanced"
     assert approval_mode.is_stored() is False
     assert store.rows == {}
     with _client() as client:
-        assert client.get("/approval-mode").json() == {"mode": "step", "stored": False}
+        assert client.get("/approval-mode").json() == {"mode": "balanced", "stored": False}
 
 
 def test_fresh_install_default_follows_a_secret_read_after_bind():
     """Electron path: main binds the store at import, reads the stdin secret later."""
     approval_mode.bind_store(_FreshStore())
-    assert approval_mode.current_mode() == "step"
+    assert approval_mode.current_mode() == "balanced"
     approval_mode.set_ui_secret(UI_SECRET)
     assert approval_mode.current_mode() == "balanced"
     with _client() as client:
-        resp = _flip(client, "step")
+        resp = _flip(client, "auto")
         assert resp.status_code == 200
         assert resp.json()["previous"] == "balanced"
-    assert approval_mode.current_mode() == "step"
+    assert approval_mode.current_mode() == "auto"
 
 
-def test_stored_auto_reads_as_step_without_a_ui_secret():
+def test_stored_auto_reads_as_balanced_without_a_ui_secret():
     """Promoted from an external audit probe (2026-09-25): a no-secret process
     (Docker, uvicorn reload worker) whose database holds "auto" stayed in auto
     with no way to switch it off. The row is left for the app with a secret."""
     store = _FreshStore()
     store.rows["approval_mode"] = "auto"
     approval_mode.bind_store(store)
-    assert approval_mode.current_mode() == "step"
+    assert approval_mode.current_mode() == "balanced"
     assert approval_mode.is_stored() is True
     assert store.rows == {"approval_mode": "auto"}
     with _client() as client:
-        assert client.get("/approval-mode").json() == {"mode": "step", "stored": True}
+        assert client.get("/approval-mode").json() == {"mode": "balanced", "stored": True}
         assert _flip(client, "auto", secret="").status_code == 403
-    assert approval_mode.current_mode() == "step"
+    assert approval_mode.current_mode() == "balanced"
 
 
 def test_stored_auto_wins_once_a_ui_secret_is_configured():
@@ -271,13 +282,14 @@ def test_stored_auto_wins_once_a_ui_secret_is_configured():
     assert approval_mode.current_mode() == "auto"
 
 
-def test_stored_step_stays_step_either_way():
+def test_stored_step_reads_as_balanced_either_way():
     store = _FreshStore()
     store.rows["approval_mode"] = "step"
     approval_mode.bind_store(store)
-    assert approval_mode.current_mode() == "step"
+    assert approval_mode.current_mode() == "balanced"
+    assert store.rows == {"approval_mode": "balanced"}  # migrated once
     approval_mode.set_ui_secret(UI_SECRET)
-    assert approval_mode.current_mode() == "step"
+    assert approval_mode.current_mode() == "balanced"
 
 
 def test_real_main_picks_the_fresh_default_after_the_stdin_secret(tmp_path):
@@ -305,24 +317,26 @@ def test_real_main_picks_the_fresh_default_after_the_stdin_secret(tmp_path):
                           capture_output=True, text=True, timeout=120)
     assert done.returncode == 0, done.stderr
     lines = done.stdout.strip().splitlines()
-    assert "after-import step" in lines
+    assert "after-import balanced" in lines
     assert "after-stdin balanced False" in lines
 
 
-def test_tampered_stored_value_falls_to_step(tmp_path):
+def test_tampered_stored_value_falls_to_balanced(tmp_path):
     from database import DatabaseManager
 
     db = DatabaseManager(db_path=str(tmp_path / "t.db"))
     db.set_setting("approval_mode", "AUTO ")
+    approval_mode.set_ui_secret(UI_SECRET)
     approval_mode.bind_store(db)
-    assert approval_mode.current_mode() == "step"
+    assert approval_mode.current_mode() == "balanced"
 
 
-def test_unreadable_store_falls_to_step():
+def test_unreadable_store_falls_to_balanced():
     store = MagicMock()
     store.get_setting.side_effect = OSError("database is locked")
+    approval_mode.set_ui_secret(UI_SECRET)
     approval_mode.bind_store(store)
-    assert approval_mode.current_mode() == "step"
+    assert approval_mode.current_mode() == "balanced"
     assert approval_mode.is_stored() is False
 
 
@@ -346,8 +360,8 @@ def _chat_db():
     return db
 
 
-@pytest.mark.parametrize("global_mode,requested", [("step", "auto"), ("auto", "step"),
-                                                    ("balanced", "auto"), ("step", "balanced")])
+@pytest.mark.parametrize("global_mode,requested", [("balanced", "auto"), ("auto", "balanced"),
+                                                    ("auto", "step"), ("balanced", "step")])
 def test_chat_stream_uses_the_global_mode_not_the_request_field(global_mode, requested):
     approval_mode.set_mode(global_mode, source="test")
     seen = {}
@@ -388,7 +402,7 @@ def test_flip_updates_live_cli_sessions():
     claude_sdk_session._SESSIONS[91] = claude
     codex_session._SESSIONS[92] = codex
     try:
-        approval_mode.set_mode("step", source="test")
+        approval_mode.set_mode("balanced", source="test")
         assert claude.auto_approve is False and codex.auto_approve is False
         approval_mode.set_mode("auto", source="test")
         assert claude.auto_approve is True and codex.auto_approve is True

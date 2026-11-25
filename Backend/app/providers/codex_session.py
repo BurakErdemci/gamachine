@@ -357,7 +357,7 @@ _PLAIN_SCRIPT = re.compile(r'[A-Za-z0-9 _./\\:="-]*')
 # strips the curly quotes. Printable ASCII without a comma.
 _CLASSIFIABLE_SCRIPT = re.compile(r"[\x20-\x2b\x2d-\x7e]*")
 
-# Claude step mode lets Read/Glob/Grep/LS through without a card; these are
+# Claude's gate lets Read/Glob/Grep/LS through without a card; these are
 # the shell forms of the same reads. git/echo/diff are left out: they are
 # not reads of that kind (git diff/show can run a repo's diff drivers).
 _READ_VERBS = {
@@ -589,7 +589,7 @@ def _tree_writes(script: str) -> bool:
 
 def _is_read_only_command(command, cwd, workspace: str) -> bool:
     """True when a Codex command only lists, reads or searches inside the
-    workspace, so step mode treats it like Claude's Read/Glob/Grep/LS.
+    workspace, so the gate treats it like Claude's Read/Glob/Grep/LS.
 
     Anything unsure is False and goes to the mode as before. The script must
     parse under the read grammar (`_PS_READS` / `_POSIX_READS`); command_safety
@@ -871,7 +871,7 @@ def _thread_policy(read_only: bool) -> Dict[str, str]:
 
     "on-request" leaves asking to the model: a write just fails in the sandbox
     and reaches `_resolve_approval` only if the model retries with escalation,
-    so step mode showed no card (owner test). Measured 1 Oct 2026, codex-cli
+    so a gated mode showed no card (owner test). Measured 1 Oct 2026, codex-cli
     0.157.0, every request accepted: on-request+read-only wrote only after a
     model-chosen retry (A); untrusted+read-only asked, still ran sandboxed,
     failed and asked again, two cards per write (B); untrusted+workspace-write
@@ -1027,8 +1027,8 @@ class CodexSession:
             # kapısına HİÇ gelmiyor; bir LLM alt-ajanına ("guardian") gidiyor ve
             # o `{"outcome":"allow"}` diyerek yazımı onaylıyor.
             #
-            # Sahada üretildi: kullanıcı Adım Adım modunda dosya oluşturulduğunu
-            # gördü, hiçbir onay kartı çıkmadı. Tur kaydında guardian alt-ajanı
+            # Reproduced in the field: in a mode that asks for every write, the
+            # user saw a file created and no approval card. Tur kaydında guardian alt-ajanı
             # `approval_policy: "never"` ile koşmuş durumda.
             #
             # ⭐ Sınıfın şekli: ürünün güvenlik vaadi, ürünün KONTROL ETMEDİĞİ
@@ -1382,11 +1382,7 @@ class CodexSession:
                 # Auto turunda modelin yapılandırılmış soru aracıyla "devam edeyim
                 # mi?" diye beklemesini de engelle. Gerçek onaylar yukarıdaki
                 # requestApproval yollarından zaten otomatik kabul edilir.
-                from agentic import approval_mode
-                value = (
-                    "Proceed using your best judgment without asking for confirmation."
-                    if approval_mode.current_mode() in ("auto", "balanced") else ""
-                )
+                value = "Proceed using your best judgment without asking for confirmation."
                 await self._send({"id": rid, "result": {"value": value}})
             else:
                 # Bilinmeyen server-request: takılmamak için boş cevap (ör. token refresh)

@@ -228,19 +228,20 @@ async def test_config_requests_are_on_the_allow_list(env):
 
 async def test_get_config_reads_the_live_mode(env):
     phone = await pair_phone(env)
-    assert (await phone.request("get_config"))["result"]["approval_mode"] == "step"
-    approval_mode.set_mode("balanced", source="test")
     assert (await phone.request("get_config"))["result"]["approval_mode"] == "balanced"
+    approval_mode.set_mode("auto", source="test")
+    assert (await phone.request("get_config"))["result"]["approval_mode"] == "auto"
 
 
 async def test_set_approval_mode_needs_the_desktop_function(env):
     phone = await pair_phone(env)
     r = await phone.request("set_approval_mode", mode="auto")
     assert r["ok"] is False and r["error"] == "unavailable"
-    assert approval_mode.current_mode() == "step"
+    assert approval_mode.current_mode() == "balanced"
 
 
-@pytest.mark.parametrize("bad", [None, "", "plan", "AUTO", "auto ", 7, True, ["auto"], {"mode": "auto"}])
+@pytest.mark.parametrize("bad", [None, "", "plan", "AUTO", "auto ", "Step", 7, True, ["auto"],
+                                 {"mode": "auto"}])
 async def test_a_bad_mode_is_refused_before_anything_happens(env, bad):
     real_mode_path(env)
     phone = await pair_phone(env)
@@ -249,7 +250,7 @@ async def test_a_bad_mode_is_refused_before_anything_happens(env, bad):
         r = await phone.request("set_approval_mode", mode=bad)
         assert r["ok"] is False and r["error"] == "bad_mode", repr(bad)
         assert (await phone.request("set_approval_mode"))["error"] == "bad_mode"
-        assert approval_mode.current_mode() == "step" and q.empty()
+        assert approval_mode.current_mode() == "balanced" and q.empty()
     finally:
         CHANNEL.unlisten(q)
 
@@ -258,14 +259,32 @@ async def test_the_phone_sets_the_mode_through_the_shared_function(env, monkeypa
     real_mode_path(env)
     seen = spy_set_mode(monkeypatch)
     phone = await pair_phone(env)
-    r = await phone.request("set_approval_mode", mode="balanced")
+    r = await phone.request("set_approval_mode", mode="auto")
     assert r["ok"] is True
-    assert r["result"] == {"mode": "balanced", "previous": "step", "approved_pending": 0}
-    assert seen == [("balanced", "phone")]
+    assert r["result"] == {"mode": "auto", "previous": "balanced", "approved_pending": 0}
+    assert seen == [("auto", "phone")]
+    assert approval_mode.current_mode() == "auto"
+    r = await phone.request("set_approval_mode", mode="balanced")
+    assert r["result"] == {"mode": "balanced", "previous": "auto", "approved_pending": 0}
+    assert (await phone.request("get_config"))["result"]["approval_mode"] == "balanced"
+
+
+async def test_a_phone_from_before_4_0_3_that_sends_step_gets_balanced(env, monkeypatch):
+    real_mode_path(env)
+    seen = spy_set_mode(monkeypatch)
+    approval_mode.set_mode("auto", source="test")
+    phone = await pair_phone(env)
+    q = CHANNEL.listen()
+    try:
+        r = await phone.request("set_approval_mode", mode="step")
+        frame = q.get_nowait()
+    finally:
+        CHANNEL.unlisten(q)
+    assert r["ok"] is True
+    assert r["result"] == {"mode": "balanced", "previous": "auto", "approved_pending": 0}
+    assert seen[-1] == ("balanced", "phone")
+    assert (frame["type"], frame["mode"], frame["previous"]) == ("approval_mode_changed", "balanced", "auto")
     assert approval_mode.current_mode() == "balanced"
-    r = await phone.request("set_approval_mode", mode="step")
-    assert r["result"] == {"mode": "step", "previous": "balanced", "approved_pending": 0}
-    assert (await phone.request("get_config"))["result"]["approval_mode"] == "step"
 
 
 async def test_the_phones_choice_is_saved_like_the_desktops(env):
@@ -283,7 +302,7 @@ async def test_switching_to_auto_from_the_phone_approves_open_cards(env):
     register_gate("gate-a", conv, tool="git", summary="git push")
     register_gate("gate-b", conv, tool="git", summary="git commit")
     r = await phone.request("set_approval_mode", mode="auto")
-    assert r["result"] == {"mode": "auto", "previous": "step", "approved_pending": 2}
+    assert r["result"] == {"mode": "auto", "previous": "balanced", "approved_pending": 2}
     for gate in ("gate-a", "gate-b"):
         assert APPROVAL_GATES[gate].is_set() and APPROVAL_RESULTS[gate] is True
     assert cards.list_pending() == []
@@ -299,21 +318,21 @@ async def test_switching_to_balanced_keeps_the_cards_it_cannot_classify(env):
     assert not APPROVAL_GATES["gate-c"].is_set() and len(cards.list_pending()) == 1
 
 
-async def test_a_refused_step_switch_reports_why_and_changes_nothing(env, monkeypatch):
+async def test_a_refused_balanced_switch_reports_why_and_changes_nothing(env, monkeypatch):
     real_mode_path(env)
     approval_mode.set_mode("auto", source="test")
 
     def refuse(mode, source="ui"):
-        raise AgyStepGateError("Adım adım onay moduna geçilemedi (pid 4242).", code="agy_step_refused",
+        raise AgyStepGateError("Güvenli oto moduna geçilemedi (pid 4242).", code="agy_step_refused",
                                pids="4242")
 
     monkeypatch.setattr(approval_mode, "set_mode", refuse)
     phone = await pair_phone(env)
     q = CHANNEL.listen()
     try:
-        r = await phone.request("set_approval_mode", mode="step")
+        r = await phone.request("set_approval_mode", mode="balanced")
         assert r["ok"] is False and r["error"] == "agy_step_refused"
-        assert r["message"] == "Adım adım onay moduna geçilemedi (pid 4242)."
+        assert r["message"] == "Güvenli oto moduna geçilemedi (pid 4242)."
         assert r["params"] == {"pids": "4242"}
         assert q.empty(), "a refused switch is no news for the renderer"
     finally:
@@ -336,7 +355,7 @@ async def test_the_renderer_hears_about_a_phone_switch(env):
         CHANNEL.unlisten(q)
     at = frame.pop("at")
     assert isinstance(at, int) and abs(at - time.time() * 1000) < 60_000
-    assert frame == {"type": "approval_mode_changed", "mode": "auto", "previous": "step",
+    assert frame == {"type": "approval_mode_changed", "mode": "auto", "previous": "balanced",
                      "approved_pending": 1, "by": "phone:Burak'ın iPhone'u"}
 
 
@@ -362,9 +381,9 @@ async def test_the_phone_switches_without_the_ui_secret_but_the_route_still_dema
     phone = await pair_phone(env)
 
     refused = client.post("/approval-mode", json={"mode": "auto"})
-    assert refused.status_code == 403 and approval_mode.current_mode() == "step"
+    assert refused.status_code == 403 and approval_mode.current_mode() == "balanced"
     wrong = client.post("/approval-mode", json={"mode": "auto"}, headers={"X-Gamachine-UI-Secret": "guess"})
-    assert wrong.status_code == 403 and approval_mode.current_mode() == "step"
+    assert wrong.status_code == 403 and approval_mode.current_mode() == "balanced"
 
     r = await phone.request("set_approval_mode", mode="auto")
     assert r["ok"] is True and approval_mode.current_mode() == "auto"
@@ -384,13 +403,13 @@ async def test_route_and_phone_end_in_the_same_function(env, monkeypatch):
     via_route = client.post("/approval-mode", json={"mode": "auto", "source": "settings"},
                             headers={"X-Gamachine-UI-Secret": "ui-secret"})
     assert via_route.status_code == 200
-    assert via_route.json() == {"mode": "auto", "previous": "step", "approved_pending": 1}
+    assert via_route.json() == {"mode": "auto", "previous": "balanced", "approved_pending": 1}
 
-    await phone.request("set_approval_mode", mode="step")
+    await phone.request("set_approval_mode", mode="balanced")
     register_gate("gate-f", conv, tool="git", summary="git push")
     via_phone = await phone.request("set_approval_mode", mode="auto")
-    assert via_phone["result"] == {"mode": "auto", "previous": "step", "approved_pending": 1}
-    assert seen == [("auto", "settings"), ("step", "phone"), ("auto", "phone")]
+    assert via_phone["result"] == {"mode": "auto", "previous": "balanced", "approved_pending": 1}
+    assert seen == [("auto", "settings"), ("balanced", "phone"), ("auto", "phone")]
     assert APPROVAL_RESULTS["gate-e"] is True and APPROVAL_RESULTS["gate-f"] is True
 
 
@@ -404,7 +423,7 @@ async def test_the_route_answers_an_agy_refusal_as_before(env, monkeypatch):
     monkeypatch.setattr(approval_mode, "set_mode", refuse)
     app = FastAPI()
     app.include_router(router)
-    r = TestClient(app).post("/approval-mode", json={"mode": "step"}, headers={"X-Gamachine-UI-Secret": "ui-secret"})
+    r = TestClient(app).post("/approval-mode", json={"mode": "balanced"}, headers={"X-Gamachine-UI-Secret": "ui-secret"})
     assert r.status_code == 409
     assert r.json()["detail"] == {"code": "agy_step_refused", "message": "kapı kurulamadı", "pids": "9"}
 

@@ -30,7 +30,6 @@ from agentic.command_gates import register_gate as _register_gate, release_gate 
 from agentic.command_gates import mark_timed_out as _mark_timed_out
 
 from agentic.chat_model import subscription_family
-from agentic.command_safety import requires_approval as _is_dangerous_command
 from agentic.side_prompt import SideTurn, API_SYSTEM_CONTEXT as _SIDE_API_CONTEXT
 
 
@@ -1913,7 +1912,7 @@ class AgentRunner:
         self.thinking_level = thinking_level
         self.conversation_id = conversation_id
         self.images = images
-        self.generation_mode = generation_mode  # auto | plan | step
+        self.generation_mode = generation_mode  # auto | balanced
         # Claude-only (subscription + claude-* model): effort_level → --effort,
         # ultracode → mesaja keyword enjeksiyonu. Diğer sağlayıcılarda yok sayılır.
         self.effort_level = effort_level
@@ -1961,12 +1960,12 @@ class AgentRunner:
         language = getattr(self, "language", "tr")
         self._unity_note = agent_guide.unity_note(language, unity_state, scene) if toggle_on else ""
         mode = getattr(self, "generation_mode", None)
-        if mode not in ("auto", "balanced", "step"):
+        if mode not in ("auto", "balanced"):
             try:
                 from agentic import approval_mode
                 mode = approval_mode.current_mode()
             except Exception:
-                mode = "step"
+                mode = "balanced"
         self._mode_note = agent_guide.mode_note(language, mode, toggle_on)
         self._agent_guide = compose_agent_guide(
             language, project_open=bool(getattr(self, "workspace_path", None)),
@@ -2049,14 +2048,14 @@ class AgentRunner:
         yazımda onay istemek kullanıcıyı refleks-onaya alıştırır — bu kapıyı
         güçlendirmez, tamamen değersizleştirir. Silme ise seyrek ve geri alınamaz.
         A write OUTSIDE the workspace is the exception (owner decision, 4 Nov
-        2026): it gets the card in step mode too, and file_tools.write_file runs
-        it only for the one path this decision let through.
+        2026): it gets the card, and file_tools.write_file runs it only for the
+        one path this decision let through.
 
         Global auto mode shows no card on any path (owner decision, 25 Sep 2026).
-        Balanced mode (Burak, 27 Sep 2026) asks action_risk instead: a critical
-        command, any delete, and a write to a protected path (.git,
-        ProjectSettings, Packages/manifest.json, agent config ...) get a card,
-        so balanced cards a protected write_file that step lets through.
+        Balanced mode (Burak, 27 Sep 2026), and any mode this code does not
+        know, asks action_risk: a critical command, any delete, and a write
+        outside the workspace or to a protected path (.git, ProjectSettings,
+        Packages/manifest.json, agent config ...) get a card.
         Read live rather than from `self.generation_mode` so a flip bites on
         the very next call of a running turn.
         """
@@ -2076,22 +2075,7 @@ class AgentRunner:
         mode = approval_mode.current_mode()
         if mode == "auto":
             return None
-        if mode == "balanced":
-            return self._balanced_approval_prompt(tool_name, tool_args, mode)
-        if tool_name == "write_file" and _outside_write_target(tool_name, tool_args, self.workspace_path):
-            # Owner decision (4 Nov 2026): a write outside the workspace asks
-            # like an outside shell command does; inside writes stay cardless.
-            file_path = tool_args.get("file_path")
-            risk = action_risk.classify({"kind": "file_write", "paths": [file_path],
-                                         "workspace": self.workspace_path or ""})
-            self._approval_risk = (risk.reason, risk.detail)
-            return f"write_file {file_path}"
-        if tool_name == "run_command":
-            command = tool_args.get("command", "")
-            return command if _is_dangerous_command(command, self.workspace_path) else None
-        if tool_name == "delete_file":
-            return f"delete_file {tool_args.get('file_path', '?')}"
-        return None
+        return self._balanced_approval_prompt(tool_name, tool_args, mode)
 
     def _balanced_approval_prompt(self, tool_name: str, tool_args: dict, mode: str) -> str | None:
         from agentic import approval_mode
@@ -2108,8 +2092,7 @@ class AgentRunner:
                       "workspace": workspace}
             text = f"write_file {tool_args.get('file_path', '?')}"
         else:
-            # The tools step mode never asks about (reads, screenshot,
-            # mail) stay free here too.
+            # Reads, screenshot and mail never ask.
             return None
         decision = approval_mode.needs_card(action, mode=mode)
         if not decision.card:
@@ -2867,13 +2850,12 @@ class AgentRunner:
             prompt = f"{_PRODUCT_PROMPT}\n\n[BAĞLAM]\n{self.context}\n\n[KULLANICI]\n{user_message}"
 
             if self.provider_type == "subscription":
-                # Subscription ajanları için mod bilgisini ilet. Fail closed:
-                # every mode but auto (balanced, and any unknown value) is
-                # interactive; this used to test == 'step', so anything else
-                # ran like auto.
-                is_step_mode = (getattr(self, 'generation_mode', 'step') != 'auto')
+                # Pass the mode to subscription agents. Fail closed: every
+                # mode but auto (balanced, and any unknown value) is
+                # interactive.
+                interactive = (getattr(self, 'generation_mode', 'balanced') != 'auto')
                 full_text = ""
-                async for event in provider.analyze_code_with_thinking(prompt, thinking_level=self.thinking_level, cwd=self.workspace_path, interactive=is_step_mode):
+                async for event in provider.analyze_code_with_thinking(prompt, thinking_level=self.thinking_level, cwd=self.workspace_path, interactive=interactive):
                     if event["type"] == "tool_call":
                         yield AgentEvent("tool_call", {"tool": event["tool"], "summary": event["summary"]})
                     elif event["type"] == "thinking":
@@ -3803,8 +3785,7 @@ class AgentRunner:
         # rutin olanlar; kritik olan kartla sorulur). Bu kısa talimat
         # modelin ayrıca metin içinde "yapayım mı?" diye durmasını engeller.
         _auto_text = (_CODEX_AUTO_MODE_INSTRUCTION
-                      if self.generation_mode in ("auto", "balanced") and not getattr(self, "read_only", False)
-                      else "")
+                      if not getattr(self, "read_only", False) else "")
         _send_guide, _notes = _briefing.turn(
             _session_guide,
             () if _is_slash_command(user_message) else self._turn_notes(extra_mode=_auto_text))

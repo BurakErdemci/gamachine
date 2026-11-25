@@ -116,7 +116,8 @@ def approve(env, **kwargs):
 def request_gate(env, gate_id):
     return env.client.post("/mcp-approval-request", json={
         "gate_id": gate_id, "tool": "manage_gameobject", "conversation_id": 1,
-        "params": {"action": "create"}, "workspace_path": ""})
+        # A delete: critical, so balanced opens a card for it.
+        "params": {"action": "delete"}, "workspace_path": ""})
 
 
 def closure_var(fn, name):
@@ -132,14 +133,14 @@ def browser_store(router, name):
 def test_request_route_cannot_replace_an_open_browser_gate(live):
     assert command(live)["needs_approval"] is True
     gate_id = open_card()
-    approval_mode.set_mode("step", source="test")
+    approval_mode.set_mode("balanced", source="test")
     assert request_gate(live, gate_id).status_code == 409
     assert cards.is_open(gate_id)
     assert live.client.post(f"/mcp-approval-respond/{gate_id}", json={"approved": True}).status_code == 403
 
 
 def test_request_route_never_makes_browser_gates_or_reuses_ids(live):
-    approval_mode.set_mode("step", source="test")
+    approval_mode.set_mode("balanced", source="test")
     assert request_gate(live, "browser-abc").status_code == 409
     assert request_gate(live, "plain-1").status_code == 200
     assert request_gate(live, "plain-1").status_code == 409

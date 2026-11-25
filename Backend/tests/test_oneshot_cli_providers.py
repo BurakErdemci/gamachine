@@ -758,7 +758,7 @@ class TestOpenCodeApprovalPolicy(unittest.TestCase):
                 client.get("/mcp-pending").json()["pending"],
             )
 
-            approval_mode.set_mode("step", source="test")
+            approval_mode.set_mode("balanced", source="test")
             step = client.post("/mcp-approval-request", json={
                 "gate_id": "step-gate",
                 "tool": "run_terminal_command",
@@ -934,7 +934,8 @@ class TestOpenCodeApprovalPolicy(unittest.TestCase):
             pending = client.post("/mcp-approval-request", json={
                 "gate_id": "stop-gate",
                 "tool": "bash",
-                "params": {"command": "echo waiting"},
+                # A delete: critical, so balanced opens the card.
+                "params": {"command": "rm -rf waiting"},
                 "workspace_path": os.getcwd(),
             })
             self.assertEqual(pending.json()["status"], "ok")

@@ -220,12 +220,12 @@ def test_windows_style_parent_traversal_is_refused(windows_kipi):
 
 
 def test_single_source_of_truth_is_shared_by_all_call_sites():
-    """Üç çağrı yolu aynı fonksiyonu kullanmalı — sapma bu denetimin bulgusuydu."""
+    """The call sites must use the same function; drift was this audit's finding.
+    (The API loop's own copy went with the step mode in 4.0.3: its run_command
+    asks action_risk, see test_balanced_mode.)"""
     from unity_ai_mcp.tools.bash_tool import _is_safe as bash_gate
-    from agentic.agent_runner import _is_dangerous_command as runner_gate
 
     assert bash_gate is is_auto_safe
-    assert runner_gate is requires_approval
 
 
 # ── 2026-07-27 Codex denetiminin bulduğu iki delik ────────────────────────────
@@ -377,9 +377,9 @@ def test_drive_relative_path_needs_a_card_even_on_the_workspace_drive(workspace)
     "cat Env:LOCAL_APP_TOKEN", "ls HKCU:", "cat Cert:\\CurrentUser\\My",
     "cat notlar.txt:gizli", "cat \\\\?\\C:\\x",
 ])
-def test_step_mode_cards_powershell_provider_paths_too(command, workspace):
-    """Step mode shares this gate (auto-safe commands skip its card), so the
-    Codex safeauto provider fix (27 Sep 2026) closes it there as well."""
+def test_powershell_provider_paths_are_never_auto_safe(command, workspace):
+    """Every caller of this gate (auto-safe commands skip its card) gets the
+    Codex safeauto provider fix (27 Sep 2026)."""
     assert not is_auto_safe(command, workspace)
     assert not is_auto_safe(command, None)
     assert auto_safe_argv(command, workspace) is None

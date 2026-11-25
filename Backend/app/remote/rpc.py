@@ -408,9 +408,10 @@ class Dispatcher:
         # so skips the UI secret the local route demands. That secret guards
         # against the Unity MCP server and model-run children, which can read
         # the app token; this path is reachable only through the paired
-        # device's end-to-end session keys.
-        mode = req.get("mode")
-        if not isinstance(mode, str) or mode not in approval_mode.MODES:
+        # device's end-to-end session keys. A phone app from before 4.0.3 may
+        # still send "step": it is applied, and announced, as balanced.
+        mode = approval_mode.normalize_mode(req.get("mode"))
+        if mode is None:
             raise RpcError("bad_mode")
         apply = self.bridge.apply_approval_mode
         if apply is None:

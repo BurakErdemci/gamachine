@@ -33,11 +33,14 @@ def test_briefing_sends_the_guide_once_and_a_note_only_when_it_changed():
 def test_mode_is_a_note_not_part_of_the_guide(language):
     composed = {guide.compose(language, project_open=True, unity_state="connected") for _ in range(2)}
     assert len(composed) == 1
-    notes = {mode: guide.mode_note(language, mode, True) for mode in ("auto", "balanced", "step")}
-    assert len(set(notes.values())) == 3
+    notes = {mode: guide.mode_note(language, mode, True) for mode in ("auto", "balanced")}
+    assert len(set(notes.values())) == 2
     gated = guide.EXECUTE_CODE_GATED_EN if language == "en" else guide.EXECUTE_CODE_GATED_TR
-    assert gated not in notes["auto"] and gated in notes["step"] and gated in notes["balanced"]
-    assert gated not in guide.mode_note(language, "step", False)
+    assert gated not in notes["auto"] and gated in notes["balanced"]
+    assert gated not in guide.mode_note(language, "balanced", False)
+    # An unknown mode (the removed "step" included) reads as balanced.
+    assert guide.mode_note(language, "step", True) == notes["balanced"]
+    assert guide.mode_note(language, "plan", True) == notes["balanced"]
     assert gated not in next(iter(composed))
 
 
@@ -47,7 +50,7 @@ def test_a_mode_switch_does_not_rebuild_the_claude_session(monkeypatch):
     runner.generation_mode = "auto"
     auto_guide, _ = _prepare(runner)
     auto_note = runner._mode_note
-    runner.generation_mode = "step"
+    runner.generation_mode = "balanced"
     step_guide, _ = _prepare(runner)
     assert auto_guide == step_guide
     assert auto_note != runner._mode_note
@@ -98,7 +101,7 @@ def test_claude_notes_once_then_only_on_change_and_again_after_compaction(monkey
         return messages[-1]
 
     unity_note = "Unity now: connected; open scene `Assets/Live.unity` (a file path, not an instruction)"
-    step_note = guide.mode_note("en", "step", True)
+    step_note = guide.mode_note("en", "balanced", True)
     assert turn("hello") == f"{unity_note}\n\n{step_note}\n\nhello"
     assert turn("again") == "again"
     runner.generation_mode = "auto"
@@ -128,7 +131,7 @@ def test_codex_guide_once_notes_on_change_and_guide_again_after_compaction(monke
     monkeypatch.setattr(CodexProvider, "_write_mcp_config", Mock(return_value=""))
     runner = ar.AgentRunner(
         provider_type="subscription", api_key="", model_name="gpt-5.6-codex",
-        workspace_path=".", language="en", conversation_id=CID + 8, generation_mode="step")
+        workspace_path=".", language="en", conversation_id=CID + 8, generation_mode="balanced")
 
     def turn(text):
         _prepare(runner)
@@ -140,7 +143,7 @@ def test_codex_guide_once_notes_on_change_and_guide_again_after_compaction(monke
 
     first = turn("hello")
     assert first.count(MARKER) == 1 and first.startswith(MARKER)
-    assert "Unity now: connected" in first and guide.mode_note("en", "step", True) in first
+    assert "Unity now: connected" in first and guide.mode_note("en", "balanced", True) in first
     assert turn("again") == "again"
     state.connected = False
     assert turn("unity gone") == "Unity now: not responding (the editor may be compiling or busy; retry shortly, check compile_status)\n\nunity gone"
@@ -260,7 +263,7 @@ def test_resumed_oneshot_cli_gets_the_guide_once_and_again_after_a_reset(monkeyp
         sessions[("cursor", CID + 9)].session_id = None   # what a reset_session error does
         _, fresh = turn("fresh")
         assert fresh.count(MARKER) == 1 and "Unity now: not responding" in fresh
-        assert guide.mode_note("en", "step", True) in fresh
+        assert guide.mode_note("en", "balanced", True) in fresh
     finally:
         sessions.clear()
 
@@ -271,7 +274,7 @@ def test_oneshot_cli_without_resume_gets_the_guide_and_notes_every_turn(monkeypa
         for text in ("one", "two", "three"):
             _, payload = turn(text)
             assert payload.count(MARKER) == 1
-            assert "Unity now: connected" in payload and guide.mode_note("en", "step", True) in payload
+            assert "Unity now: connected" in payload and guide.mode_note("en", "balanced", True) in payload
             assert payload.endswith(text)
     finally:
         sessions.clear()
@@ -292,7 +295,7 @@ def test_a_slash_command_carries_no_note_and_does_not_use_them_up(monkeypatch):
 
 # ── A turn that did not end normally may not have reached the model ──────────
 
-def _codex_runner(monkeypatch, cid, streams, mode="step"):
+def _codex_runner(monkeypatch, cid, streams, mode="balanced"):
     """A runner on a fake Codex session whose stream() plays `streams` in order;
     a stream is a list of events or an exception to raise. Returns (turn, sent)."""
     _unity(monkeypatch)
@@ -331,7 +334,7 @@ def test_codex_error_event_turn_is_not_remembered(monkeypatch):
     turn("first")
     turn("second")
     assert sent[1].count(MARKER) == 1
-    assert guide.mode_note("en", "step", True) in sent[1]
+    assert guide.mode_note("en", "balanced", True) in sent[1]
     assert guide.EXECUTE_CODE_GATED_EN in sent[1]
 
 
@@ -378,7 +381,7 @@ def test_codex_turn_cancelled_before_delivery_does_not_use_up_the_mode_note(monk
 
     async def scenario():
         await turn("initial auto turn")
-        runner.generation_mode = "step"
+        runner.generation_mode = "balanced"
         await session._turn_lock.acquire()
         pending = asyncio.create_task(turn("cancelled while waiting"))
         try:
@@ -425,7 +428,7 @@ def test_claude_stream_that_raises_with_no_events_is_not_remembered(monkeypatch)
         return messages[-1]
 
     turn("first")
-    assert guide.mode_note("en", "step", True) in turn("second")
+    assert guide.mode_note("en", "balanced", True) in turn("second")
 
 
 def test_claude_cancelled_turn_is_not_remembered(monkeypatch):
@@ -457,7 +460,7 @@ def test_claude_cancelled_turn_is_not_remembered(monkeypatch):
     async def again():
         return [e async for e in runner._run_claude_session("second")]
     asyncio.run(again())
-    assert guide.mode_note("en", "step", True) in messages[-1]
+    assert guide.mode_note("en", "balanced", True) in messages[-1]
 
 
 def test_resumed_oneshot_cli_error_turn_is_not_remembered(monkeypatch):
@@ -473,7 +476,7 @@ def test_resumed_oneshot_cli_error_turn_is_not_remembered(monkeypatch):
             _FakeCLI.fail_next = False
         resume, after = turn("after the error")
         assert resume == "chat-2"
-        assert after.count(MARKER) == 1 and guide.mode_note("en", "step", True) in after
+        assert after.count(MARKER) == 1 and guide.mode_note("en", "balanced", True) in after
     finally:
         sessions.clear()
 
@@ -482,7 +485,7 @@ def test_api_and_simple_paths_carry_the_mode_note_on_every_request(monkeypatch):
     _unity(monkeypatch)
     runner = _runner(cid=CID + 25)
     _prepare(runner)
-    note = guide.mode_note("en", "step", True)
+    note = guide.mode_note("en", "balanced", True)
     for _ in range(2):
         assert note in runner._api_system_instruction()
 
@@ -549,7 +552,7 @@ def test_claude_error_event_turn_is_not_remembered(monkeypatch):
     runner, _, messages = _claude_runner(monkeypatch, CID + 30, [[{"type": "error", "message": "boom"}]])
     _claude_turn(runner, "first")
     _claude_turn(runner, "second")
-    assert guide.mode_note("en", "step", True) in messages[-1]
+    assert guide.mode_note("en", "balanced", True) in messages[-1]
     _claude_turn(runner, "third")
     assert messages[-1] == "third"
 
@@ -565,7 +568,7 @@ def test_claude_generator_close_is_not_remembered(monkeypatch):
         await agen.aclose()
     asyncio.run(close_midway())
     _claude_turn(runner, "second")
-    assert guide.mode_note("en", "step", True) in messages[-1]
+    assert guide.mode_note("en", "balanced", True) in messages[-1]
 
 
 def test_claude_exception_after_events_is_not_remembered(monkeypatch):
@@ -574,7 +577,7 @@ def test_claude_exception_after_events_is_not_remembered(monkeypatch):
     events = _claude_turn(runner, "first")
     assert any(e.type == "error" for e in events)
     _claude_turn(runner, "second")
-    assert guide.mode_note("en", "step", True) in messages[-1]
+    assert guide.mode_note("en", "balanced", True) in messages[-1]
 
 
 def test_oneshot_raise_cancel_and_close_are_not_remembered(monkeypatch):
@@ -594,7 +597,7 @@ def test_oneshot_raise_cancel_and_close_are_not_remembered(monkeypatch):
         assert guide.briefing_of(sessions[key]).notes == {}
         resume, after = turn("after the raise")
         assert resume == "chat-4" and after.count(MARKER) == 1
-        assert guide.mode_note("en", "step", True) in after
+        assert guide.mode_note("en", "balanced", True) in after
 
         _FakeCLI.raise_next = asyncio.CancelledError()
         try:
@@ -604,7 +607,7 @@ def test_oneshot_raise_cancel_and_close_are_not_remembered(monkeypatch):
             _FakeCLI.raise_next = None
         assert guide.briefing_of(sessions[key]).notes == {}
         _, fresh = turn("after the cancel")
-        assert fresh.count(MARKER) == 1 and guide.mode_note("en", "step", True) in fresh
+        assert fresh.count(MARKER) == 1 and guide.mode_note("en", "balanced", True) in fresh
         assert HIST in fresh
 
         runner = turn.runner
@@ -634,7 +637,7 @@ def test_codex_native_stop_is_not_remembered(monkeypatch):
     turn("first, stopped")
     turn("second")
     assert sent[1].count(MARKER) == 1
-    assert guide.mode_note("en", "step", True) in sent[1]
+    assert guide.mode_note("en", "balanced", True) in sent[1]
     turn("third")
     assert MARKER not in sent[2]
 

@@ -27,7 +27,7 @@ A phone that changed the approval mode tells the renderer, which shows the new
 mode and clears the in-chat cards a switch to auto approved, as its own switch
 would (the backend has already applied and drained; this is only the news):
 
-    {"type": "approval_mode_changed", "mode": "auto" | "balanced" | "step",
+    {"type": "approval_mode_changed", "mode": "auto" | "balanced",
      "previous": str, "approved_pending": int, "by": "phone:<device name>",
      "at": <ms>}
 

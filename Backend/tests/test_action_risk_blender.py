@@ -289,7 +289,9 @@ def test_classify_is_pure():
 
 @pytest.mark.parametrize("mode,code,card", [
     ("auto", "import os", False), ("balanced", "import os", True),
-    ("balanced", "import bpy\nbpy.ops.mesh.primitive_cube_add()", False), ("step", "x = 1", True),
+    ("balanced", "import bpy\nbpy.ops.mesh.primitive_cube_add()", False),
+    # The removed "step" mode is judged like balanced: scene-only code runs.
+    ("step", "x = 1", False), ("step", "import os", True),
 ])
 def test_needs_card_follows_the_mode(mode, code, card):
     assert approval_mode.needs_card({"kind": "blender_code", "code": code}, mode=mode).card is card

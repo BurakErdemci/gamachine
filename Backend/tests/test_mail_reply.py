@@ -140,12 +140,12 @@ def test_only_a_note_from_a_user_started_turn_expects_a_reply(env, auto):
                           (a, b, "merhaba", "queued", 2, 0, 0)]
 
 
-def test_a_note_waiting_on_its_card_keeps_expects_reply(env):
+def test_a_note_queued_at_once_keeps_expects_reply(env):
+    # No mode cards a note since 4.0.3: it is queued with its reply flag.
     a, b = _chat(env.db, "A"), _chat(env.db, "B")
     data = _send(env.client, a, b).json()
-    assert data["status"] == "pending"
+    assert data["status"] == "queued"
     assert _rows(env.db, "SELECT depth, expects_reply FROM mailbox") == [(1, 1)]
-    env.client.post(f"/mcp-approval-respond/{data['gate_id']}", json={"approved": False}, headers=H)
 
 
 # ── the forward ──────────────────────────────────────────────────────────────
@@ -214,15 +214,16 @@ def test_stop_pressed_during_the_turn_forwards_nothing(env, auto, runner):
     assert _mail(env, "from_conv = ?", (b,)) == []
 
 
-def test_step_mode_forwards_nothing(env, runner):
+@pytest.mark.parametrize("mode", ["balanced", "step"])
+def test_balanced_forwards_the_reply_without_a_card(env, runner, mode):
+    # The removed step mode forwarded nothing; an old client's "step" is balanced now.
+    approval_mode.set_mode(mode, source="test")
     a, b = _chat(env.db, "A"), _chat(env.db, "B")
-    # Queued as if its card had been approved.
     env.db.add_mail(a, b, "hangi renk?", mailbox.STATUS_QUEUED, None, 1, expects_reply=True)
     wake_queue.enqueue(b, mailbox.notice(a))
     runner.scripts[b] = _answers("Turkuaz")
     _wake(env, b)
-    assert _mail(env, "from_conv = ?", (b,)) == []
-    # No card either: a forward never raises one.
+    assert len(_mail(env, "from_conv = ?", (b,))) == 1
     assert env.client.get("/mcp-pending", headers=H).json()["pending"] == {}
 
 
