@@ -92,6 +92,10 @@ _LOCK = threading.Lock()
 _FUSE: Dict[int, int] = {}
 # Parents told (once per fuse trip) that results are waiting.
 _FUSE_NOTED: set = set()
+# Parents the user stopped: results wait for the user's next message.
+_PAUSED: set = set()
+# Child chats whose turns failed to open, in a row (the gate retries them).
+_OPEN_FAILS: Dict[int, int] = {}
 
 
 class SubagentError(Exception):
@@ -115,6 +119,8 @@ def configure(db: Any, *, stop_child: Optional[Callable[[int], Awaitable[None]]]
     with _LOCK:
         _FUSE.clear()
         _FUSE_NOTED.clear()
+        _PAUSED.clear()
+        _OPEN_FAILS.clear()
     from agentic import cards
     cards.set_tagger(card_tag)
     try:
@@ -321,6 +327,8 @@ def message(parent: int, agent_id: Any, text: Any) -> dict:
         except Exception:
             logger.exception("[subagents] child %s not resumed", child)
     _DB.set_subagent_status(row["id"], RUNNING)
+    with _LOCK:
+        _OPEN_FAILS.pop(child, None)  # the gate also starts its retries over
     status = turn_runner.start_background_turn(child, text.strip(), "user")
     if status == "queued":
         said = "is running; the message reaches it at its next turn boundary"
@@ -421,20 +429,34 @@ def max_message_id(conv_id: int) -> int:
 
 
 def child_turn_ended(child: int, reply: str, error: Optional[str], cancelled: bool,
-                     floor: int) -> None:
-    """Called by the router when a turn of a sub-agent chat ends. Never raises."""
+                     floor: int, open_failed: bool = False) -> None:
+    """Called by the router when a turn of a sub-agent chat ends. Never raises.
+    `open_failed`: the turn failed before it took its inputs (the gate
+    retries such a turn up to turn_runner.MAX_FAILED_OPENS times)."""
     try:
-        _child_turn_ended(child, reply, error, cancelled, floor)
+        _child_turn_ended(child, reply, error, cancelled, floor, open_failed)
     except Exception:
         logger.exception("[subagents] result of chat %s not delivered", child)
 
 
 def _child_turn_ended(child: int, reply: str, error: Optional[str], cancelled: bool,
-                      floor: int) -> None:
+                      floor: int, open_failed: bool = False) -> None:
     row = _DB.get_subagent_by_child(child)
     if row is None or row["status"] == STOPPED or cancelled:
         # A stop or a shutdown: nothing to report (a shutdown leaves it
         # `running`, which the next start marks interrupted).
+        return
+    with _LOCK:
+        fails = _OPEN_FAILS.pop(child, 0) + 1 if open_failed else 0
+        if open_failed and fails < turn_runner.MAX_FAILED_OPENS:
+            _OPEN_FAILS[child] = fails
+    if open_failed:
+        if fails < turn_runner.MAX_FAILED_OPENS:
+            return  # the gate retries it; only the last failure is reported
+        # The gate gave up: its inputs wait for the next agent_message.
+        body = f"error: the sub-agent's turn could not start ({(error or 'error').strip()})"
+        _DB.set_subagent_status(row["id"], ERROR, last_result=body)
+        _deliver({**row, "status": ERROR}, body)
         return
     text = (reply or "").strip() or _last_assistant_after(child, floor)
     if error:
@@ -465,8 +487,9 @@ def _deliver(row: dict, body: str) -> None:
     parent = row["parent_conv"]
     text = format_result(row, body)
     with _LOCK:
-        held = _FUSE.get(parent, 0) >= FUSE_LIMIT
-        first_hold = held and parent not in _FUSE_NOTED
+        paused = parent in _PAUSED
+        held = paused or _FUSE.get(parent, 0) >= FUSE_LIMIT
+        first_hold = held and not paused and parent not in _FUSE_NOTED
         if first_hold:
             _FUSE_NOTED.add(parent)
     if held:
@@ -478,7 +501,8 @@ def _deliver(row: dict, body: str) -> None:
                 "turns without a message from you; the next ones wait here and go to the AI "
                 "with your next message. / Alt ajan sonuçları art arda bu sohbeti "
                 f"{FUSE_LIMIT} kez yürüttü; sıradakiler bir sonraki mesajını bekliyor."))
-        logger.info("[subagents] parent %s fuse full: result of #%s held", parent, row["id"])
+        logger.info("[subagents] parent %s %s: result of #%s held", parent,
+                    "stopped" if paused else "fuse full", row["id"])
         return
     pending_before = _DB.count_turn_inputs(parent) > 0
     try:
@@ -498,10 +522,23 @@ def on_user_message(parent: int) -> None:
     with _LOCK:
         _FUSE.pop(parent, None)
         _FUSE_NOTED.discard(parent)
+        _PAUSED.discard(parent)
     if _DB is None:
         return
     for mid in _DB.take_held_results(parent):
         _DB.queue_turn_input(parent, mid, RESULT_ORIGIN)
+
+
+def pause_results(conv_id: int) -> None:
+    """The user's Stop in this chat: sub-agent results already queued for it
+    and those that arrive later are held until the user's next message, so
+    no turn starts on its own after a Stop."""
+    if _DB is None or is_child(conv_id):
+        return
+    with _LOCK:
+        _PAUSED.add(conv_id)
+    for mid in _DB.take_turn_inputs_of_origin(conv_id, RESULT_ORIGIN):
+        _DB.add_held_result(conv_id, mid)
 
 
 def fuse_count(parent: int) -> int:
@@ -547,3 +584,5 @@ def reset() -> None:
     with _LOCK:
         _FUSE.clear()
         _FUSE_NOTED.clear()
+        _PAUSED.clear()
+        _OPEN_FAILS.clear()

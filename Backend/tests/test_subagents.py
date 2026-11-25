@@ -554,3 +554,90 @@ async def test_results_are_kept_in_a_cli_handoff_transcript(env):
     text = cr._build_handoff_context("", msgs)
     assert "SUB-AGENT RESULT (your sub-agent, not the user)" in text
     assert "arka plan bildirimi" not in text
+
+
+# ── turn 2: audit blockers ───────────────────────────────────────────────────
+async def test_B1_a_child_runs_in_its_parents_folder_not_the_users_latest(env, tmp_path):
+    project_a, project_b = tmp_path / "project-a", tmp_path / "project-b"
+    for folder in (project_a, project_b):
+        folder.mkdir()
+    env.db.save_workspace(1, str(project_a))
+    parent = env.db.create_conversation(1, "Ana", workspace=str(project_a))
+    env.db.set_conversation_model(parent, "subscription", MAIN)
+    env.in_flight.add(parent)
+    env.db.save_workspace(1, str(project_b))   # the user opens another project
+    child = (await _start(env, parent))["chat_id"]
+    await _idle()
+    child_kw = next(k for k in _Runner.kwargs if k["conversation_id"] == child)
+    assert child_kw["workspace_path"] == str(project_a)
+
+
+async def test_B2_a_held_result_survives_compaction_and_rides_the_users_turn(env):
+    parent = _main(env)
+    for i in range(subagents.FUSE_LIMIT):
+        await _start(env, parent, name=f"a{i}")
+        await _idle()
+    held = await _start(env, parent, name="tutulan")
+    _Runner.replies[held["chat_id"]] = "TUTULAN SONUC"
+    await _idle()
+    assert env.db.compact_conversation(parent, "OZET", through_id=subagents.max_message_id(parent))
+    assert any("TUTULAN SONUC" in c for c in _results(env.db, parent))
+    await _http_turn(env, parent, "devam")
+    await _idle()
+    assert "TUTULAN SONUC" in _Runner.of(parent)[-1]
+
+
+async def test_B3_a_child_whose_turn_never_opens_ends_in_error_with_one_result(env, monkeypatch):
+    parent = _main(env)
+    real = cr.chat_model.turn_model
+    child_ids = set()
+
+    def turn_model(db, user_id, conv):
+        if conv in child_ids:
+            raise RuntimeError("config read failed")
+        return real(db, user_id, conv)
+
+    monkeypatch.setattr(cr.chat_model, "turn_model", turn_model)
+    row = env.db.create_subagent(parent, 1, "kırık", "subscription", CODEX, "auto", "running")
+    child_ids.add(row["child_conv"])
+    turn_runner.start_background_turn(row["child_conv"], "görev", "user")
+    await _idle()
+    assert env.db.get_subagent(row["id"])["status"] == "error"
+    (result,) = _results(env.db, parent)
+    assert ": error\n" in result and "could not start" in result
+    assert len(_Runner.of(parent)) == 1
+
+
+async def test_B4_after_the_users_stop_a_queued_result_starts_no_turn(env):
+    parent = _main(env)
+    child = (await _start(env, parent))["chat_id"]
+    _Runner.scripts[child] = ["hold", ("response", {"content": "GEC SONUC"}), DONE]
+    _Runner.scripts[parent] = ["hold", ("response", {"content": "ana"}), DONE]
+    await asyncio.sleep(0.02)
+    user = asyncio.create_task(_http_turn(env, parent, "kullanıcı turu"))
+    await asyncio.sleep(0.02)
+    _Runner.holds[child].set()
+    await _until(lambda: len(_results(env.db, parent)) == 1)
+    assert env.db.count_turn_inputs(parent) == 1          # queued behind the user's turn
+    await env.router.stop_chat(parent)
+    _Runner.holds[parent].set()
+    await user
+    await _idle()
+    assert _Runner.of(parent) == ["kullanıcı turu"]        # nothing started on its own
+    _Runner.scripts[parent] = None
+    await _http_turn(env, parent, "şimdi devam")
+    await _idle()
+    assert "GEC SONUC" in _Runner.of(parent)[-1]
+
+
+async def test_B5_the_phone_neither_lists_nor_opens_a_child_chat(env):
+    from remote import chats
+    parent = _main(env)
+    child = (await _start(env, parent))["chat_id"]
+    _Runner.scripts[child] = ["hang"]
+    await asyncio.sleep(0.02)
+    listed = {int(c["chat_id"]) for c in chats.list_chats(env.db)}
+    assert parent in listed and child not in listed
+    assert chats.chat_row(env.db, child) is None and chats.chat_row(env.db, parent) is not None
+    await env.router.stop_chat(parent)
+    await _idle()

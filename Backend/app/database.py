@@ -1067,6 +1067,26 @@ class DatabaseManager:
             conn.commit()
             return cur.rowcount
 
+    def get_conversation_workspace(self, conv_id: int) -> Optional[str]:
+        """The folder stored on the chat row (None if unset or no such chat)."""
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            row = conn.execute('SELECT workspace FROM conversations WHERE id = ?',
+                               (conv_id,)).fetchone()
+        return row[0] if row and row[0] else None
+
+    def take_turn_inputs_of_origin(self, conv_id: int, origin: str) -> List[int]:
+        """Remove the pending marks of one origin (their messages stay); their
+        message ids, oldest first."""
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute('BEGIN IMMEDIATE')
+            ids = [r[0] for r in conn.execute(
+                'SELECT message_id FROM turn_inputs WHERE conversation_id = ? AND origin = ? '
+                'ORDER BY id ASC', (conv_id, origin))]
+            conn.execute('DELETE FROM turn_inputs WHERE conversation_id = ? AND origin = ?',
+                         (conv_id, origin))
+            conn.commit()
+        return ids
+
     def add_held_result(self, parent_conv: int, message_id: int) -> None:
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute('INSERT OR IGNORE INTO subagent_held (message_id, parent_conv) '
@@ -1583,10 +1603,12 @@ class DatabaseManager:
             # An input still pending for a later turn (turn_inputs) is neither
             # summarised away nor overwritten: that turn has not answered it.
             # `keep_ids`: rows of turns still running or waiting (the caller's
-            # gate knows them; they have no pending mark).
+            # gate knows them; they have no pending mark). Sub-agent results
+            # the fuse holds (subagent_held) wait for the user's next turn too.
             keep = ''.join(f' AND id != {int(i)}' for i in keep_ids)
             pending = ('id NOT IN (SELECT message_id FROM turn_inputs '
-                       'WHERE conversation_id = ?)' + keep)
+                       'WHERE conversation_id = ?) '
+                       'AND id NOT IN (SELECT message_id FROM subagent_held)' + keep)
             if through_id is None:
                 boundary = conn.execute(
                     f'SELECT MAX(id) FROM messages WHERE conversation_id = ? AND {pending}',

@@ -2540,7 +2540,9 @@ Max 300 kelime. Türkçe yaz.
         finally:
             if ran or cancelled:
                 subagents.child_turn_ended(conv, reply.value(), errors[-1] if errors else None,
-                                           cancelled, floor)
+                                           cancelled, floor,
+                                           # Restored inputs: the gate retries it.
+                                           open_failed=turn.open_failed and not turn.claimed)
 
     turn_runner.set_executor(_background_turn, accept=_accept_input,
                              has_pending=_has_pending_inputs)
@@ -2750,6 +2752,10 @@ Max 300 kelime. Türkçe yaz.
             provider_type, model_name = chat_model.turn_model(db, user_id, turn.conversation_id)
             api_key = (db.get_api_key(user_id, provider_type) or "")
             workspace_path = db.get_last_workspace(user_id) or ""
+            if subagents.is_child(turn.conversation_id):
+                # A sub-agent works in the folder its parent had at start, not
+                # in whatever project the user opened since.
+                workspace_path = db.get_conversation_workspace(turn.conversation_id) or workspace_path
 
             # CLI'lar arası "kaldığı yerden devam": tam transcript (her iki rol). Yeni
             # provider'ın ilk turunda enjekte edilir (agent_runner switch'te session'ı resetler).
@@ -3178,6 +3184,12 @@ Max 300 kelime. Türkçe yaz.
     async def stop_chat(conversation_id: int) -> dict:
         """The desktop Stop, shared with the phone's `stop` (remote bridge)."""
         turn_events.note_stop(conversation_id)
+        # Sub-agent results queued for this chat must not start a turn after
+        # a Stop: they wait for the user's next message.
+        try:
+            subagents.pause_results(conversation_id)
+        except Exception:
+            logger.exception("[subagents] conv=%s queued results not held", conversation_id)
         # A side chat, a deleted chat or an id that never existed gets no user message to lift a halt,
         # and one stale id would halt every unowned computer-use batch; only an ordinary chat is halted.
         # A failed lookup is unknown: the halt fails closed (added, a user message lifts it) and the card rule
