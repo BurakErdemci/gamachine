@@ -220,6 +220,131 @@ class TestParallelTurns(_Harness):
         self.assertNotIn("written-by-chat-12.txt", error.get("changed_files") or [])
         self.assertNotIn("Files this turn changed", error["message"])
 
+    async def test_a_timed_out_turn_alone_in_its_workspace_claims_its_files(self):
+        # The other half of the audit fix (T-02): with no other chat in the
+        # workspace, the files are this turn's, under the plain label and in
+        # the changed_files field.
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as workspace:
+            subprocess.run(["git", "init", "-q", workspace], check=True, capture_output=True)
+            self.assertEqual(agy_session.workspace_state(workspace), {})
+            written = os.path.join(workspace, "written-by-chat-11.txt")
+            original_spawn = self.spawn
+
+            async def spawn(*argv, **kwargs):
+                child = await original_spawn(*argv, **kwargs)
+                drain = child.stdin.drain
+
+                async def drain_and_write():
+                    with open(written, "w", encoding="utf-8") as f:
+                        f.write("chat 11\n")
+                    await drain()
+
+                child.stdin.drain = drain_and_write
+                return child
+
+            release = asyncio.Event()
+            self.plans.append({"release": release})
+            try:
+                with (patch.object(BaseCLIProvider, "_AGY_MAX_TOTAL", 1.0),
+                      patch.object(agy_session.asyncio, "create_subprocess_exec", side_effect=spawn)):
+                    events = await asyncio.wait_for(self.collect(
+                        agy_session.get_session(11, cwd=workspace), cwd=workspace, language="en"), 5)
+            finally:
+                release.set()
+        error = events[-1]
+        self.assertEqual((error.get("code"), error.get("limit")), ("agy_turn_limit", "total"))
+        self.assertEqual(error.get("changed_files"), ["written-by-chat-11.txt"])
+        self.assertIn("Files this turn changed in the workspace", error["message"])
+        self.assertNotIn("another agy chat", error["message"])
+
+
+class _Unkillable:
+    """A closed child whose kill fails: it stays alive (returncode None)."""
+
+    def __init__(self):
+        self.pid = None
+        self.returncode = None
+
+
+class TestSyncLeavesARetiredChildsDenyingFile(unittest.TestCase):
+    """T-01 (audit, 24 Nov 2026): while a closed child that survived its kill
+    still runs, _sync_gate_state must not rewrite the state file: "closed" or
+    "side" there is all that denies that child its tools, and the published
+    mode (auto here) would hand them back."""
+
+    def setUp(self):
+        from agentic import approval_mode
+        from providers import agy_provider
+        self.tmp = tempfile.TemporaryDirectory()
+        home = self.tmp.name
+        real_expand = os.path.expanduser
+        self.home_patch = patch.object(
+            agy_provider.os.path, "expanduser",
+            side_effect=lambda p: p.replace("~", home, 1) if p.startswith("~") else real_expand(p))
+        self.home_patch.start()
+        agy_session._GATED_CHILDREN.clear()
+        agy_session._RETIRED.clear()
+        agy_session._SESSIONS.clear()
+        approval_mode.set_ui_secret("t01-secret")
+        approval_mode.set_mode("auto", source="test")  # no child yet: nothing written
+        self.child = _Unkillable()
+        self.token = object()
+
+        def end_tree(process, strict=False):
+            if process is self.child and process.returncode is None:
+                raise PermissionError("access denied")
+            process.returncode = -9
+
+        self.kill_patch = patch.object(agy_session.process_tree, "end_tree_sync", side_effect=end_tree)
+        self.kill_patch.start()
+
+    def tearDown(self):
+        self.kill_patch.stop()
+        agy_session._GATED_CHILDREN.clear()
+        agy_session._RETIRED.clear()
+        agy_session._SESSIONS.clear()
+        self.home_patch.stop()
+        self.tmp.cleanup()
+
+    def file_mode(self):
+        from providers import agy_provider
+        with open(agy_provider.gate_state_path(), encoding="utf-8") as f:
+            return json.load(f)["mode"]
+
+    def retire(self, state_mode):
+        from providers import agy_provider
+        if state_mode == "closed":
+            agy_provider.write_gate_state(closed=True)
+        else:
+            agy_provider.write_gate_state(mode=state_mode)
+        agy_session._GATED_CHILDREN[self.token] = self.child
+        agy_session._RETIRED.add(self.token)
+
+    def test_a_surviving_closed_child_keeps_its_file_through_a_resync(self):
+        for state_mode in ("closed", agy_session.SIDE_MODE):
+            with self.subTest(state_mode):
+                self.retire(state_mode)
+                self.assertTrue(agy_session._sync_gate_state())
+                self.assertEqual(self.file_mode(), state_mode)
+                agy_session._RETIRED.clear()
+                agy_session._GATED_CHILDREN.clear()
+
+    def test_once_the_child_is_stopped_the_file_follows_the_published_mode(self):
+        self.retire("closed")
+        self.assertTrue(agy_session._sync_gate_state())
+        self.assertEqual(self.file_mode(), "closed")
+        self.child.returncode = 0  # it exited after all
+        self.assertTrue(agy_session._sync_gate_state())
+        self.assertEqual(self.file_mode(), "auto")
+        self.assertEqual(agy_session._RETIRED, set())
+
+    def test_a_flip_to_balanced_does_not_loosen_it_either(self):
+        from agentic import approval_mode
+        self.retire("closed")
+        approval_mode.set_mode("balanced", source="test")
+        self.assertEqual(approval_mode.current_mode(), "balanced")
+        self.assertEqual(self.file_mode(), "closed")
+
 
 class TestRewordedTextsReachEnglishUsers(unittest.TestCase):
     def test_every_text_the_parallel_change_reworded_is_english_for_english_users(self):
