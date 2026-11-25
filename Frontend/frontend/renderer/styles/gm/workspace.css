@@ -77,6 +77,7 @@
 .workspace[data-tab="kod"] .ws-pane[data-pane="kod"],
 .workspace[data-tab="onizleme"] .ws-pane[data-pane="onizleme"],
 .workspace[data-tab="canli"] .ws-pane[data-pane="canli"] { display: flex; }
+.workspace[data-tab="yardimci"] .ws-pane[data-pane="yardimci"] { display: flex; }
 /* Canlı: a sub-tab bar over the shown sides; every shown side stays mounted, only one is laid out */
 .live-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .live-tabs { flex: none; display: flex; padding: 0 8px; border-bottom: var(--line-w) solid var(--paper-line); }
@@ -433,3 +434,17 @@ button.prob:hover { background: color-mix(in srgb, var(--term-text) 6%, transpar
   .workspace, .workspace *, .workspace *::before, .workspace *::after { animation: none !important; transition: none !important; }
 }
 :root[data-motion="reduced"] .workspace, :root[data-motion="reduced"] .workspace * { animation: none !important; transition: none !important; }
+
+/* 4.1.0 D2: a helper's conversation, read only, as a workspace tab */
+.ws-tab-helper { display: inline-flex; align-items: center; gap: 6px; }
+.helper-pane { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.ro-bar { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: var(--line-w) solid var(--paper-line);
+  font-size: var(--fs-meta); color: var(--ink-dim); background: var(--paper-raised); flex: none; }
+.ro-bar .ic { width: 14px; height: 14px; flex: none; }
+.ro-bar .grow { flex: 1; min-width: 0; }
+.ro-bar b { color: var(--ink); font-weight: 600; }
+.ro-stop { padding: 2px 10px; border-radius: var(--radius-sm); border: var(--line-w) solid var(--paper-line-strong); color: var(--ink); }
+.ro-stop:hover { background: var(--paper-sunk); }
+.helper-thread { flex: 1; min-height: 0; overflow-y: auto; }
+.helper-thread .thread-col { max-width: none; padding: 16px 18px 20px; }
+.helper-note { font-size: var(--fs-small); color: var(--ink-faint); }

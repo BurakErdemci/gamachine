@@ -47,3 +47,40 @@ export const MessageNotices: React.FC<{ notices?: MessageNotice[] }> = ({ notice
     </div>
   );
 };
+
+/**
+ * The fuse (INFO_DESIGN.md C3, D5): after ten automatic turns in a row the backend holds the chat
+ * and waits for the user. The one saturated element in the thread, because it waits for you:
+ * one sentence and one button. Continue allows ten more; writing a message steers instead.
+ */
+export const FuseNotice: React.FC<{ onContinue: () => Promise<boolean> }> = ({ onContinue }) => {
+  const { t } = useLang();
+  const [busy, setBusy] = React.useState(false);
+  const [failed, setFailed] = React.useState(false);
+  const go = async () => {
+    setBusy(true);
+    setFailed(false);
+    const ok = await onContinue().catch(() => false);
+    setBusy(false);
+    if (!ok) setFailed(true);
+  };
+  return (
+    <div className="notices">
+      <div className="notice is-fuse" data-kind="fuse" data-testid="fuse-notice" role="status">
+        <div className="notice-row">
+          <AlertTriangle size={14} className="notice-ic" aria-hidden="true" />
+          <div className="min-w-0">
+            <div className="notice-k">{t('helper.fuseTitle')}</div>
+            <div className="notice-msg">{t('helper.fuseMsg')}</div>
+            <div className="fuse-acts">
+              <button type="button" className="btn btn-primary btn-sm" data-testid="fuse-continue" disabled={busy} onClick={() => void go()}>
+                {t('helper.fuseContinue')}
+              </button>
+              <span className="hint">{failed ? t('helper.fuseFailed') : t('helper.fuseHint')}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};

@@ -52,6 +52,10 @@ import { CLI_GROUPS, activeProviderKey } from '../components/home/providerGroups
 import { useSideChat, sideQuote } from '../hooks/home/useSideChat';
 import { useAIConfig, connectUnityMcp } from '../hooks/home/useAIConfig';
 import { useMCPApproval } from '../hooks/home/useMCPApproval';
+import { useHelpers } from '../hooks/home/useHelpers';
+import { useTurnQueue } from '../hooks/home/useTurnQueue';
+import { HelperStrip } from '../components/home/HelperStrip';
+import { HelperPane, HelperTabLabel } from '../components/home/HelperPane';
 import { useChatNotifications } from '../hooks/home/useChatNotifications';
 import { useAutoScroll } from '../hooks/home/useAutoScroll';
 import { chatNavShortcutDirection, stepChatMessage, type ChatNavDirection } from '../lib/chatNav';
@@ -170,8 +174,11 @@ export default function Home() {
   // "idle" görünürken de araç çağırabiliyor. Kalan tek koşul token'ın kurulmuş
   // olması — o da izin değil, erişilebilirlik: yoklama `X-Session-Token`
   // istiyor ve `useAuth` onu IPC'den aldıktan sonra axios'a yazıyor.
+  // Helpers whose approval card is pending: their strip chip says "Needs you".
+  const [helperAskingIds, setHelperAskingIds] = useState<number[]>([]);
   const mcp = useMCPApproval({
     API,
+    onHelperAsking: setHelperAskingIds,
     // `!tokenError` de şart: token alınamadıysa elimizdeki `'local'` YANLIŞ ve
     // her yoklama 401 alacak. Bilinen bozuk bir kimlikle saniyede bir istek
     // atmak teşhisi zorlaştırmaktan başka bir şey yapmıyor; kullanıcı zaten
@@ -191,6 +198,25 @@ export default function Home() {
     screenConvId: chat.activeConvId,
     onOwnersChange: chat.setBridgeGates,
   });
+
+  // 4.1.0: the chat's helpers (sub-agents), polled only while one runs; re-read when a turn starts
+  // or ends and when a message lands, since that is when helpers start, finish or report.
+  const helpers = useHelpers({
+    API, conversationId: chat.activeConvId, token: auth.user?.sessionToken,
+    nudge: `${chat.activeConvId}:${chat.loading}:${chat.messages.length}`,
+  });
+  const helperAsking = useMemo(() => new Set(helperAskingIds), [helperAskingIds]);
+  // Shown once the fuse holds results back; Continue is the backend's to release them.
+  const fuseShown = !!helpers.fuse?.tripped && helpers.fuse.held > 0;
+  // The messages waiting for this chat's running turn, drawn in the thread (the tray is gone).
+  const turnQueue = useTurnQueue({
+    API, token: auth.user?.sessionToken, conversationId: chat.activeConvId, active: chat.loading,
+    local: chat.queue, removeLocal: chat.deleteQueued,
+  });
+  // One helper conversation at a time in the workspace (D2): a new one takes the tab's place.
+  const [openHelperId, setOpenHelperId] = useState<string | null>(null);
+  useEffect(() => { setOpenHelperId(null); }, [chat.activeConvId]);
+  const openHelper = helpers.helpers.find(h => h.agent_id === openHelperId) ?? null;
 
   // API URL'yi window'a set et — ChatPanel ve diğer bileşenler erişebilsin
   useEffect(() => { if (API) (window as any).__API__ = API; }, [API]);
@@ -420,9 +446,16 @@ export default function Home() {
   const liveAny = liveShown.bilgisayar || liveShown.tarayici;
   const liveView = viewSide(live.side, liveShown);
   // The Inspector and Canlı tabs exist only while their feature is on; the panel leaves them when they go.
+  // So does the helper tab once its helper is no longer this chat's.
   useEffect(() => {
-    if ((ws.tab === 'sahne' && !editorOn) || (ws.tab === 'canli' && !liveAny)) setWsTab('dosyalar');
-  }, [ws.tab, editorOn, liveAny, setWsTab]);
+    if ((ws.tab === 'sahne' && !editorOn) || (ws.tab === 'canli' && !liveAny) || (ws.tab === 'yardimci' && !openHelper)) setWsTab('dosyalar');
+  }, [ws.tab, editorOn, liveAny, openHelper, setWsTab]);
+  const showHelper = useCallback((ref: { agentId?: string; chatId?: number | null }) => {
+    const h = helpers.helpers.find(x => (ref.agentId != null ? x.agent_id === ref.agentId : x.chat_id === ref.chatId));
+    if (!h) return;
+    setOpenHelperId(h.agent_id);
+    wsReveal('yardimci');
+  }, [helpers.helpers, wsReveal]);
   const [hierarchyVisible, setHierarchyVisible] = useState(false);
   // The file change a card is waiting on, with that card's own Accept / Reject handlers.
   const pendingChange = usePendingChange();
@@ -1067,6 +1100,22 @@ export default function Home() {
     mcpGate: mcp.activeGate, mcpWorkspaceMismatch: mcp.gateWorkspaceMismatch,
     mcpOpenWorkspacePath: mcp.openWorkspacePath, onMcpResolved: mcp.resolveActiveGate,
     phonePaired,
+    queued: turnQueue.items, onRemoveQueued: turnQueue.remove,
+    queuePaused: chat.queuePaused, onResumeQueue: chat.resumeQueue,
+    helpers: helpers.helpers, onOpenHelper: showHelper,
+    fuse: fuseShown ? { onContinue: helpers.continueTurns } : null,
+    helperStrip: (
+      <HelperStrip
+        helpers={helpers.helpers}
+        fetchedAt={helpers.fetchedAt}
+        fuse={helpers.fuse}
+        asking={helperAsking}
+        openAgentId={ws.open && ws.tab === 'yardimci' ? openHelperId : null}
+        onOpen={h => showHelper({ agentId: h.agent_id })}
+        onStop={id => { void helpers.stop(id); }}
+        onStopAll={() => { void helpers.stopAll(); }}
+      />
+    ),
   };
   // Past the last message "next" is the jump-to-latest (re-arms auto-follow too).
   const stepMessage = (direction: ChatNavDirection) => stepChatMessage(threadRef.current, direction, () => {
@@ -1133,11 +1182,6 @@ export default function Home() {
       currentChatId={chat.activeConvId}
       pickersRef={composerPickers}
       onStop={chat.stopMessage}
-      queue={{
-        items: chat.queue, paused: chat.queuePaused,
-        onEdit: chat.editQueued, onDelete: chat.deleteQueued,
-        onSendNow: (id) => { void chat.sendQueuedNow(id); }, onResume: () => { chat.resumeQueue(); },
-      }}
       onCommand={(cmd) => {
         if (cmd === '/compact') { chat.compactConversation(); return true; }
         // "/rehber telefon": the guide opens searching "telefon"; nothing is sent.
@@ -1276,6 +1320,8 @@ export default function Home() {
       <Sidebar
         isSidebarOpen={isSidebarOpen}
         conversations={chat.conversations} activeConvId={chat.activeConvId} convStatus={chat.convStatus}
+        helperInfo={chat.activeConvId != null && (helpers.helpers.length > 0 || fuseShown)
+          ? { [chat.activeConvId]: { count: helpers.helpers.length, paused: fuseShown } } : undefined}
         // Picking a chat (even the one already open) or starting one leaves the profile.
         selectConversation={(...a: Parameters<typeof chat.selectConversation>) => { setProfileOpen(false); closeGuide(); return chat.selectConversation(...a); }}
         createNewConversation={(...a: Parameters<typeof chat.createNewConversation>) => { setProfileOpen(false); closeGuide(); return chat.createNewConversation(...a); }}
@@ -1472,6 +1518,7 @@ export default function Home() {
           width={ws.width}
           onWidth={ws.setWidth}
           onClose={() => setWsOpen(false)}
+          tabLabels={openHelper ? { yardimci: <HelperTabLabel helper={openHelper} /> } : undefined}
           panes={{
             ...(editorOn ? { sahne: <InspectorPane inspection={sceneEditor.inspection} loading={sceneEditor.inspectLoading}
               error={sceneEditor.inspectError} stale={sceneEditor.stale} actions={sceneEditor} /> } : {}),
@@ -1548,6 +1595,10 @@ export default function Home() {
                 computer={<ComputerLivePanel visible={ws.open && ws.tab === 'canli' && liveView === 'bilgisayar'} />}
                 browser={<BrowserPanel visible={ws.open && ws.tab === 'canli' && liveView === 'tarayici'} conversationId={chat.activeConvId} running={chat.loading} onStop={chat.stopMessage} onNeedChat={() => chat.createNewConversation()} full={browserFull.full} onToggleFull={browserFull.toggle} chatOpen={browserFull.chatOpen} onToggleChat={browserFull.toggleChat} />}
               />
+            ) } : {}),
+            ...(openHelper ? { yardimci: (
+              <HelperPane API={API} helper={openHelper} parentId={chat.activeConvId} asking={helperAsking}
+                fetchedAt={helpers.fetchedAt} onStop={id => { void helpers.stop(id); }} />
             ) } : {}),
           }}
           drawer={(

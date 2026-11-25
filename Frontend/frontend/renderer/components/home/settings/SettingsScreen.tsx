@@ -93,7 +93,7 @@ const SEARCH_KEYS: Record<SettingsPage, TKey[]> = {
   bilgisayar: ['set.nav.bilgisayar', 'cu.set.master', 'cu.set.ax', 'cu.set.screen', 'cu.set.driver', 'cu.set.apps'],
   tarayici: ['set.nav.tarayici', 'bp.set.master'],
   baglayicilar: ['set.nav.baglayicilar', 'conn.lede', 'conn.caps'],
-  ajan: ['set.nav.ajan', 'set.ajan.base', 'set.ajan.addendum'],
+  ajan: ['set.nav.ajan', 'set.ajan.tools', 'set.ajan.scriptTool', 'set.ajan.base', 'set.ajan.addendum'],
   uzak: ['set.nav.uzak', 'set.uzak.phones', 'set.uzak.pairNew', 'remote.relay', 'remote.keepAwake', 'remote.forget'],
   hesap: ['set.nav.hesap', 'set.hesap.logout', 'set.hesap.version', 'set.hesap.profile', 'set.hesap.reset'],
 };
@@ -253,7 +253,7 @@ export const SettingsScreen = (props: SettingsScreenProps) => {
           {page === 'bilgisayar' && <ComputerUsePage saved={saved} showToast={props.showToast} />}
           {page === 'tarayici' && <BrowserUsePage saved={saved} showToast={props.showToast} />}
           {page === 'baglayicilar' && <ConnectorsPage saved={saved} showToast={props.showToast} API={props.API} http={props.http} token={user?.sessionToken} />}
-          {page === 'ajan' && <AgentGuidePage lang={lang} API={props.API} http={props.http} token={user?.sessionToken} saved={saved} />}
+          {page === 'ajan' && <AgentGuidePage lang={lang} API={props.API} http={props.http} toolsHttp={props.http} token={user?.sessionToken} saved={saved} />}
           {page === 'uzak' && (
             <>
               <SetPageHead title={t('set.nav.uzak')} lede={t('remote.hint')} />

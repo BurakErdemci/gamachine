@@ -33,6 +33,11 @@ import { MessageNotices } from './MessageNotices';
 import { modelFamily } from '../../lib/modelFamily';
 import { invokeVia } from '../../hooks/home/useFileSystem';
 import { useBgTasks, type BgTask } from '../../hooks/home/useChat';
+import type { QueuedView } from '../../hooks/home/useTurnQueue';
+import type { Helper } from '../../hooks/home/useHelpers';
+import { QueuedMessages } from './QueuedMessages';
+import { HelperResultCard, isHelperFuse, isHelperResult, parseHelperResult } from './HelperResultCard';
+import { FuseNotice } from './MessageNotices';
 
 /**
  * hh:mm for a message's author line. The backend stores naive local "YYYY-MM-DD HH:MM:SS" (no
@@ -200,6 +205,20 @@ interface ChatPanelProps {
   conversations?: Conversation[];
   /** A phone is paired: pending cards say it can approve there too. */
   phonePaired?: boolean;
+  /** Messages waiting for the running turn, drawn in the flow (INFO_DESIGN.md C1). */
+  queued?: QueuedView[];
+  onRemoveQueued?: (item: QueuedView) => void;
+  /** The queue stopped after a failed turn: "Send next" starts it again. */
+  queuePaused?: boolean;
+  onResumeQueue?: () => void;
+  /** The helpers strip: first in the column so it can stay in view while the thread scrolls. */
+  helperStrip?: React.ReactNode;
+  /** The chat's helpers, for the result cards' model and time. */
+  helpers?: Helper[];
+  /** Opens a helper's read-only conversation in the workspace (by its id or its chat). */
+  onOpenHelper?: (ref: { agentId?: string; chatId?: number | null }) => void;
+  /** The fuse held this chat after too many automatic turns in a row. */
+  fuse?: { onContinue: () => Promise<boolean> } | null;
 }
 
 export const ChatPanel: React.FC<ChatPanelProps> = ({
@@ -243,6 +262,14 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   onMcpResolved,
   conversations,
   phonePaired,
+  queued,
+  onRemoveQueued,
+  queuePaused,
+  onResumeQueue,
+  helperStrip,
+  helpers,
+  onOpenHelper,
+  fuse,
 }) => {
   const { t } = useLang();
   const bgTasks = useBgTasks(activeConvId);
@@ -367,6 +394,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
   return (
     <div className="thread-col" data-testid="thread-col">
+        {helperStrip}
         {messages.map((msg, msgIdx) => {
           // /usage, /context → özel kart. Canlı turda mesaj etiketli gelir (slashCommand);
           // geçmişten yüklenende etiket yok → bir önceki kullanıcı mesajından tespit et.
@@ -399,7 +427,21 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
           const agent = msg.role === 'assistant' ? messageAgent(msg.provider, msg.model) : null;
           return (
           <React.Fragment key={msg.id}>
-            {isMailNote(msg) ? (() => {
+            {isHelperResult(msg) ? (
+              // A helper's result (backend subagents.format_result): its own card, then the
+              // "Started on its own" line when the parent went on because of it.
+              <HelperResultCard
+                content={msg.content}
+                helper={helpers?.find(h => h.agent_id === parseHelperResult(msg.content)?.agentId) ?? null}
+                startedTurn={messages[msgIdx + 1]?.role === 'assistant'}
+                onOpen={onOpenHelper ? agentId => onOpenHelper({ agentId }) : undefined}
+              />
+            ) : isHelperFuse(msg) ? (
+              <div className="msg-event is-wake" data-role="system" data-testid="helper-fuse-event">
+                <RefreshCw size={13} className="shrink-0" aria-hidden="true" />
+                <span className="msg-event-v">{t('helper.fuseEvent')}</span>
+              </div>
+            ) : isMailNote(msg) ? (() => {
               /* A note another chat's AI left here (backend agentic/mailbox.py).
                  Its own bubble: not the user's words (no blue bubble), and not
                  the muted wake row either, since the note is content the user
@@ -503,8 +545,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                   )}
 
                   {/* Tool Blocks (3'ten fazlaysa collapse grubu) */}
-                  <ToolGroup tools={msg.tool_calls} onOpenFile={openFile} />
-                  <ToolGroup tools={msg.tools} onOpenFile={openFile} />
+                  <ToolGroup tools={msg.tool_calls} onOpenFile={openFile} live={loading && msgIdx === messages.length - 1} />
+                  <ToolGroup tools={msg.tools} onOpenFile={openFile} live={loading && msgIdx === messages.length - 1} />
 
                   {/* Content or Loading Typing */}
                   {(msg.content === "" || !msg.content) && loading && msgIdx === messages.length - 1 ? (
@@ -709,6 +751,11 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         {/* Background tasks with no turn running: data, not a turn. */}
         {!loading && bgTasks.length > 0 && <BgTasksRow tasks={bgTasks} />}
 
+        {/* The queue's only place is the flow: dimmed bubbles, withdraw only (INFO_DESIGN.md C1). */}
+        {queued && queued.length > 0 && <QueuedMessages items={queued} onRemove={item => onRemoveQueued?.(item)} paused={!loading && queuePaused} onResume={onResumeQueue} />}
+
+        {fuse && <FuseNotice onContinue={fuse.onContinue} />}
+
         {/* MCP onay kartları — mesaj listesinin DIŞINDA, tek bileşende.
             Kartların markup'ı `McpApprovalCards`'ta duruyor çünkü aynı kartlar
             workspace seçilmemişken de (ChatPanel hiç mount olmadan) çizilmek
@@ -736,6 +783,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
           onOpenFile={openFile}
           setCode={setCode}
           phonePaired={phonePaired}
+          onOpenHelper={onOpenHelper}
         />
 
         <div ref={messagesEndRef} className="thread-end" aria-hidden="true" />

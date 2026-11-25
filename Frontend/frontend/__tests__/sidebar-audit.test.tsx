@@ -90,3 +90,20 @@ describe('rename input keeps its row in place', () => {
     expect(taskRow.className).toContain('chat-quest')
   })
 })
+
+// 4.1.0: the row of a chat with helpers says how many; a chat the fuse held reads "Paused"
+// and carries the same waiting mark as an approval.
+describe('helpers on the chat row', () => {
+  it('"Running · 3 helpers" under a running chat', () => {
+    render(<Sidebar {...props({ convStatus: { 2: 'running' }, helperInfo: { 2: { count: 3 } } })} />)
+    expect(screen.getByTestId('conv-sub-2').textContent).toMatch(/· 3 /)
+  })
+
+  it('a held chat is an active task that reads Paused, with the waiting mark', () => {
+    render(<Sidebar {...props({ helperInfo: { 2: { count: 12, paused: true } } })} />)
+    const row = screen.getByTestId('conv-row-2')
+    expect(row.className).toContain('chat-quest')
+    expect(screen.getByTestId('conv-sub-2').textContent).toMatch(/12/)
+    expect(row.querySelector('.badge')).toBeTruthy()
+  })
+})

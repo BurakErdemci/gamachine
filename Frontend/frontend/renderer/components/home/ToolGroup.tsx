@@ -3,6 +3,8 @@ import { ToolBlock, toolKind, toolTarget, type ToolKind } from './ToolBlock';
 import { useLang } from '../../lib/i18n';
 import { stripBidi } from '../../lib/modelText';
 import { userStopped } from '../../lib/computerStep';
+import { isScriptTool } from '../../lib/scriptReply';
+import { ScriptBlock } from './ScriptBlock';
 
 interface ToolItem { tool: string; args?: any; summary?: string; success?: boolean; output?: string; id?: string; }
 
@@ -47,7 +49,31 @@ export function summarizeTools(tools: ToolItem[]): ToolSummaryPart[] {
  * into the step list (each step still opens its parameters and output). "Details" opens the last
  * file the turn wrote (or read) in the workspace, when its path can be opened as is.
  */
-export const ToolGroup = ({ tools, onOpenFile }: { tools?: ToolItem[]; onOpenFile?: (path: string) => void }) => {
+export const ToolGroup = ({ tools, onOpenFile, live }: {
+  tools?: ToolItem[]; onOpenFile?: (path: string) => void;
+  /** The turn is still streaming: a script call without a result is running, not lost. */
+  live?: boolean;
+}) => {
+  if (!tools || tools.length === 0) return null;
+  if (!tools.some(tc => isScriptTool(tc.tool))) return <ToolRow tools={tools} onOpenFile={onOpenFile} />;
+  // A script is its own row (INFO_DESIGN.md A): the steps around it keep their summary rows,
+  // in the order they ran.
+  const segments: (ToolItem | ToolItem[])[] = [];
+  for (const tc of tools) {
+    const last = segments[segments.length - 1];
+    if (isScriptTool(tc.tool)) segments.push(tc);
+    else if (Array.isArray(last)) last.push(tc);
+    else segments.push([tc]);
+  }
+  return <>
+    {segments.map((seg, i) => Array.isArray(seg)
+      ? <ToolRow key={i} tools={seg} onOpenFile={onOpenFile} />
+      : <ScriptBlock key={seg.id || i} args={seg.args} output={seg.output} success={seg.success}
+          live={live} onOpenFile={onOpenFile} />)}
+  </>;
+};
+
+const ToolRow = ({ tools, onOpenFile }: { tools?: ToolItem[]; onOpenFile?: (path: string) => void }) => {
   const { t } = useLang();
   if (!tools || tools.length === 0) return null;
   const parts = summarizeTools(tools);

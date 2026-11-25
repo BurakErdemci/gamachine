@@ -16,10 +16,10 @@ const WIDTH_ICON: Record<WsWidth, React.ReactNode> = {
 };
 const X_ICON = <path d="M5.5 5.5l9 9M14.5 5.5l-9 9" />;
 
-const TAB_KEY: Record<WsTab, TKey> = { sahne: 'ws.tabInspector', dosyalar: 'ws.tabFiles', kod: 'ws.tabCode', onizleme: 'ws.tabPreview', canli: 'ws.tabLive' };
+const TAB_KEY: Record<WsTab, TKey> = { sahne: 'ws.tabInspector', dosyalar: 'ws.tabFiles', kod: 'ws.tabCode', onizleme: 'ws.tabPreview', canli: 'ws.tabLive', yardimci: 'ws.tabHelper' };
 // Guide anchors on the panes (lib/guide/anchors.ts). The file tree is anchored here, not in
 // FileTree, because the sidebar's Files tab draws the same tree and the guide means this one.
-const PANE_ANCHOR: Record<WsTab, string | undefined> = { sahne: undefined, dosyalar: 'file-tree', kod: 'ws-code', onizleme: 'ws-preview', canli: undefined };
+const PANE_ANCHOR: Record<WsTab, string | undefined> = { sahne: undefined, dosyalar: 'file-tree', kod: 'ws-code', onizleme: 'ws-preview', canli: undefined, yardimci: undefined };
 const WIDTH_KEY: Record<WsWidth, TKey> = { dar: 'ws.widthNarrow', yarim: 'ws.widthHalf', odak: 'ws.widthFocus' };
 
 interface WorkspaceProps<T extends WsTab> {
@@ -36,6 +36,8 @@ interface WorkspaceProps<T extends WsTab> {
   panes: { [K in T]?: React.ReactNode };
   /** The terminal drawer under the panes. */
   drawer: React.ReactNode;
+  /** A tab's own label instead of the fixed one (the helper tab carries the helper's name). */
+  tabLabels?: { [K in T]?: React.ReactNode };
 }
 
 /**
@@ -43,7 +45,7 @@ interface WorkspaceProps<T extends WsTab> {
  * tabs, one pane at a time, the terminal drawer at the foot. State lives in home.tsx
  * (useWorkspacePanel), so the chat can open things here.
  */
-export function Workspace<T extends WsTab = WsTab>({ open, tab, onTab, width, onWidth, onClose, panes, drawer, editorOn = false }: WorkspaceProps<T>) {
+export function Workspace<T extends WsTab = WsTab>({ open, tab, onTab, width, onWidth, onClose, panes, drawer, editorOn = false, tabLabels }: WorkspaceProps<T>) {
   const { t } = useLang();
   // A tab is drawn only when its pane is supplied: the Inspector and Canlı panes exist only
   // while the scene editor or a live feature is on.
@@ -117,7 +119,7 @@ export function Workspace<T extends WsTab = WsTab>({ open, tab, onTab, width, on
             tabIndex={tab === id ? 0 : -1}
             onClick={() => onTab(id)}
           >
-            {t(TAB_KEY[id])}
+            {tabLabels?.[id] ?? t(TAB_KEY[id])}
             {id === 'kod' && <span className="ws-tab-mark" role="img" aria-label={t('ws.pendingMark')} />}
           </button>
         ))}

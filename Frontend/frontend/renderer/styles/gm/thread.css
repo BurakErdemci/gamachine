@@ -1190,3 +1190,183 @@
   background: var(--shell-bg-2); color: var(--shell-text); font-size: 22px; line-height: 1; cursor: pointer;
 }
 .chat-img-close:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+
+/* ======================= 4.1.0: scripts, queue in the flow, helpers, fuse =======================
+   INFO_DESIGN.md (4.1.0) and its mk41.css, on the app's own tokens: no new colour. Saturated colour
+   only where something waits for the user (a helper asking, the fuse); successes stay quiet. */
+
+/* shared status lamp + word (the 13px lamp rule; the word carries the meaning, never colour alone) */
+.st { display: inline-flex; align-items: center; gap: 5px; flex: none; font-size: var(--fs-meta); color: var(--ink-faint); white-space: nowrap; }
+.st-l { width: 9px; height: 9px; border-radius: 50%; flex: none; box-sizing: border-box; }
+.st[data-s="running"] { color: var(--run-text); }
+.st[data-s="running"] .st-l { background: var(--run); box-shadow: 0 0 0 3px color-mix(in srgb, var(--run) 22%, transparent); animation: st-breathe 2.4s ease-in-out infinite; }
+@keyframes st-breathe { 50% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--run) 22%, transparent); } }
+.st[data-s="idle"] .st-l { border: 1.5px solid var(--ink-faint); }
+.st[data-s="done"] { color: var(--ok-text); }
+.st[data-s="done"] .st-l { width: 11px; height: 11px; border-radius: 0; background: var(--ok);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M4 10.5l4 4 8-9' fill='none' stroke='black' stroke-width='3'/%3E%3C/svg%3E") center/contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M4 10.5l4 4 8-9' fill='none' stroke='black' stroke-width='3'/%3E%3C/svg%3E") center/contain no-repeat; }
+.st[data-s="stopped"] .st-l { width: 8px; height: 8px; border-radius: 2px; background: var(--ink-faint); }
+.st[data-s="interrupted"] { color: var(--ink-dim); }
+.st[data-s="interrupted"] .st-l { background: linear-gradient(90deg, var(--ink-dim) 50%, transparent 50%); border: 1.5px solid var(--ink-dim); }
+.st[data-s="error"] { color: var(--accent-text); }
+.st[data-s="error"] .st-l { width: 8px; height: 8px; border-radius: 2px; transform: rotate(45deg); background: var(--accent-text); }
+.st[data-s="asks"] { color: var(--accent-text); font-weight: 600; }
+.st[data-s="asks"] .st-l { background: var(--accent); }
+[data-motion="reduced"] .st[data-s="running"] .st-l { animation: none; }
+@media (prefers-reduced-motion: reduce) { .st[data-s="running"] .st-l { animation: none; } }
+
+/* a model's mark in its colour (data-m sets --m, as on the author line) */
+.mlogo { width: 16px; height: 16px; flex: none; display: inline-grid; place-items: center; color: var(--m, var(--model-other)); }
+.mlogo svg { display: block; }
+
+/* ---------- A. the script block: a kind of tool row ---------- */
+.script-wrap { align-self: flex-start; display: flex; flex-direction: column; align-items: flex-start; max-width: 100%; }
+.tool.is-script .ic-script { color: var(--ink-dim); }
+.tool.is-script[data-state="running"] summary { border-color: color-mix(in srgb, var(--run) 55%, transparent); }
+.tool.is-script[data-state="error"] summary { border-color: color-mix(in srgb, var(--accent-text) 55%, transparent); }
+.tool-text b { font-weight: 600; color: var(--ink); }
+.tool-text .t-bad { color: var(--accent-text); font-weight: 600; }
+.tool-text .t-warn { color: var(--ink); font-weight: 600; }
+.run-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--run); flex: none; animation: run-dot 1.4s ease-in-out infinite; }
+@keyframes run-dot { 50% { opacity: .35; } }
+[data-motion="reduced"] .run-dot { animation: none; }
+@media (prefers-reduced-motion: reduce) { .run-dot { animation: none; } }
+
+/* the one sentence under a script that did not end clean; visible while folded */
+.script-verdict { display: flex; gap: 8px; align-items: flex-start; margin: 6px 0 0 2px; max-width: 640px;
+  font-size: var(--fs-small); line-height: 1.5; color: var(--ink); }
+.script-verdict .ic { flex: none; margin-top: 3px; width: 14px; height: 14px; color: var(--accent-text); }
+.script-verdict[data-tone="soft"] .ic { color: var(--ink-dim); }
+.script-verdict em { font-style: normal; color: var(--ink-dim); }
+.script-body { margin-top: 6px; padding: 10px 14px 12px; border-left: var(--line-w) solid var(--paper-line);
+  display: flex; flex-direction: column; gap: 12px; width: min(680px, 100%); }
+.script-body:empty { display: none; }
+.script-body > .script-verdict { margin: 0; }
+.script-result { font-size: var(--fs-small); line-height: 1.55; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.script-k { font-size: var(--fs-meta); color: var(--ink-faint); margin-bottom: 4px; display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+.script-calls { display: flex; flex-direction: column; gap: 2px; }
+.script-calls .tool-step { display: block; }
+.script-calls .tool-step-btn { display: grid; grid-template-columns: 50px 44px minmax(0, 1fr) auto 14px; column-gap: 10px; align-items: center; padding: 1px 0; }
+.script-calls div.tool-step-btn:hover { color: var(--ink-dim); }
+.script-calls div.tool-step-btn:hover .tool-target { background: var(--paper-sunk); }
+.script-calls .tool-target { justify-self: start; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.script-calls-in { margin: 4px 0 4px 14px; padding-left: 10px; border-left: var(--line-w) dashed var(--paper-line); }
+.call-n { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--ink-faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.call-s { font-size: var(--fs-meta); white-space: nowrap; text-align: right; }
+.call-s[data-s="ok"] { color: var(--ink-faint); }
+.call-s[data-s="error"] { color: var(--accent-text); font-weight: 600; }
+.call-s[data-s="refused"], .call-s[data-s="unfinished"], .call-s[data-s="timeout"] { color: var(--ink); font-weight: 600; }
+.call-s[data-s="notrun"], .call-s[data-s="notawaited"] { color: var(--ink-faint); font-style: italic; }
+.call-s[data-s="notawaited"] { cursor: help; text-decoration: underline dotted; text-underline-offset: 3px; }
+.script-calls li[data-s="notrun"] .tool-target, .script-calls li[data-s="notawaited"] .tool-target { opacity: .55; }
+.script-calls li[data-s="error"] > .tool-step-btn .tool-target { box-shadow: inset 2px 0 0 var(--accent-text); }
+.call-why { margin: 1px 0 3px 60px; font-size: var(--fs-meta); color: var(--ink-dim); line-height: 1.45; overflow-wrap: anywhere; }
+.grp-chev { width: 12px; height: 12px; flex: none; color: var(--ink-faint); transition: transform .15s; }
+.call-group[data-open] > .tool-step-btn .grp-chev { transform: rotate(90deg); }
+.call-more { padding: 2px 0 0 60px; }
+.call-more .ev-link { color: var(--ink-faint); text-decoration: none; }
+.call-more .ev-link:hover { color: var(--ink); text-decoration: underline; }
+/* nested folds inside a script block are plain text links, not a second chip */
+.tool .script-body details.script-code > summary { border: 0; padding: 2px 0; border-radius: 0; background: none; box-shadow: none; }
+details.script-code > summary { list-style: none; cursor: pointer; display: inline-flex; gap: 6px; align-items: center;
+  font-size: var(--fs-meta); color: var(--ink-faint); }
+details.script-code > summary::-webkit-details-marker { display: none; }
+details.script-code > summary:hover { color: var(--ink); }
+details.script-code[open] > summary .grp-chev { transform: rotate(90deg); }
+details.script-code .code-body { margin-top: 6px; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--code-bg); color: var(--code-text);
+  font-family: var(--font-mono); font-size: var(--fs-meta); line-height: 1.6; max-height: 340px; overflow: auto; -webkit-mask-image: none; mask-image: none; }
+
+/* where an approval card comes from, when it is not this chat's own agent asking */
+.approval-who.src { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-dim); }
+.approval-who.src b { color: var(--ink); font-weight: 600; }
+.ev-link { color: var(--ink-dim); text-decoration: underline; text-decoration-color: var(--paper-line-strong); text-underline-offset: 3px; cursor: pointer; font-size: var(--fs-meta); }
+.ev-link:hover { color: var(--ink); }
+
+/* ---------- C. queued messages in the flow, turns that started on their own ---------- */
+.queued-flow { display: flex; flex-direction: column; gap: 6px; }
+.msg-user.is-queued { opacity: .62; }
+.queued-tag { align-self: flex-end; display: inline-flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; margin: -2px 0 6px;
+  font-size: var(--fs-meta); color: var(--ink-faint); }
+.queued-tag .ic { width: 13px; height: 13px; flex: none; }
+.queued-tag b { color: var(--ink-dim); font-weight: 600; }
+.queued-x { margin-left: 6px; padding: 0 6px; border-radius: var(--radius-sm); color: var(--ink-dim); text-decoration: underline; text-decoration-color: var(--paper-line-strong); text-underline-offset: 3px; }
+.queued-x:hover { color: var(--ink); background: var(--paper-sunk); }
+.queued-note { color: var(--ink-dim); }
+.msg-event.is-wake { padding: 2px 0; }
+.msg-event.is-wake .msg-event-v { color: var(--ink-faint); }
+
+/* fuse: the one saturated element in the thread, because it waits for you */
+.notice.is-fuse { border-left-color: var(--accent); }
+.notice.is-fuse .notice-ic { color: var(--accent-text); }
+.fuse-acts { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+.fuse-acts .hint { font-size: var(--fs-meta); color: var(--ink-faint); }
+
+/* ---------- D. helpers ---------- */
+.crew { display: flex; align-items: flex-start; gap: 6px; flex-wrap: wrap; padding: 7px 10px; border-radius: var(--radius-md);
+  background: var(--paper-raised); border: var(--line-w) solid var(--paper-line); font-size: var(--fs-meta); color: var(--ink-dim); }
+/* stays in view while the thread scrolls; an opened list scrolls away with it instead of covering it */
+.thread-col > .crew { position: sticky; top: 0; z-index: 3; box-shadow: 0 -18px 0 0 var(--paper-bg); }
+.thread-col > .crew.is-expanded { position: static; box-shadow: none; }
+.crew-k { color: var(--ink-faint); margin-right: 4px; display: inline-flex; gap: 6px; align-items: center; align-self: center; }
+.crew-k .ic { width: 14px; height: 14px; }
+.crew-chip { position: relative; display: inline-flex; flex-direction: column; align-items: stretch; gap: 1px; padding: 4px 4px 5px 8px;
+  border-radius: var(--radius-sm); background: var(--paper-sunk); color: var(--ink); white-space: nowrap; }
+.crew-chip.is-open { box-shadow: inset 0 0 0 var(--line-w) var(--paper-line-strong); }
+.crew-chip[data-s="asks"] { box-shadow: inset 0 0 0 var(--line-w) var(--accent); }
+.crew-chip-top { display: flex; align-items: center; gap: 7px; min-height: 20px; padding-right: 24px; color: inherit; text-align: left; }
+.crew-chip:not(:has(.crew-x)) .crew-chip-top { padding-right: 4px; }
+.crew-chip .nm { font-weight: 600; }
+.crew-x { width: 20px; height: 20px; display: inline-grid; place-items: center; border-radius: var(--radius-sm); color: var(--ink-faint); flex: none; }
+.crew-chip > .crew-x { position: absolute; top: 4px; right: 4px; }
+.crew-x:hover { background: var(--paper-line); color: var(--ink); }
+.crew-x .ic { width: 12px; height: 12px; fill: currentColor; stroke: none; }
+.crew-doing { display: inline-flex; align-items: center; gap: 5px; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 11.5px; line-height: 1.4; color: var(--ink-faint); padding-left: 23px; }
+.crew-doing .ic { width: 12px; height: 12px; flex: none; }
+.crew-doing[data-tone="stale"] { color: var(--ink-dim); }
+.crew-doing[data-tone="stale"] .ic { color: var(--accent-text); }
+.crew-doing[data-tone="bad"], .crew-doing[data-tone="asks"] { color: var(--accent-text); }
+.crew-more { margin-left: auto; align-self: center; flex: none; white-space: nowrap; display: inline-flex; gap: 4px; align-items: center; color: var(--ink-dim); padding: 2px 6px; border-radius: var(--radius-sm); }
+.crew-more:hover { background: var(--paper-sunk); color: var(--ink); }
+.crew-sum-row { width: 100%; display: flex; align-items: center; gap: 8px; padding: 2px 0 0; }
+.crew-sum { flex: 1; min-width: 0; display: inline-flex; gap: 4px 6px; align-items: center; flex-wrap: wrap; color: var(--ink-dim); }
+.crew-sum .sep { color: var(--ink-faint); }
+/* hover card: the full progress record */
+.crew-pop { position: absolute; top: calc(100% + 6px); left: 0; z-index: 5; width: 360px; max-width: 80vw; display: grid; grid-template-columns: 92px 1fr; gap: 5px 10px;
+  padding: 10px 12px; border-radius: var(--radius-md); background: var(--paper-raised); border: var(--line-w) solid var(--paper-line-strong);
+  box-shadow: 0 12px 28px -12px var(--pv-shadow); font-size: var(--fs-meta); white-space: normal; color: var(--ink); }
+.crew-pop-h { grid-column: 1 / -1; display: flex; align-items: center; gap: 7px; padding-bottom: 6px; border-bottom: var(--line-w) solid var(--paper-line); color: var(--ink-faint); }
+.crew-pop-h b { color: var(--ink); }
+.crew-pop-k { color: var(--ink-faint); }
+.crew-pop-v { color: var(--ink); overflow-wrap: anywhere; }
+.crew-pop-v[data-tone="stale"] { color: var(--accent-text); }
+.crew-pop-acts { grid-column: 1 / -1; display: flex; gap: 14px; padding-top: 6px; border-top: var(--line-w) solid var(--paper-line); }
+/* the list of every helper */
+.crew-list { width: 100%; margin-top: 6px; border-top: var(--line-w) solid var(--paper-line); padding-top: 4px; display: grid;
+  grid-template-columns: minmax(120px, 1.1fr) minmax(130px, 1.3fr) 60px minmax(100px, .9fr) 48px auto; column-gap: 14px; }
+.crew-list > div { display: contents; }
+.crew-list > div > span { padding: 5px 0 1px; display: flex; align-items: center; gap: 7px; min-width: 0; }
+.crew-list .h > span { color: var(--ink-faint); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; padding-bottom: 4px; }
+.crew-list .nm-cell .nm { color: var(--ink); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.crew-list .md { color: var(--ink-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+.crew-list .acts { justify-content: flex-end; gap: 2px; }
+.crew-list > div > span.doing-row { grid-column: 1 / -1; display: flex; gap: 10px; min-width: 0; padding: 0 0 6px 23px; border-bottom: var(--line-w) solid var(--paper-line); }
+.crew-list > div:last-child > span.doing-row { border-bottom: 0; }
+.doing-row .crew-doing { padding-left: 0; max-width: none; flex: none; }
+.crew-said { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--ink-faint); font-style: italic; }
+.crew-act { padding: 1px 7px; border-radius: var(--radius-sm); color: var(--ink-dim); }
+.crew-act:hover { background: var(--paper-sunk); color: var(--ink); }
+.crew-foot { width: 100%; display: flex; justify-content: flex-end; gap: 8px; padding-top: 6px; }
+.crew-foot .btn .ic { width: 12px; height: 12px; fill: currentColor; stroke: none; }
+/* narrow column (workspace open): the strip's label shrinks to its icon */
+@media (max-width: 1700px) { .app[data-ws] .crew-k-t { display: none; } }
+
+/* a helper's result arriving in the parent: the mail note's sibling, edged in the model's colour */
+.msg-note.is-agent { border-left-color: var(--m, var(--model-other)); }
+.msg-note.is-agent .msg-note-head { color: var(--ink-dim); text-transform: none; letter-spacing: 0; font-family: var(--font-body); font-weight: 400; }
+.msg-note.is-agent .msg-note-head .nm { color: var(--ink); font-weight: 600; }
+.msg-note.is-agent .msg-note-head .md { color: var(--ink-faint); }
+.msg-note.is-agent .msg-note-head .st { margin-left: auto; }
+.agent-acts { display: flex; gap: 14px; margin-top: 8px; }

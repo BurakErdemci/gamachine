@@ -56,6 +56,11 @@ interface SidebarProps {
   /** The guide (Rehber) is on screen: its `?` button in the foot is marked active. */
   guideOpen?: boolean;
   onOpenGuide?: () => void;
+  /**
+   * Helpers per chat, where known (the chat on screen): the row's second line says how many
+   * ("Running · 3 helpers"), and a chat the fuse held reads "Paused" with the waiting mark.
+   */
+  helperInfo?: Record<number, { count: number; paused?: boolean }>;
 }
 
 /** Sidebar width from the mockup (base.css `.app` first track). */
@@ -70,7 +75,7 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
     setEditingId, tempTitle, setTempTitle, saveRename, workspacePath,
     closeWorkspace, user, userName, setShowSettings,
     convStatus, unityStatus, isDirty, remoteStatus, onOpenRemote,
-    profileLevel, profileOpen, onOpenProfile, guideOpen, onOpenGuide,
+    profileLevel, profileOpen, onOpenProfile, guideOpen, onOpenGuide, helperInfo,
   } = props;
 
   const { t, lang } = useLang();
@@ -98,7 +103,10 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
   // Branches live in the chat column's tabs; a row stands for its whole family.
   const roots = rootsOf(conversations);
   const activeRootId = familyRootId(conversations, activeConvId);
-  const statusOf = (id: number) => familyStatusOf(conversations, convStatus, id);
+  // A chat the fuse held waits on the user exactly like an approval does (4.1.0 C3).
+  const pausedOf = (id: number) => !!helperInfo?.[id]?.paused;
+  const statusOf = (id: number): ConvStatus | undefined =>
+    pausedOf(id) ? 'awaiting' : familyStatusOf(conversations, convStatus, id);
   // Mockup: work that is running or waiting on the user is an "active task" with a second line;
   // everything else (unread included) stays in the plain chat list, in the same order as before.
   const isTask = (s: ConvStatus | undefined) => s === 'running' || s === 'awaiting';
@@ -146,7 +154,15 @@ export const Sidebar: React.FC<SidebarProps> = (props) => {
           {quest && !editing ? (
             <span className="chat-text">
               {title}
-              {status && <span className="chat-sub">{t(STATUS_DOT[status].label)}</span>}
+              {status && (
+                <span className="chat-sub" data-testid={`conv-sub-${conv.id}`}>
+                  {pausedOf(conv.id) ? t('sidebar.paused') : t(STATUS_DOT[status].label)}
+                  {(helperInfo?.[conv.id]?.count ?? 0) > 0 && <>
+                    {' · '}
+                    {helperInfo![conv.id].count === 1 ? t('sidebar.helpersOne') : t('sidebar.helpers', { n: helperInfo![conv.id].count })}
+                  </>}
+                </span>
+              )}
             </span>
           ) : title}
           {!editing && (

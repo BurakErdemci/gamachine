@@ -27,6 +27,8 @@ import { ComputerUseApproval } from './ComputerUseApproval';
 import { BrowserApproval } from './BrowserApproval';
 import { BlenderApproval } from './BlenderApproval';
 import { RiskReasonLine } from './RiskReasonLine';
+import { ApprovalSourceContext, type ApprovalSource } from './ApprovalCard';
+import { ModelLogo } from '../ui/ModelLogos';
 import { GateFailure, gateFailure, postMcpDecision, postComputerDecision, postBrowserDecision, decisionToast } from '../../hooks/home/gateResponse';
 import { MCP_MSG_ID, McpActiveGate } from '../../hooks/home/useMCPApproval';
 import { useLang, type TKey } from '../../lib/i18n';
@@ -105,7 +107,23 @@ interface McpApprovalCardsProps {
   setCode?: (code: string) => void;
   /** A paired phone can decide these cards too ("Or approve on your phone"). */
   phonePaired?: boolean;
+  /** Opens a helper's read-only conversation (the card's "Open tester's conversation"). */
+  onOpenHelper?: (ref: { agentId?: string; chatId?: number | null }) => void;
 }
+
+/** "tester (Codex GPT-6.2 Sol)": the backend's agent_label, name first, model in brackets. */
+const splitLabel = (label: string) => {
+  const m = /^(.*?) \((.*)\)$/.exec(label);
+  return m ? { name: m[1], model: m[2] } : { name: label, model: '' };
+};
+const logoFor = (model: string) => {
+  const m = model.toLowerCase();
+  return m.includes('claude') ? 'claude' : m.includes('gpt') || m.includes('codex') ? 'openai' : m.includes('gemini') ? 'gemini' : m;
+};
+const familyFor = (model: string) => {
+  const m = model.toLowerCase();
+  return m.includes('claude') ? 'claude' : m.includes('gpt') || m.includes('codex') ? 'codex' : m.includes('gemini') ? 'gemini' : 'other';
+};
 
 /**
  * İsteğin hangi projeden geldiğini yazan şerit.
@@ -182,6 +200,7 @@ export const McpApprovalCards: React.FC<McpApprovalCardsProps> = ({
   onOpenFile,
   setCode,
   phonePaired,
+  onOpenHelper,
 }) => {
   const { t } = useLang();
   /**
@@ -345,8 +364,35 @@ export const McpApprovalCards: React.FC<McpApprovalCardsProps> = ({
   const browser = gate.browser;
   const blender = gate.blender;
 
+  // Who asks, when it is not this chat's own agent (INFO_DESIGN.md A, D3).
+  let source: ApprovalSource | null = null;
+  if (gate.helper) {
+    const { name, model } = splitLabel(gate.helper.label);
+    const chatId = gate.helper.chatId;
+    source = {
+      who: <>
+        {model && <span className="mlogo" data-m={familyFor(model)} aria-hidden="true"><ModelLogo provider={logoFor(model)} size={14} /></span>}
+        <span>{model
+          ? <><b>{name}</b> {t('helper.asks', { label: `(${model})` })}</>
+          : t('helper.asks', { label: name || t('helper.strip') })}</span>
+      </>,
+      link: onOpenHelper && chatId != null
+        ? <button type="button" className="ev-link" data-testid="approval-open-helper" onClick={() => onOpenHelper({ chatId })}>
+            {t('helper.openConvOf', { name: name || t('helper.strip') })}
+          </button>
+        : undefined,
+    };
+  } else if (gate.scriptCall) {
+    source = {
+      who: <>
+        <svg className="ic ic-sm" viewBox="0 0 20 20" aria-hidden="true"><path d="M7.5 4.5C5.8 4.5 5.8 6 5.8 7.4S5.3 10 3.8 10c1.5 0 2 1.2 2 2.6s0 2.9 1.7 2.9M12.5 4.5c1.7 0 1.7 1.5 1.7 2.9s.5 2.6 2 2.6c-1.5 0-2 1.2-2 2.6s0 2.9-1.7 2.9" /></svg>
+        {t('script.fromScript', { n: gate.scriptCall })}
+      </>,
+    };
+  }
+
   return (
-    <>
+    <ApprovalSourceContext.Provider value={source}>
       {computer && (
         // No workspace strip: a computer_* request comes from no project.
         <div className="approval-slot">
@@ -536,6 +582,6 @@ export const McpApprovalCards: React.FC<McpApprovalCardsProps> = ({
           />)}
         </div>
       )}
-    </>
+    </ApprovalSourceContext.Provider>
   );
 };

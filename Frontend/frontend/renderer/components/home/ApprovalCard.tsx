@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { useLang } from '../../lib/i18n';
 import { isRemotePage } from '../../lib/remote/transport';
 
@@ -32,6 +32,16 @@ interface ApprovalCardProps {
   testId?: string;
 }
 
+/**
+ * Where a card came from when it is not the chat's own agent asking: a helper of this chat
+ * ("tester (Codex GPT-6.2 Sol) asks") or a call inside a script ("From script · call #13").
+ * Set by McpApprovalCards around whichever card kind it draws, so every kind shows it without
+ * each one learning about helpers. It replaces the header's source cell and may add one quiet
+ * link next to the buttons ("Open tester's conversation").
+ */
+export interface ApprovalSource { who: React.ReactNode; link?: React.ReactNode }
+export const ApprovalSourceContext = createContext<ApprovalSource | null>(null);
+
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
 /**
@@ -45,6 +55,8 @@ export const ApprovalCard: React.FC<ApprovalCardProps> = ({
   state = 'pending', kind, title, who, name, sentence, why, body, detail, actions, phoneHint, result, dismiss, testId,
 }) => {
   const { t } = useLang();
+  const source = useContext(ApprovalSourceContext);
+  if (source) who = source.who;
   const pending = state === 'pending';
   // "waiting 0:12": shown where motion is reduced and in Sade, which says the wait in words
   // instead of nudging (KARAKTER 12); counted here so the number is real.
@@ -90,7 +102,7 @@ export const ApprovalCard: React.FC<ApprovalCardProps> = ({
             <span className="aw-word">{t('card.waiting')} </span><span className="num">{fmt(waited)}</span>
           </span>
         )}
-        {who && <span className="approval-who">{who}</span>}
+        {who && <span className={`approval-who${source ? ' src' : ''}`} data-testid={source ? 'approval-source' : undefined}>{who}</span>}
       </header>
       <h3 className="approval-name">{name}</h3>
       {sentence && <p className="approval-sentence">{sentence}</p>}
@@ -105,6 +117,7 @@ export const ApprovalCard: React.FC<ApprovalCardProps> = ({
       {actions && (
         <div className="approval-actions">
           {actions}
+          {source?.link && pending && <span className="approval-hint approval-src-link">{source.link}</span>}
           {phoneHint && pending && (
             <span className="approval-hint" data-guide="approval-phone-hint">{typeof phoneHint === 'string' ? phoneHint : t('card.phoneHint')}</span>
           )}

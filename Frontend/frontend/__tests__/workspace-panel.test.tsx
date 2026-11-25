@@ -152,3 +152,18 @@ describe('Kod strip and the card are one decision', () => {
     await waitFor(() => expect(screen.queryByTestId('ws-pending')).toBeNull())
   })
 })
+
+// 4.1.0 D2: one helper's read-only conversation is a tab of its own, labelled with its name.
+describe('helper tab', () => {
+  it('exists only while a helper pane is given, under the helper’s own label', () => {
+    const onTab = vi.fn()
+    const { rerender } = render(<Workspace open tab="dosyalar" onTab={onTab} width="yarim" onWidth={vi.fn()} onClose={vi.fn()}
+      panes={{ dosyalar: <p>files</p> }} drawer={null} />)
+    expect(document.getElementById('ws-tab-yardimci')).toBeNull()
+    rerender(<Workspace open tab="yardimci" onTab={onTab} width="yarim" onWidth={vi.fn()} onClose={vi.fn()}
+      panes={{ dosyalar: <p>files</p>, yardimci: <p>helper talk</p> }} tabLabels={{ yardimci: 'level-designer' }} drawer={null} />)
+    expect(document.getElementById('ws-tab-yardimci')?.textContent).toBe('level-designer')
+    expect(screen.getByTestId('workspace').getAttribute('data-tab')).toBe('yardimci')
+    expect(screen.getByText('helper talk')).toBeTruthy()
+  })
+})

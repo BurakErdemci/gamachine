@@ -66,7 +66,38 @@ export interface McpActiveGate {
   browser?: BrowserCardInfo;
   /** Set for the connectors' execute_blender_code card only: the code and why it asks. */
   blender?: BlenderCardInfo;
+  /**
+   * The request came from a helper (sub-agent) of the chat in `conversationId`: the card is
+   * drawn in that parent chat, naming who asks (`agent_label`, "tester (Codex GPT-6.2 Sol)").
+   */
+  helper?: GateHelper;
+  /** The call's number inside a run_script program, when the backend says so. */
+  scriptCall?: number;
 }
+
+/** A helper's request: its own chat, its parent chat, and the label the card shows. */
+export interface GateHelper { chatId: number | null; parentId: number; label: string }
+
+const posInt = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v > 0;
+
+/**
+ * A /mcp-pending entry raised by a helper carries `parent_conversation_id` and `agent_label`
+ * (backend agentic/cards.agent_tag). Null for every other entry.
+ */
+export const gateHelper = (req: any): GateHelper | null => {
+  if (!req || typeof req !== 'object' || !posInt(req.parent_conversation_id)) return null;
+  const label = typeof req.agent_label === 'string' && req.agent_label ? req.agent_label : '';
+  return { chatId: posInt(req.conversation_id) ? req.conversation_id : null, parentId: req.parent_conversation_id, label };
+};
+
+/**
+ * The chat a request is drawn in. A helper's request goes to its parent: the helper's own chat
+ * is never on screen, so routing it there left the card nowhere and the helper waiting in
+ * silence (measured blocker, 4.1.0 design D3).
+ */
+export const gateRoute = (req: any): number | null | undefined => gateHelper(req)?.parentId ?? gateOwner(req);
+
+const scriptCallOf = (req: any): number | undefined => (posInt(req?.script_call) ? req.script_call : undefined);
 
 /** A request whose source chat the backend could not name (tray entry). */
 export interface McpTrayGate {
@@ -147,6 +178,12 @@ interface MCPApprovalHookParams {
    * off screen can say "awaiting approval" in the sidebar.
    */
   onOwnersChange?: (gatesByConv: Record<number, string[]>) => void;
+  /**
+   * Chat ids of helpers with a request pending, sorted; called when the set changes. The
+   * helpers strip marks those chips "Needs you". A callback like onOwnersChange, not a return
+   * value: the hook's return surface is kept to delivery and resolution on purpose.
+   */
+  onHelperAsking?: (helperChatIds: number[]) => void;
 }
 
 /**
@@ -334,6 +371,7 @@ export const useMCPApproval = ({
   showToast,
   screenConvId,
   onOwnersChange,
+  onHelperAsking,
 }: MCPApprovalHookParams) => {
   const [activeGate, setActiveGate] = useState<McpActiveGate | null>(null);
   // Unknown-owner requests are not queued behind the single card slot: each
@@ -349,6 +387,9 @@ export const useMCPApproval = ({
   screenConvRef.current = screenConvId;
   const onOwnersChangeRef = useRef(onOwnersChange);
   onOwnersChangeRef.current = onOwnersChange;
+  const onHelperAskingRef = useRef(onHelperAsking);
+  onHelperAskingRef.current = onHelperAsking;
+  const lastAskingRef = useRef('');
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
   /**
    * `activeGate`'in ref ikizi. State değil ref okunuyor çünkü `poll` bir
@@ -426,8 +467,11 @@ export const useMCPApproval = ({
     // what keeps one gate from ever being drawn twice.
     const gatesByConv: Record<number, string[]> = {};
     const unknown: McpTrayGate[] = [];
+    const asking: number[] = [];
     for (const [gateId, req] of Object.entries(pending)) {
-      const owner = gateOwner(req);
+      const owner = gateRoute(req);
+      const helper = gateHelper(req);
+      if (helper?.chatId != null) asking.push(helper.chatId);
       if (typeof owner === 'number') (gatesByConv[owner] ||= []).push(gateId);
       else if (owner === null) {
         const r = req as { tool?: string; params?: any; workspace_path?: string };
@@ -435,6 +479,11 @@ export const useMCPApproval = ({
       }
     }
     onOwnersChangeRef.current?.(gatesByConv);
+    asking.sort((a, b) => a - b);
+    if (asking.join(',') !== lastAskingRef.current) {
+      lastAskingRef.current = asking.join(',');
+      onHelperAskingRef.current?.(asking);
+    }
     // Same ids, same entries: keep the old array so the tray does not
     // re-render on every poll.
     setUnknownGates(prev =>
@@ -465,7 +514,7 @@ export const useMCPApproval = ({
     }
 
     for (const [gateId, req] of Object.entries(pending)) {
-      const owner = gateOwner(req);
+      const owner = gateRoute(req);
       if (!belongsOnScreen(owner, screenConvRef.current)) continue;
       const { tool, params, workspace_path: gateWorkspace } = req as {
         tool: string; params: any; workspace_path?: string;
@@ -477,7 +526,12 @@ export const useMCPApproval = ({
       // ÖTEKİ isteğin gate'ini onaylıyordu (dış denetim: `approval-gate-
       // misbinding`, HIGH). Kimliği kartın kendi kaydında taşımak o sınıfı
       // bir örnek yamayarak değil kökten kapatıyor.
-      const gate: McpActiveGate = { gateId, tool, workspacePath: gateWorkspace || '', conversationId: owner, ...gateRisk(req) };
+      const helper = gateHelper(req);
+      const scriptCall = scriptCallOf(req);
+      const gate: McpActiveGate = {
+        gateId, tool, workspacePath: gateWorkspace || '', conversationId: owner, ...gateRisk(req),
+        ...(helper ? { helper } : {}), ...(scriptCall ? { scriptCall } : {}),
+      };
       activeGateRef.current = gate;
       setActiveGate(gate);
 

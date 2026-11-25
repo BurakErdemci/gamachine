@@ -2,13 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { routeForFile } from '../components/model-viewer/extensions';
 
 /** The workspace tabs (mockup `.ws-tab[data-tab]`): inspector (scene editor only), files, code, preview and the live view. */
-export type WsTab = 'sahne' | 'dosyalar' | 'kod' | 'onizleme' | 'canli';
+export type WsTab = 'sahne' | 'dosyalar' | 'kod' | 'onizleme' | 'canli' | 'yardimci';
 /** The two sides of the live tab: the computer-use mirror and the agent browser. */
 export type LiveSide = 'bilgisayar' | 'tarayici';
 /** The three widths (mockup `.app[data-ws]`): narrow beside the chat, half, focus. */
 export type WsWidth = 'dar' | 'yarim' | 'odak';
 
-export const WS_TABS: WsTab[] = ['sahne', 'dosyalar', 'kod', 'onizleme', 'canli'];
+// 'yardimci': one helper's read-only conversation (4.1.0 D2); one at a time, a new one replaces it.
+export const WS_TABS: WsTab[] = ['sahne', 'dosyalar', 'kod', 'onizleme', 'canli', 'yardimci'];
 export const WS_WIDTHS: WsWidth[] = ['dar', 'yarim', 'odak'];
 
 /** Which tab shows a path: text opens in Kod, everything the preview panels take in Önizleme. */

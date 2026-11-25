@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 
 import { useLang, type Lang, type TKey } from '../../../lib/i18n';
-import { SetCard, SetGroup, SetPageHead } from './controls';
+import { SetCard, SetGroup, SetPageHead, SetRow, SetSwitch } from './controls';
 
 type GuideWhen = 'always' | 'project_open' | 'connected' | 'off' | 'not_responding';
 type GuideSection = { id: string; when: string; text: string };
@@ -28,15 +28,74 @@ const isGuideSection = (value: unknown): value is GuideSection => {
   return typeof section.id === 'string' && typeof section.when === 'string' && typeof section.text === 'string';
 };
 
+type Http = { get: (...a: any[]) => Promise<any>; put?: (...a: any[]) => Promise<any> };
+
 export interface AgentGuidePageProps {
   lang: Lang;
   API?: string;
-  http?: { get: (...a: any[]) => Promise<any>; put?: (...a: any[]) => Promise<any> };
+  http?: Http;
   token?: string | null;
   saved: () => void;
+  /** Reads and writes the Tools group's settings; the group is left out without it. */
+  toolsHttp?: Http;
 }
 
-export const AgentGuidePage = ({ lang, API, http, token, saved }: AgentGuidePageProps) => {
+export const SCRIPT_TOOL_PATH = '/agent-settings/script-tool';
+
+/**
+ * Tools (4.1.0 B): the Script tool switch, on unless the user turned it off. It flips at once
+ * like every switch on these pages; a failed write puts it back and says so. The backend reads
+ * the setting when a session or CLI turn starts, hence the "from the next turn" line.
+ */
+export const ScriptToolGroup = ({ API, http, token, saved }: { API: string; http: Http; token?: string | null; saved: () => void }) => {
+  const { t } = useLang();
+  const [enabled, setEnabled] = useState(true);
+  const [busy, setBusy] = useState(true);
+  const [failed, setFailed] = useState(false);
+  const headers = token ? { headers: { 'X-Session-Token': token } } : undefined;
+  useEffect(() => {
+    let active = true;
+    setBusy(true);
+    http.get(`${API}${SCRIPT_TOOL_PATH}`, headers)
+      .then(res => { if (active && typeof res?.data?.enabled === 'boolean') setEnabled(res.data.enabled); })
+      .catch(() => { /* unknown: the default (on) stays shown */ })
+      .finally(() => { if (active) setBusy(false); });
+    return () => { active = false; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [API, http, token]);
+  const toggle = async () => {
+    if (!http.put || busy) return;
+    const next = !enabled;
+    setEnabled(next);
+    setFailed(false);
+    setBusy(true);
+    try {
+      const res = await http.put(`${API}${SCRIPT_TOOL_PATH}`, { enabled: next }, headers);
+      if (typeof res?.data?.enabled === 'boolean') setEnabled(res.data.enabled);
+      saved();
+    } catch {
+      setEnabled(!next);
+      setFailed(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <SetGroup title={t('set.ajan.tools')} testId="agent-tools">
+      <SetCard>
+        <SetRow
+          name={t('set.ajan.scriptTool')}
+          hint={<>{t('set.ajan.scriptToolHint')}<br />{t('set.ajan.scriptToolNext')}</>}
+          control={<SetSwitch checked={enabled} label={t('set.ajan.scriptTool')} testId="script-tool-toggle" busy={busy}
+            disabled={busy} onToggle={() => void toggle()} />}
+        />
+      </SetCard>
+      {failed && <p className="set-msg set-msg-err" role="alert">{t('set.ajan.scriptToolFailed')}</p>}
+    </SetGroup>
+  );
+};
+
+export const AgentGuidePage = ({ lang, API, http, token, saved, toolsHttp }: AgentGuidePageProps) => {
   const { t } = useLang();
   const [sections, setSections] = useState<GuideSection[]>([]);
   const [draft, setDraft] = useState('');
@@ -110,7 +169,10 @@ export const AgentGuidePage = ({ lang, API, http, token, saved }: AgentGuidePage
     }
   };
 
-  const head = <SetPageHead title={t('set.nav.ajan')} lede={t('set.lede.ajan')} />;
+  const head = <>
+    <SetPageHead title={t('set.nav.ajan')} lede={t('set.lede.ajan')} />
+    {API && toolsHttp && <ScriptToolGroup API={API} http={toolsHttp} token={token} saved={saved} />}
+  </>;
   if (!API || !http) return <>{head}<p className="set-hint">{t('set.ajan.unavailable')}</p></>;
   if (loading) return <>{head}<p className="set-hint" role="status">{t('set.ajan.loading')}</p></>;
   if (loadError) return <>{head}
