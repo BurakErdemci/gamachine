@@ -3387,6 +3387,7 @@ class AgentRunner:
             # Old unityai tools stay off even if something loads them, and so does
             # every unityMCP tool that can write a .cs file (see unity_script_tools):
             # C# goes through the built-in Write, which passes the card and the file guard.
+            # batch_execute is allowed here and gated in _can_use_tool.
             disallowed_tools=[
                 *DISALLOWED_UNITY_TOOLS,
                 "mcp__unityai__bash",

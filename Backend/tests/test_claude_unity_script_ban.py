@@ -3,6 +3,9 @@
 The ban named only `manage_script` until the 26 Sep 2026 audit (Codex strictmcp)
 showed `apply_text_edits`, `create_script`, `delete_script` and a nested
 `batch_execute` reaching the same writes; `script_apply_edits` was a fifth.
+By the 15 Oct 2026 decision, `batch_execute` is allowed on the chat (SDK) path
+and gated by its nested commands in `_can_use_tool`, while staying banned on
+the one-shot CLI path.
 """
 import asyncio
 import json
@@ -13,7 +16,11 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "app"))
 
-from providers.unity_script_tools import DISALLOWED_UNITY_TOOLS, UNITY_SCRIPT_WRITE_TOOLS  # noqa: E402
+from providers.unity_script_tools import (  # noqa: E402
+    CLI_DISALLOWED_UNITY_TOOLS,
+    DISALLOWED_UNITY_TOOLS,
+    UNITY_SCRIPT_WRITE_TOOLS,
+)
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 LEDGER = os.path.join(REPO, "unity-mcp", "Server", "src", "services", "registry", "tool_actions.json")
@@ -30,9 +37,10 @@ def test_every_script_writer_in_the_server_ledger_is_banned():
     }
     assert writers, "ledger shape changed; the test no longer sees any script tool"
     assert writers <= set(UNITY_SCRIPT_WRITE_TOOLS), sorted(writers - set(UNITY_SCRIPT_WRITE_TOOLS))
-    # A nested call can carry any of them.
+    # A nested call can carry any of them; chat gates the batch, CLI keeps it banned.
     assert tools["batch_execute"].get("recursive_field")
-    assert "batch_execute" in UNITY_SCRIPT_WRITE_TOOLS
+    assert "batch_execute" not in UNITY_SCRIPT_WRITE_TOOLS
+    assert "mcp__unityMCP__batch_execute" in CLI_DISALLOWED_UNITY_TOOLS
 
 
 class _Captured(Exception):
@@ -71,6 +79,7 @@ def test_the_chat_session_gets_the_whole_ban(tmp_path, monkeypatch):
 
     assert "unityMCP" in seen["mcp_servers"]
     assert set(DISALLOWED_UNITY_TOOLS) <= set(seen["disallowed_tools"])
+    assert "mcp__unityMCP__batch_execute" not in seen["disallowed_tools"]
 
 
 def test_the_cli_provider_gets_the_whole_ban(tmp_path, monkeypatch):
@@ -86,6 +95,7 @@ def test_the_cli_provider_gets_the_whole_ban(tmp_path, monkeypatch):
         cmd = ClaudeCodeProvider("claude-opus-5")._build_cmd("x", workspace=str(tmp_path))
     banned = set(cmd[cmd.index("--disallowedTools") + 1].split(","))
     assert set(DISALLOWED_UNITY_TOOLS) <= banned
+    assert "mcp__unityMCP__batch_execute" in banned
 
 
 def test_the_cli_provider_denies_the_powershell_tool_too(tmp_path, monkeypatch):

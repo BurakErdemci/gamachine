@@ -4,7 +4,7 @@ import os
 import sys
 import logging
 from .cli_base import BaseCLIProvider
-from .unity_script_tools import DISALLOWED_UNITY_TOOLS
+from .unity_script_tools import CLI_DISALLOWED_UNITY_TOOLS
 from .unityai_tool_text import mail_and_fallback, mcp_double_underscore
 
 logger = logging.getLogger(__name__)
@@ -34,8 +34,9 @@ class ClaudeCodeProvider(BaseCLIProvider):
             "PowerShell",
             # Every unityMCP tool that writes a .cs file, so all C# goes through
             # the approved mcp__unityai__save_file. Scripts are attached with
-            # manage_gameobject/manage_components.
-            *DISALLOWED_UNITY_TOOLS,
+            # manage_gameobject/manage_components. batch_execute is also banned
+            # here because this path cannot see its nested commands.
+            *CLI_DISALLOWED_UNITY_TOOLS,
         ])
         from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
         unity_running = unity_mcp_manager.is_running()

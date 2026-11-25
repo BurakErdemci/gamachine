@@ -115,9 +115,9 @@ def test_the_spawned_command_adds_unitymcp_over_http_when_unity_runs(monkeypatch
 def test_the_rest_of_the_command_is_unchanged(monkeypatch, tmp_path):
     argv, _ = _spawn_argv(monkeypatch, tmp_path, running=True)
     i = argv.index("--disallowedTools")
-    from providers.unity_script_tools import DISALLOWED_UNITY_TOOLS
+    from providers.unity_script_tools import CLI_DISALLOWED_UNITY_TOOLS
     assert argv[i + 1] == ",".join(("Bash", "Write", "Edit", "MultiEdit", "NotebookEdit",
-                                    "PowerShell", *DISALLOWED_UNITY_TOOLS))
+                                    "PowerShell", *CLI_DISALLOWED_UNITY_TOOLS))
     assert argv[:2] == ["claude", "--model"]
     assert argv[argv.index("--permission-mode") + 1] == "bypassPermissions"
     assert argv[-1] == "-p", "the prompt must stay on stdin, not in argv"

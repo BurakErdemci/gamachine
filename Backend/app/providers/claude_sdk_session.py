@@ -57,6 +57,7 @@ import process_tree
 import unity_file_guard
 from path_containment import is_within
 from providers.text_blocks import block_break
+from providers.unity_script_tools import batch_carries_script_write
 
 logger = logging.getLogger(__name__)
 
@@ -1238,6 +1239,15 @@ class ClaudeSDKSession:
         # Read live on every call (not the session flag): a flip bites on the
         # next tool call of a running turn.
         mode = approval_mode.current_mode()
+
+        if tool_name == "mcp__unityMCP__batch_execute" and batch_carries_script_write(input_data):
+            logger.warning(f"[ClaudeSDKSession:{self.conversation_id}] refused batch_execute carrying script write")
+            return PermissionResultDeny(
+                message=(
+                    "batch_execute refused: one of its commands writes or deletes a C# script. "
+                    "Write .cs files with Write/Edit; use batch_execute for scene, component, prefab and asset steps."
+                )
+            )
 
         # Yol tabanlı okuma araçları workspace DIŞINI hedefliyorsa auto-allow'dan
         # DÜŞÜRÜLÜR ve aşağıdaki normal onay kartı akışına girer.
