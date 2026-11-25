@@ -155,7 +155,8 @@ mac:
       # Apple silicon only: Intel Macs are not supported (owner decision, 16 Oct 2026).
       arch:
         - arm64
-    # Squirrel.Mac (electron-updater) updates from the zip, never the dmg; the zip
+    # electron-updater downloads the zip (never the dmg) and Gamachine's own installer
+    # (main/helpers/mac-install.ts) swaps the bundle; Squirrel.Mac is not used. The zip
     # target also writes latest-mac.yml.
     - target: zip
       arch:

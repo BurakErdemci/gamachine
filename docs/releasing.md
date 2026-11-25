@@ -3,6 +3,8 @@
 The app updates itself from GitHub Releases (electron-updater). Windows builds are
 not code-signed, so an update installs only when the release's update manifest
 (`latest.yml`, `latest-mac.yml`) carries an Ed25519 signature made with OUR key.
+Windows and macOS use separate key sets: `latest.yml` is signed with the Windows
+keys, `latest-mac.yml` with the Mac keys (see "Why the Mac keys are separate").
 The app checks the signature first and downloads the update only if the files
 electron-updater is about to fetch match that signed manifest; the downloaded
 file's sha512 is checked again before the install is offered. Otherwise nothing
@@ -23,6 +25,11 @@ CI, the repo, or a synced folder; the owner signs the draft release locally.
 3. Paste both public PEMs into `Frontend/frontend/main/helpers/update-keys.ts`
    (`PRIMARY_UPDATE_PUBLIC_KEY`, `BACKUP_UPDATE_PUBLIC_KEY`) and ship a release
    that contains them. While both are empty the app refuses every update.
+   The Mac keys are a second pair, generated the same way with their own files
+   (e.g. `gamachine-update-mac-primary.pem`, `gamachine-update-mac-backup.pem`).
+   Embed their public PEMs in `MAC_PRIMARY_UPDATE_PUBLIC_KEY` and
+   `MAC_BACKUP_UPDATE_PUBLIC_KEY` in the same file. While both are empty macOS
+   refuses every update ("imza anahtarı tanımlı değil") and shows the release-page dialog.
 4. Storage: keep each encrypted key file and its passphrase in separate places
    (a password manager entry for the file, another for the passphrase). The
    backup key stays offline (USB stick in a drawer). Never put either in the
@@ -41,39 +48,42 @@ CI, the repo, or a synced folder; the owner signs the draft release locally.
    only after both builds pass.
 2. On the Windows PC, with the GitHub CLI logged in (`gh auth status`), from
    `Frontend/frontend` (the script lives in `Frontend/frontend/scripts/`):
-   `node scripts/sign-release.js v4.0.0 C:\Users\<you>\gamachine-update-primary.pem`
+   `node scripts/sign-release.js v4.0.5 C:\Users\<you>\gamachine-update-primary.pem --mac-key C:\Users\<you>\gamachine-update-mac-primary.pem`
    It refuses a release that is not a draft, downloads both manifests, asks the
-   passphrase (hidden), prints each manifest's version and sha512 prefixes, and
-   refuses a manifest whose version differs from the tag. It verifies each
-   signature against `update-keys.ts` BEFORE uploading `latest.yml.sig` and
-   `latest-mac.yml.sig` (`--clobber`); a key that is not embedded uploads
-   nothing. Check that the printed version and hashes are the release you built.
+   passphrase of each key file once (hidden), prints each manifest's version and
+   sha512 prefixes, and refuses a manifest whose version differs from the tag.
+   `latest.yml` is signed with the first key and verified against
+   `PRIMARY/BACKUP_UPDATE_PUBLIC_KEY`; `latest-mac.yml` is signed with the `--mac-key`
+   key and verified against `MAC_PRIMARY/BACKUP_UPDATE_PUBLIC_KEY`. Both are
+   verified BEFORE `latest.yml.sig` and `latest-mac.yml.sig` are uploaded
+   (`--clobber`); a key that is not embedded for its manifest uploads nothing, and so
+   does a Mac key that is also a Windows key. Check that the printed version and
+   hashes are the release you built. `--mac-key` is required, a missing manifest
+   fails the run, and any other option (long or short) is refused before any `gh` call.
    It also refuses an unencrypted key and a key path inside the repo or a synced folder.
 3. Publish the draft in the GitHub UI. Sign BEFORE publishing: clients that
    see a published release without `.sig` files refuse it.
 
-Without a flag the script needs both manifests and fails if `latest-mac.yml` is
-missing. `--skip-mac-manifest` is the only way to sign `latest.yml` alone; it
-refuses while `latest-mac.yml` or `latest-mac.yml.sig` is still on the draft.
-
-## v4.0.4 only: no macOS update manifest
+## Why the Mac keys are separate
 
 4.0.0-4.0.3 install macOS updates through Squirrel.Mac, which reads the whole
 1.37 GB zip into memory and crashes the app on "Restart now" (measured 25 Nov 2026,
-4.0.0 -> 4.0.3, 3 of 3; electron/electron#55089). 4.0.4 installs with its own
-bundle swap, but a 4.0.0-4.0.3 Mac that saw 4.0.4 as an update would still try
-Squirrel and crash. So 4.0.4 ships for Mac as a dmg only:
+4.0.0 -> 4.0.3, 3 of 3; electron/electron#55089). Those builds verify `latest-mac.yml`
+with the Windows keys, so a Mac manifest signed with the separate Mac keys fails their
+check: they show "the signature of the new version could not be verified, download it
+manually from the release page" and never reach Squirrel. That dialog is by design, not
+a bug. A Mac on 4.0.0-4.0.3 installs 4.0.4 (or later) once by hand from the dmg; from
+4.0.4 on the app uses the Mac keys and its own bundle swap below.
 
-1. Build and draft the release as usual (step 1 above).
-2. In the draft, delete `latest-mac.yml` (and `latest-mac.yml.sig` if there is one).
-   Keep the dmg, the zip and its blockmap: the zip is what 4.0.5's auto-update
-   diffs against.
-3. Sign with the flag:
-   `node scripts/sign-release.js v4.0.4 C:\Users\<you>\gamachine-update-primary.pem --skip-mac-manifest`
-4. Publish. Windows updates as usual. Mac users on 4.0.0-4.0.3 see no update and
-   install 4.0.4 once by hand from the dmg; say so in the release notes.
-5. From 4.0.5 on, sign without the flag again: 4.0.4+ Macs install through the
-   bundle swap below.
+Release procedure for 4.0.4 and later (nothing special per version):
+
+1. Generate the Mac primary and backup keys once with `scripts/update-keygen.js`
+   (one-time setup above) and embed their public PEMs in `MAC_PRIMARY_UPDATE_PUBLIC_KEY`
+   and `MAC_BACKUP_UPDATE_PUBLIC_KEY`; the build that ships them is the first one that
+   accepts a Mac manifest.
+2. Build and draft the release as usual ("Each release" step 1).
+3. Sign both manifests: `node scripts/sign-release.js <tag> <windows-key> --mac-key <mac-key>`.
+4. Publish. Say in the release notes that Macs on 4.0.0-4.0.3 install once from the dmg.
 
 ## What the app does with an update
 
@@ -100,15 +110,24 @@ calls `quitAndInstall` or electron's `autoUpdater`, and replaces MacUpdater's
    folder and shows the release-page dialog; only then is "Restart now / Later" offered.
 3. On quit (`will-quit`, for both choices) a detached `/bin/bash` helper (`swap.sh`, written
    into the staging folder) waits up to 60 s for the app's pid to exit, renames the old
-   bundle to `.<App>.app.backup-<pid>` in the same folder, moves the new one in, removes
-   `com.apple.quarantine`, opens it, and deletes the backup only after `open` succeeded.
-   Any failure puts the old bundle back and opens it. It logs to
-   `~/Library/Logs/Gamachine/update-swap.log` (the app logs that path).
+   bundle to `.<App>.app.backup-<pid>` in the same folder (and stops, changing nothing, if
+   that path already exists), moves the new one in, removes `com.apple.quarantine`, and
+   deletes the backup only after the new app was opened. It takes a `relaunch` argument:
+   "Restart now" passes `1` (open the new app; on failure restore the old bundle and open
+   it); "Later" (a normal quit) passes `0` (the swap happens but no app is opened, also not
+   the old one after a failed swap). It logs to `~/Library/Logs/Gamachine/update-swap.log`
+   (the app logs that path).
+4. If the app quits while a staged update is not armed (the ready dialog still open, or
+   "Restart now" still stopping the backend), the staging folder is removed synchronously
+   at `will-quit` so no multi-GB hidden folder is left next to the app.
+5. If MacUpdater cannot be overridden (a different electron-updater layout), the app logs an
+   error and switches updating off for that run rather than let a download reach Squirrel.
 
 ## Rotating to the backup key
 
 If the primary key is lost or exposed:
-1. Sign releases with the backup key (`sign-release.js <tag> <backup-key-path>`).
+1. Sign releases with the backup key (`sign-release.js <tag> <backup-key-path> --mac-key <mac-key-path>`,
+   using the Mac backup key for `--mac-key` when the Mac primary is the lost one).
    Installed apps already accept it because both public keys are embedded.
 2. Generate a new backup key, replace the compromised public key in
    `update-keys.ts` with the old backup public key plus the new one, and ship
@@ -120,9 +139,11 @@ If the primary key is lost or exposed:
 
 `electron-builder.yml` and the app set no `disableDifferentialDownload`, and the
 workflow uploads every `*.blockmap`, so electron-updater's differential download
-stays on for the NSIS installer and the mac zip. electron-updater verifies the
-result against the sha512 the app already matched to the signed manifest, and the
-app hashes the final file once more before offering the install.
+stays on for the NSIS installer and the mac zip. electron-updater diffs only when its own
+cache already holds the previous `update.zip` / installer, which it keeps only after an
+update it downloaded itself; so the first update after a dmg or manual install is a full
+download. electron-updater verifies the result against the sha512 the app already matched
+to the signed manifest, and the app hashes the final file once more before offering the install.
 
 ## Not covered by tests
 
