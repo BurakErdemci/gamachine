@@ -707,6 +707,43 @@ def _single_frame(frame: str):
     return stream
 
 
+class _Accepted:
+    """The request-time part of an HTTP turn (`_accept_turn`); `early` is the
+    stream of a turn that ends there."""
+
+    def __init__(self, early=None, ticketed_wake=False, wake_notices=None, turn_message="",
+                 mail_note="", mail_depth=0, mail_rows=None, user_row=None):
+        self.early = early
+        self.ticketed_wake = ticketed_wake
+        self.wake_notices = wake_notices or []
+        self.turn_message = turn_message
+        self.mail_note = mail_note
+        self.mail_depth = mail_depth
+        self.mail_rows = mail_rows
+        self.user_row = user_row
+
+
+class _TurnResponse(StreamingResponse):
+    """A turn's SSE response that ends its turn however the response ends.
+
+    An ASGI send disconnect ends the response with the body iterator still
+    suspended, and only closing it releases the chat's gate; a response that
+    never streamed hands its accepted input back (turn_runner.abandon)."""
+
+    def __init__(self, turn, content, **kwargs):
+        super().__init__(content, **kwargs)
+        self._turn = turn
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            try:
+                await self.body_iterator.aclose()
+            finally:
+                turn_runner.abandon(self._turn)
+
+
 async def _tag_sse_stream(frames, conversation_id: int):
     # Closing the wrapper must close the turn's generator now, not at GC time:
     # the runner's cleanup (sessions, approval counters) runs in its finally.
@@ -1428,9 +1465,11 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
         db.add_message(cid, "user", text)
 
     try:
-        from providers.claude_sdk_session import set_db_saver, set_inject_saver
+        from providers.claude_sdk_session import (set_db_saver, set_inject_saver,
+                                                  set_unheard_turn_end_listener)
         set_db_saver(_save_detached_claude_turn)
         set_inject_saver(_save_injected_split)
+        set_unheard_turn_end_listener(turn_runner.end_detached)
     except Exception as e:
         logger.warning(f"[conversation_routes] db saver kaydedilemedi: {e}")
 
@@ -1910,6 +1949,7 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
         # After the cards close above, so their card_closed events do not
         # outlive the chat; later writes for this id are ignored.
         turn_events.drop(conv_id)
+        turn_runner.forget(conv_id)
 
     async def _close_conversation_sessions(conv_id: int) -> None:
         # Canlı Claude/Codex session'ı varsa kapat (subprocess sızdırma önlemi).
@@ -1938,6 +1978,8 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
         wake_queue.reset(conv_id)
         _reply_owed.pop(conv_id, None)
         _abandon_detached_turn_reply(conv_id)
+        # Its sessions are gone, and with them any detached turn holding the chat.
+        turn_runner.end_detached(conv_id)
 
     @router.delete("/conversations/{conv_id}")
     async def delete_conversation(conv_id: int, x_session_token: str = Header(alias="X-Session-Token")):
@@ -2290,42 +2332,85 @@ Max 300 kelime. Türkçe yaz.
 
         _check_chat_rate_limit(user_id)
 
+        conv = request.conversation_id
         turn = turn_runner.TurnInput(
-            conversation_id=request.conversation_id, message=request.message,
+            conversation_id=conv, message=request.message,
             origin=request.origin, http=True, user_id=user_id, language=request.language,
             ui_language=_stream_language(request, x_ui_lang), editor_code=request.editor_code,
             thinking_level=request.thinking_level, images=request.images, videos=request.videos,
             effort_level=request.effort_level, ultracode=request.ultracode)
-        language = turn.ui_language
-        # The turn state `_open_turn` settles; tests reach it through this
-        # endpoint's closure (tests/test_bg_tasks_reset.py).
-        (_reply_owed, _turn_reply_detached)
-        if turn_runner.busy(request.conversation_id):
-            # Busy chat: this turn waits at the gate, and opens (stores its
-            # row, reads the history) only once the running turn has ended,
-            # so its context holds that turn's reply.
-            frames = turn_runner.run_turn(turn, _turn_frames)
-        else:
-            # Idle chat: the turn opens now, inside the request, exactly as
-            # before (its rows are stored and its errors are HTTP errors);
-            # its stream still passes the gate on its first frame.
-            stream = _open_turn(turn)
-            frames = turn_runner.run_turn(turn, lambda _t: stream())
-        return StreamingResponse(
-            localize_sse(_tag_sse_stream(frames, request.conversation_id), language),
-            media_type="text/event-stream")
+        _remember_turn_settings(turn)
+        # Accepting stores this turn's input now, inside the request (its row,
+        # wake ticket, mail claim; their errors stay HTTP errors). The turn
+        # opens (history, runner) only once it holds the chat's gate.
+        accepted = _accept_turn(turn)
+        if accepted.early is not None:
+            return StreamingResponse(
+                localize_sse(_tag_sse_stream(accepted.early(), conv), turn.ui_language),
+                media_type="text/event-stream")
+        if accepted.user_row is not None:
+            def _requeue_input() -> None:
+                # The window closed while this message waited: a background
+                # turn answers it instead of it going unanswered.
+                db.queue_turn_input(conv, accepted.user_row, "user")
+            turn.on_abandon = _requeue_input
+        turn.queued_frame = _queued_frame(user_id, conv)
+        frames = turn_runner.run_turn(turn, lambda t: _turn_stream(t, accepted))
+        return _TurnResponse(turn, localize_sse(_tag_sse_stream(frames, conv), turn.ui_language),
+                             media_type="text/event-stream")
 
-    def _store_carried(turn: turn_runner.TurnInput) -> Optional[int]:
-        """Store the turn's carried inputs as messages in arrival order; the
-        first user row (an input with origin "user"), else None."""
-        first_user = None
-        for q in turn.carried:
-            role = "user" if q.origin == "user" else "system"
-            row = db.add_message(turn.conversation_id, role, q.text)
-            if role == "user" and first_user is None:
-                first_user = row
-        turn.consumed = True
-        return first_user
+    def _remember_turn_settings(turn: turn_runner.TurnInput) -> None:
+        """The chat's last turn settings, for its background turns."""
+        try:
+            db.save_turn_settings(turn.conversation_id, turn.user_id, turn.language,
+                                  turn.ui_language, turn.thinking_level, turn.effort_level,
+                                  turn.ultracode)
+        except Exception:
+            logger.exception("[turn-gate] conv=%s turn settings not stored", turn.conversation_id)
+
+    def _apply_turn_settings(turn: turn_runner.TurnInput, user_id: int) -> None:
+        try:
+            saved = db.get_turn_settings(turn.conversation_id, user_id)
+        except Exception:
+            logger.exception("[turn-gate] conv=%s turn settings not read", turn.conversation_id)
+            return
+        if not isinstance(saved, dict):
+            return
+        turn.language = saved.get("language") or turn.language
+        turn.ui_language = saved.get("ui_language") or turn.ui_language
+        turn.thinking_level = saved.get("thinking_level") or turn.thinking_level
+        turn.effort_level = saved.get("effort_level") or turn.effort_level
+        turn.ultracode = bool(saved.get("ultracode"))
+
+    def _queued_frame(user_id: int, conv_id: int) -> str:
+        """What a turn waiting at the gate tells the renderer: agy's own queued
+        status in an agy chat (the renderer words it), else a coded status."""
+        event = {"type": "status", "code": "turn_queued",
+                 "detail": "Sırada — bu sohbetin önceki turu bitince başlayacak"}
+        try:
+            provider_type, model_name = chat_model.turn_model(db, user_id, conv_id)
+            if _is_agy_model(provider_type, model_name):
+                from providers.agy_session import _QUEUED_EVENT
+                event = dict(_QUEUED_EVENT)
+        except Exception:
+            logger.debug("[turn-gate] conv=%s queued frame falls back", conv_id, exc_info=True)
+        return f"data: {json.dumps(event)}\n\n"
+
+    def _accept_input(conv_id: int, text: str, origin: str) -> None:
+        """turn_runner's accept hook: store a background input and its mark."""
+        if _side_main_of(conv_id) is not None:
+            raise ValueError(f"conversation {conv_id} is a side chat")
+        if db.get_conversation_owner(conv_id) is None:
+            raise ValueError(f"conversation {conv_id} does not exist")
+        db.add_turn_input(conv_id, "user" if origin == "user" else "system", text, origin)
+
+    def _has_pending_inputs(conv_id: int) -> bool:
+        n = db.count_turn_inputs(conv_id)
+        return type(n) is int and n > 0
+
+    def _claim_inputs(conv_id: int) -> List[dict]:
+        rows = db.claim_turn_inputs(conv_id)
+        return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
 
     def _store_background_error(turn: turn_runner.TurnInput) -> None:
         # Nobody may be watching a backend-started turn: the chat keeps a row.
@@ -2336,35 +2421,41 @@ Max 300 kelime. Türkçe yaz.
             logger.exception("[turn-gate] conv=%s background error not stored",
                              turn.conversation_id)
 
-    async def _turn_frames(turn: turn_runner.TurnInput):
-        """A whole turn as SSE frames: the executor of background and deferred turns."""
-        frames = _open_turn(turn)()
+    async def _turn_stream(turn: turn_runner.TurnInput, accepted: Optional[_Accepted]):
+        """A whole turn as SSE frames, opened once its caller holds the gate."""
+        try:
+            stream = _open_turn(turn, accepted)
+        except Exception:
+            logger.exception("[turn-gate] conv=%s turn not opened", turn.conversation_id)
+            turn.open_failed = True
+            if accepted is not None:
+                _end_turn_reply(turn.conversation_id, accepted.user_row, None, "error")
+            if not turn.http and turn.claimed:
+                _store_background_error(turn)
+            yield f"data: {json.dumps({'type': 'error', 'message': 'Yanıt akışı sırasında bir hata oluştu. Ayrıntı sunucu loglarında.'})}\n\n"
+            return
+        if stream is None:
+            return
+        frames = stream()
         try:
             async for frame in frames:
                 yield frame
         finally:
             await frames.aclose()
 
-    turn_runner.set_executor(_turn_frames)
+    async def _background_turn(turn: turn_runner.TurnInput):
+        async for frame in _turn_stream(turn, None):
+            yield frame
 
-    def _open_turn(turn: turn_runner.TurnInput):
-        """Open one turn of a chat, whoever started it (agentic/turn_runner).
+    turn_runner.set_executor(_background_turn, accept=_accept_input,
+                             has_pending=_has_pending_inputs)
 
-        Opening is the synchronous part: wake ticket, rows, history, the
-        runner; `/chat-stream` runs it inside the request when the chat is
-        idle, so its errors stay HTTP errors. The returned `stream()` runs
-        the turn and its turn-end work; its caller holds the chat's gate.
-        """
+    def _accept_turn(turn: turn_runner.TurnInput) -> _Accepted:
+        """The request-time part of an HTTP turn: wake ticket and mail claim,
+        the user row and the human-presence bookkeeping."""
         from agentic import wake_queue
 
         user_id = turn.user_id
-        if not turn.http:
-            if _side_main_of(turn.conversation_id) is not None:
-                raise HTTPException(status_code=400, detail=_SIDE_REFUSED)
-            user_id = db.get_conversation_owner(turn.conversation_id)
-            if user_id is None:
-                raise ValueError(f"conversation {turn.conversation_id} has no owner")
-
         ticketed_wake = turn.origin == "wake" and wake_queue.consume_ticket(
             turn.conversation_id)
         wake_notices = (wake_queue.take_ticket_notices(turn.conversation_id)
@@ -2374,12 +2465,7 @@ Max 300 kelime. Türkçe yaz.
             # and are offered again. The client's text is not a user message.
             logger.info("[wake] conv=%s unticketed wake claim -> no turn",
                         turn.conversation_id)
-            return _single_frame(f"data: {json.dumps({'type': 'done', 'stop_reason': 'wake_stale'})}\n\n")
-        # A reply still owed by an earlier turn of this chat (its stream went
-        # away and it never stored) is not this turn's to settle. Only a turn
-        # that really starts settles it: a stale wake above starts none.
-        _reply_owed.pop(turn.conversation_id, None)
-        _abandon_detached_turn_reply(turn.conversation_id)
+            return _Accepted(early=_single_frame(f"data: {json.dumps({'type': 'done', 'stop_reason': 'wake_stale'})}\n\n"))
         # The text this turn runs on. A mail wake replaces it with the notes
         # from the DB: the client's text is never what gets delivered.
         turn_message = turn.message
@@ -2403,7 +2489,7 @@ Max 300 kelime. Türkçe yaz.
                 # notes are DB rows and stay queued on their own.
                 for _n in wake_notices:
                     wake_queue.enqueue(turn.conversation_id, _n)
-                return _single_frame(f"data: {json.dumps({'type': 'done', 'stop_reason': 'wake_chain_exhausted'})}\n\n")
+                return _Accepted(early=_single_frame(f"data: {json.dumps({'type': 'done', 'stop_reason': 'wake_chain_exhausted'})}\n\n"))
             mail_rows = _claim_mail(turn.conversation_id)
             # A wake that only carries notes from turns the user started
             # (depth 1) has a human active in the sender chat, so it is not
@@ -2425,7 +2511,7 @@ Max 300 kelime. Türkçe yaz.
                 # (Codex mailverify, 27 Sep 2026). The next wake claims again.
                 logger.info("[wake] conv=%s mail claim failed -> turn not started",
                             turn.conversation_id)
-                return _single_frame(f"data: {json.dumps({'type': 'done', 'stop_reason': 'mail_claim_failed'})}\n\n")
+                return _Accepted(early=_single_frame(f"data: {json.dumps({'type': 'done', 'stop_reason': 'mail_claim_failed'})}\n\n"))
             if mail_rows:
                 mail_note = mailbox.stored_text(mail_rows)
                 # The note names the send tool as the receiving model sees it.
@@ -2444,12 +2530,6 @@ Max 300 kelime. Türkçe yaz.
                     turn_message = _wake_text
                 db.add_message(turn.conversation_id, "system",
                                _wake_text or turn.message)
-        elif not turn.http:
-            # A backend-started turn runs on its queued inputs; no human is
-            # here, so the wake chain, mail notices and a computer-use Stop stay.
-            _turn_user_row = _store_carried(turn)
-            turn_message = "\n\n".join(q.text for q in turn.carried)
-            _begin_turn_reply(turn.conversation_id, _turn_user_row)
         else:
             # A real user message CANCELS pending mail wakes: the human is back
             # in the loop and decides the next step. Queued notes stay in the
@@ -2467,6 +2547,73 @@ Max 300 kelime. Türkçe yaz.
             except Exception:
                 _end_turn_reply(turn.conversation_id, _turn_user_row, None, "error")
                 raise
+
+
+        return _Accepted(ticketed_wake=ticketed_wake, wake_notices=wake_notices,
+                         turn_message=turn_message, mail_note=mail_note, mail_depth=mail_depth,
+                         mail_rows=mail_rows, user_row=_turn_user_row)
+
+    def _open_turn(turn: turn_runner.TurnInput, accepted: Optional[_Accepted]):
+        """Open one turn of a chat with its gate held: pending inputs, history,
+        the runner. Returns its `stream()`, or None when there is nothing to run."""
+        from agentic import wake_queue
+
+        conv = turn.conversation_id
+        if turn.http:
+            user_id = turn.user_id
+            if db.get_conversation_owner(conv) is None:
+                # Deleted while this turn waited: nothing runs, nothing is stored.
+                _end_turn_reply(conv, accepted.user_row, None, "stopped")
+                return _single_frame(f"data: {json.dumps({'type': 'done', 'stop_reason': 'conversation_deleted'})}\n\n")
+            ticketed_wake = accepted.ticketed_wake
+            wake_notices = accepted.wake_notices
+            turn_message = accepted.turn_message
+            mail_note = accepted.mail_note
+            mail_depth = accepted.mail_depth
+            mail_rows = accepted.mail_rows
+            _turn_user_row = accepted.user_row
+        else:
+            if _side_main_of(conv) is not None:
+                raise HTTPException(status_code=400, detail=_SIDE_REFUSED)
+            user_id = db.get_conversation_owner(conv)
+            if user_id is None:
+                raise ValueError(f"conversation {conv} has no owner")
+            if not _has_pending_inputs(conv):
+                # Nothing left to answer: settle nothing an earlier turn owes.
+                return None
+            _apply_turn_settings(turn, user_id)
+            ticketed_wake, wake_notices = False, []
+            turn_message, mail_note, mail_depth, mail_rows = "", "", 0, None
+            _turn_user_row = None
+        # A reply still owed by an earlier turn of this chat (its stream went
+        # away and it never stored) is not this turn's to settle. Only a turn
+        # that really starts settles it: a stale wake above starts none.
+        _reply_owed.pop(turn.conversation_id, None)
+        _abandon_detached_turn_reply(turn.conversation_id)
+        # Inputs accepted for this chat and not yet answered ride this turn:
+        # a background turn runs on them, a user turn carries them after the
+        # user's message. A wake turn leaves them for their own turn, and a
+        # slash command must reach the CLI bare.
+        carried: List[dict] = []
+        # This turn's own input rows. Inputs are stored when accepted, so a
+        # row stored later (the previous turn's answer) may follow them; the
+        # history readers below take the LAST row as the turn's own input.
+        _own_ids = [_turn_user_row] if _turn_user_row is not None else []
+        if turn.origin != "wake" and not (turn.http and _is_slash_command(turn_message)):
+            carried = _claim_inputs(conv)
+            turn.claimed = True
+        if not turn.http:
+            if not carried:
+                return None
+            # No human is here: the wake chain, mail notices and a
+            # computer-use Stop stay as they are.
+            origins = {r["origin"] for r in carried}
+            turn.origin = origins.pop() if len(origins) == 1 else "background"
+            turn_message = "\n\n".join(r["content"] for r in carried)
+            _turn_user_row = next((r["message_id"] for r in carried if r["role"] == "user"), None)
+            _own_ids = [r["message_id"] for r in carried]
+            _begin_turn_reply(conv, _turn_user_row)
+            carried = []
 
         # Background tasks a Stop or a session close ended: one line in front
         # of this turn's message tells the model; the chat shows it as a system row.
@@ -2502,6 +2649,9 @@ Max 300 kelime. Türkçe yaz.
             # provider'ın ilk turunda enjekte edilir (agent_runner switch'te session'ı resetler).
             memory = db.get_memory(turn.conversation_id)
             history_messages = db.get_conversation_messages(turn.conversation_id)
+            if _own_ids and isinstance(history_messages, list):
+                history_messages = ([m for m in history_messages if m.get("id") not in _own_ids]
+                                    + [m for m in history_messages if m.get("id") in _own_ids])
             context_summary = _build_handoff_context(
                 memory, history_messages,
                 history_header=mailbox.MAIL_WAKE_HISTORY_HEADER if mail_note else None)
@@ -2551,17 +2701,7 @@ Max 300 kelime. Türkçe yaz.
             raise
 
         async def stream():
-            _msg = combined_msg
-            if turn.carried and not turn.consumed and not _is_slash_command(turn_message):
-                # Background inputs queued while the chat was busy ride this user
-                # turn, after the user's message. A slash command must reach the
-                # CLI bare: its inputs go back to the queue and run next.
-                try:
-                    _store_carried(turn)
-                    _msg = "\n\n".join([_msg] + [q.text for q in turn.carried])
-                except Exception:
-                    logger.exception("[turn-gate] conv=%s carried inputs not stored; requeued",
-                                     turn.conversation_id)
+            _msg = "\n\n".join([combined_msg] + [r["content"] for r in carried])
             entry = _TurnRecord()
             turn_reply = _TurnReply()
             # Only a `done` that says `complete`, with no `error`, forwards an
@@ -2581,6 +2721,9 @@ Max 300 kelime. Türkçe yaz.
             _tr_status: Optional[str] = None
             _tr_ended = False
             _bg_error_stored = False
+            # The body ran to its end (normally or into `except`), as opposed
+            # to its stream being closed under it.
+            _body_done = False
             # Every provider path runs through `runner.run` below, so this one
             # tap feeds the turn-event ring for all of them.
             tap = turn_events.TurnTap(turn.conversation_id, _turn_agent, model_name,
@@ -2680,6 +2823,9 @@ Max 300 kelime. Türkçe yaz.
                                                 language=turn.ui_language)
                     except Exception:
                         logger.exception("Asistan turu DB'ye yazılamadı")
+                        if not turn.http:
+                            # No one saw this answer: the turn did not succeed.
+                            _tr_status = "error"
                         _w = {"type": "warning", "code": "turn_not_saved",
                               "message": "Bu yanıt sohbet geçmişine kaydedilemedi; "
                                          "pencereyi kapatırsan kaybolur.",
@@ -2708,8 +2854,10 @@ Max 300 kelime. Türkçe yaz.
                                                 _live_context_reading(turn.conversation_id, chat_model.cli_family(provider_type, model_name),
                                                                       provider_type, model_name))
                 yield f"data: {json.dumps(_usage)}\n\n"
+                _body_done = True
 
             except Exception:
+                _body_done = True
                 # Ham istisna metni artık istemciye GİTMİYOR: içinde iç yol adları
                 # ve kütüphane detayları taşıyabiliyor. Tanı için tam traceback
                 # log'a yazılır, istemci sabit/anlaşılır bir mesaj görür.
@@ -2748,6 +2896,10 @@ Max 300 kelime. Türkçe yaz.
             finally:
                 # No terminal event: the stream closed under the turn.
                 tap.end("stopped")
+                # A closed window's Claude turn runs on in its SDK session:
+                # the chat's gate waits for it (turn_runner.end_detached).
+                turn.detached = (not _body_done and not terminal_gitti
+                                 and _turn_agent == "claude")
                 # A failed turn owes nothing. A Claude turn whose stream went
                 # away keeps running in its session and stores (and forwards)
                 # through `_save_detached_claude_turn`; any other provider's

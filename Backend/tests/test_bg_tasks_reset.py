@@ -390,6 +390,23 @@ def test_an_unticketed_wake_claim_starts_no_turn_and_stores_no_row(runner):
     assert wake_queue.drain(1) == ["tasks_done|audit"]
 
 
+def _router_cell(fn, name, seen=None):
+    """A router-level variable `fn` reaches through its closure, directly or
+    through the router functions it calls."""
+    seen = seen if seen is not None else set()
+    if id(fn) in seen or not getattr(fn, "__closure__", None):
+        return None
+    seen.add(id(fn))
+    cells = dict(zip(fn.__code__.co_freevars, (c.cell_contents for c in fn.__closure__)))
+    if name in cells:
+        return cells[name]
+    for value in cells.values():
+        found = _router_cell(value, name, seen) if callable(value) else None
+        if found is not None:
+            return found
+    return None
+
+
 def test_a_stale_wake_keeps_an_owed_reply_and_a_detached_turn(runner):
     """A stale wake starts no turn, so it must not settle what an earlier turn
     still owes: the mail reply stays held and the detached turn keeps running
@@ -399,9 +416,8 @@ def test_a_stale_wake_keeps_an_owed_reply_and_a_detached_turn(runner):
     turn_replies.clear()
     router = create_conversation_router(_db(), MagicMock())
     route = next(r for r in router.routes if getattr(r, "path", "") == "/chat-stream")
-    cells = dict(zip(route.endpoint.__code__.co_freevars,
-                     (c.cell_contents for c in route.endpoint.__closure__)))
-    owed, detached = cells["_reply_owed"], cells["_turn_reply_detached"]
+    owed, detached = _router_cell(route.endpoint, "_reply_owed"), \
+        _router_cell(route.endpoint, "_turn_reply_detached")
     turn_replies.begin(1, 55)
     detached[1] = 55
     owed[1] = {"senders": [7], "start_id": 0, "user_id": 1, "agent": "claude", "stopped": False}

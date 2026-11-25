@@ -88,6 +88,17 @@ def set_db_saver(cb: Callable[..., None]) -> None:
     _DB_SAVE_CB = cb
 
 
+# Called as (conv_id) when a turn ends with no stream listening (a closed
+# window's turn, the CLI's own turn): the chat's turn gate waits for it
+# (agentic/turn_runner.end_detached).
+_UNHEARD_TURN_END_CB: Optional[Callable[[int], None]] = None
+
+
+def set_unheard_turn_end_listener(cb: Optional[Callable[[int], None]]) -> None:
+    global _UNHEARD_TURN_END_CB
+    _UNHEARD_TURN_END_CB = cb
+
+
 # Called as (conv_id, tasks) on every start/end of a background task, from the
 # reader's loop; /wake-stream-all turns it into a `bg_tasks` frame.
 _BG_TASK_LISTENERS: List[Callable[[int, List[dict]], None]] = []
@@ -1934,6 +1945,11 @@ class ClaudeSDKSession:
         self._end_agent_tap("error" if error else "done")
         if q is None:
             self._end_unprompted_computer_presence()
+            if _UNHEARD_TURN_END_CB is not None:
+                try:
+                    _UNHEARD_TURN_END_CB(self.conversation_id)
+                except Exception:
+                    logger.exception("[ClaudeSDKSession] unheard turn end not reported")
         # Tasks finished while this turn ran: the model saw the notification
         # in-session; give the CLI the same grace before waking, once.
         if self._drain_state == "after_turn" and not self._active_tasks:

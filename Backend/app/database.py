@@ -371,6 +371,27 @@ class DatabaseManager:
                 created REAL NOT NULL)''')
             cursor.execute(
                 'CREATE INDEX IF NOT EXISTS idx_chat_files_conv ON chat_files (conversation_id)')
+            # Inputs accepted for a chat's next turn and not yet taken by one
+            # (agentic/turn_runner): the message row is written with its mark,
+            # a turn claims (deletes) the marks. Survives a restart, so the
+            # chat's next turn still answers them.
+            cursor.execute('''CREATE TABLE IF NOT EXISTS turn_inputs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                origin TEXT NOT NULL)''')
+            cursor.execute(
+                'CREATE INDEX IF NOT EXISTS idx_turn_inputs_conv ON turn_inputs (conversation_id)')
+            # The settings of a chat's last HTTP turn; background turns use them.
+            cursor.execute('''CREATE TABLE IF NOT EXISTS turn_settings (
+                conversation_id INTEGER PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                language TEXT,
+                ui_language TEXT,
+                thinking_level TEXT,
+                effort_level TEXT,
+                ultracode INTEGER NOT NULL DEFAULT 0,
+                updated_at REAL NOT NULL)''')
             conn.commit()
 
     def _migrate_ai_configs_table(self, conn: sqlite3.Connection):
@@ -756,6 +777,8 @@ class DatabaseManager:
             conn.execute('DELETE FROM cli_sessions WHERE conversation_id = ?', (conv_id,))
             conn.execute('DELETE FROM mailbox WHERE from_conv = ? OR to_conv = ?', (conv_id, conv_id))
             conn.execute('DELETE FROM chat_files WHERE conversation_id = ?', (conv_id,))
+            conn.execute('DELETE FROM turn_inputs WHERE conversation_id = ?', (conv_id,))
+            conn.execute('DELETE FROM turn_settings WHERE conversation_id = ?', (conv_id,))
             conn.execute('DELETE FROM conversations WHERE id = ?', (conv_id,))
             side_ids = self._delete_side_rows_of(conn, [conv_id])
             conn.commit()
@@ -784,6 +807,8 @@ class DatabaseManager:
             f'DELETE FROM mailbox WHERE from_conv IN ({marks}) OR to_conv IN ({marks})',
             list(ids) + list(ids))
         conn.execute(f'DELETE FROM chat_files WHERE conversation_id IN ({marks})', ids)
+        conn.execute(f'DELETE FROM turn_inputs WHERE conversation_id IN ({marks})', ids)
+        conn.execute(f'DELETE FROM turn_settings WHERE conversation_id IN ({marks})', ids)
         conn.execute(f'DELETE FROM conversations WHERE id IN ({marks})', ids)
 
     def delete_conversation_family(self, conv_id: int) -> List[int]:
@@ -815,6 +840,71 @@ class DatabaseManager:
             conn.commit()
         chat_files.remove_folders(self.db_path, ids + side_ids)
         return ids, side_ids
+
+    # ===================== TURN INPUTS =====================
+    def add_turn_input(self, conv_id: int, role: str, content: str, origin: str) -> int:
+        """Store an input for the chat's next turn: its message and its pending
+        mark in one transaction. The message id."""
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            message_id = self.insert_message_in(conn, conv_id, role, content)[0]
+            conn.execute('INSERT INTO turn_inputs (conversation_id, message_id, origin) '
+                         'VALUES (?, ?, ?)', (conv_id, message_id, origin))
+            conn.commit()
+            return message_id
+
+    def queue_turn_input(self, conv_id: int, message_id: int, origin: str) -> None:
+        """Mark an already stored message as pending for the chat's next turn."""
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute('INSERT INTO turn_inputs (conversation_id, message_id, origin) '
+                         'VALUES (?, ?, ?)', (conv_id, message_id, origin))
+            conn.commit()
+
+    def count_turn_inputs(self, conv_id: int) -> int:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            return conn.execute('SELECT COUNT(*) FROM turn_inputs WHERE conversation_id = ?',
+                                (conv_id,)).fetchone()[0]
+
+    def claim_turn_inputs(self, conv_id: int) -> List[Dict[str, Any]]:
+        """Take every pending input of the chat, in arrival order, at most once.
+        A mark whose message is gone (compacted) is dropped with the rest."""
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute('BEGIN IMMEDIATE')
+            rows = conn.execute(
+                'SELECT t.message_id, m.role, m.content, t.origin FROM turn_inputs t '
+                'JOIN messages m ON m.id = t.message_id '
+                'WHERE t.conversation_id = ? ORDER BY t.id ASC', (conv_id,)).fetchall()
+            conn.execute('DELETE FROM turn_inputs WHERE conversation_id = ?', (conv_id,))
+            conn.commit()
+        return [{"message_id": r[0], "role": r[1], "content": r[2], "origin": r[3]} for r in rows]
+
+    def save_turn_settings(self, conv_id: int, user_id: int, language: Optional[str],
+                           ui_language: Optional[str], thinking_level: Optional[str],
+                           effort_level: Optional[str], ultracode: bool) -> None:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute(
+                'INSERT OR REPLACE INTO turn_settings (conversation_id, user_id, language, '
+                'ui_language, thinking_level, effort_level, ultracode, updated_at) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                (conv_id, user_id, language, ui_language, thinking_level, effort_level,
+                 1 if ultracode else 0, time.time()))
+            conn.commit()
+
+    def get_turn_settings(self, conv_id: int, user_id: int) -> Optional[Dict[str, Any]]:
+        """The chat's last HTTP turn settings; else the user's latest from any
+        chat (a sub-agent's new chat has had none); None if never stored."""
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            row = conn.execute(
+                'SELECT language, ui_language, thinking_level, effort_level, ultracode '
+                'FROM turn_settings WHERE conversation_id = ?', (conv_id,)).fetchone()
+            if row is None:
+                row = conn.execute(
+                    'SELECT language, ui_language, thinking_level, effort_level, ultracode '
+                    'FROM turn_settings WHERE user_id = ? '
+                    'ORDER BY updated_at DESC, rowid DESC LIMIT 1', (user_id,)).fetchone()
+        if row is None:
+            return None
+        return {"language": row[0], "ui_language": row[1], "thinking_level": row[2],
+                "effort_level": row[3], "ultracode": bool(row[4])}
 
     # ===================== SIDE CHATS =====================
     def create_side_chat(self, main_id: int, user_id: int) -> Optional[int]:
