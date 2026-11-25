@@ -7,6 +7,30 @@ Bu dosya kullanıcıya görünen değişiklikleri taşır. Tam geçmiş için `g
 > kullanıcının indirme anında gördüğü sayfa. Eski girdiler olduğu gibi bırakıldı —
 > geçmişi yarım çevirmek, tek dilde bırakmaktan da iki dilde bırakmaktan da kötü.
 
+## v4.0.4 — 25 November 2026
+
+A macOS update fix on top of v4.0.3.
+
+### Updates on macOS
+- **Mac users on 4.0.0-4.0.3: install 4.0.4 by hand, once.** Download
+  `Gamachine-4.0.4-arm64.dmg` and drag Gamachine to Applications. In those versions
+  "Restart now" crashes the app instead of installing the update (Squirrel.Mac reads the
+  whole 1.37 GB update into memory), so 4.0.4 is not offered to them as an in-app update.
+  In-app updates on the Mac resume with 4.0.5.
+- **The Mac app installs updates itself, without Squirrel.Mac.** After the signed
+  manifest and the downloaded file's hash check out, the update is unpacked next to the
+  installed app and must pass Apple's code signature check, carry Gamachine's developer
+  ID and the expected version, and be accepted by Gatekeeper before "Restart now" or
+  "Later" is offered. When the app quits, a small helper swaps in the new app and opens
+  it; if any step fails it puts the old app back and opens that instead. The helper's
+  log is `~/Library/Logs/Gamachine/update-swap.log`.
+- **When the app cannot replace itself** (opened from the dmg, opened before being moved
+  to Applications, or a folder your account cannot write to) nothing is downloaded and
+  the release page is offered instead.
+
+### Windows
+- No change: updates install through the NSIS installer as before.
+
 ## v4.0.3 — 25 November 2026
 
 A safety release on top of v4.0.2. Updating is recommended, above all if you use
