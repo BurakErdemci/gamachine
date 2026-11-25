@@ -189,6 +189,20 @@ def test_twin_denies_recorded_allow_when_mode_changed_and_allows_when_equal(tmp_
     assert gate.decide_once(raw, str(state), cwd=str(ws))["decision"] == "deny"
 
 
+def test_twin_keeps_a_balanced_allow_after_a_flip_to_auto(tmp_path):
+    # Live 25 Nov 2026: a card approved by the flip to auto was then refused
+    # by the call's twin hook, because the record said balanced.
+    ws = tmp_path / "ws"
+    _write_hooks(ws)
+    state = tmp_path / "gate" / "s.json"
+    gate.write_state(str(state), "balanced", "unityai", workspace=str(ws))
+    raw = _tool_payload(ws, name="run_command", args={"CommandLine": "echo ok", "Cwd": str(ws)})
+
+    assert gate.decide_once(raw, str(state), cwd=str(ws)) == {"decision": "allow"}
+    gate.write_state(str(state), "auto", "unityai", workspace=str(ws))
+    assert gate.decide_once(raw, str(state), cwd=str(ws)) == {"decision": "allow"}
+
+
 def test_decide_once_reads_state_file_once_and_twin_returns_recorded_deny(tmp_path, monkeypatch):
     ws = tmp_path / "ws"
     _write_hooks(ws)

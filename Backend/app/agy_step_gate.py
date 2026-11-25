@@ -798,8 +798,14 @@ def _twin_decision(claim: str, state_path: str) -> dict:
             if decision["decision"] == "allow":
                 recorded_mode = decision.get("mode")
                 current_mode = _state_mode(state_path)
+                # A flip from balanced to auto only loosens: the first run's
+                # allow (often a card just approved by that very flip) still
+                # stands. Measured live 25 Nov 2026: agy 1.5.15 runs a twin for
+                # every writer call and applies the twin's deny.
+                loosened = recorded_mode == BALANCED_MODE and current_mode == "auto"
                 if (current_mode not in ("auto", BALANCED_MODE, SIDE_MODE)
-                        or recorded_mode is None or current_mode != recorded_mode):
+                        or recorded_mode is None
+                        or (current_mode != recorded_mode and not loosened)):
                     # Closed, broken, or tightened since the first run decided.
                     return _deny(FAIL_REASON)
             return out
