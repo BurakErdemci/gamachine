@@ -11,6 +11,7 @@ from typing import Optional
 import httpx
 from mcp.server.mcpserver import MCPServer
 
+from spawn_env import read_only_refusal
 from unity_ai_mcp.approval_bridge import BACKEND_URL, _conversation_id_from_env, _get_headers
 
 logger = logging.getLogger(__name__)
@@ -76,11 +77,16 @@ async def agent_models() -> str:
 
 
 async def agent_start(model: str, brief: str, effort: str = "auto", name: str = "") -> str:
+    # A helper runs as an ordinary turn, so a read-only turn must not start or steer one.
+    if (refusal := read_only_refusal()) is not None:
+        return refusal
     return await _call("POST", "/subagents/start",
                        body={"model": model, "brief": brief, "effort": effort, "name": name})
 
 
 async def agent_message(agent_id: int, text: str) -> str:
+    if (refusal := read_only_refusal()) is not None:
+        return refusal
     return await _call("POST", "/subagents/message", body={"agent_id": agent_id, "text": text})
 
 

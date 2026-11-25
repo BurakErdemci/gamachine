@@ -112,6 +112,13 @@ def test_tools_return_the_backends_words_and_refusals(backend, monkeypatch):
     assert len(backend.calls) == 2
 
 
+
+def test_a_read_only_turn_cannot_start_or_steer_a_helper(backend, monkeypatch):
+    monkeypatch.setenv("GAMACHINE_READ_ONLY", "1")
+    assert "Read-only" in asyncio.run(agent_tools.agent_start("gpt-6-luna", "b"))
+    assert "Read-only" in asyncio.run(agent_tools.agent_message(1, "go on"))
+    assert backend.calls == []
+
 def test_an_unreachable_backend_is_said_plainly(monkeypatch):
     monkeypatch.setenv("GAMACHINE_CONVERSATION_ID", "42")
 
