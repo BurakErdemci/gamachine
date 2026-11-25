@@ -380,6 +380,10 @@ class KimiProvider(BaseCLIProvider):
         cfg_home = os.environ.get("KIMI_CODE_HOME") or os.path.expanduser("~/.kimi-code")
         return os.path.join(cfg_home, "config.toml")
 
+    @staticmethod
+    def _legacy_rule_present(content: str, decision: str, pattern: str) -> bool:
+        return f'decision = "{decision}"\npattern = "{pattern}"' in content
+
     def _kimi_permissions_confirmed(self, path: str) -> bool:
         """True when config.toml, read back from disk, holds the current deny rules."""
         try:
@@ -394,8 +398,11 @@ class KimiProvider(BaseCLIProvider):
             return end >= 0 and (content[start:end + len(self._KIMI_MANAGED_END)]
                                  == self._KIMI_PERMISSION_BLOCK.strip("\n"))
         if self._KIMI_LEGACY_MARKER in content:
-            return all(f'"{pattern}"' in content for pattern in
-                       (*self._KIMI_DENY_PATTERNS, *self._KIMI_NEWER_ALLOW_PATTERNS))
+            return all(
+                self._legacy_rule_present(content, decision, pattern)
+                for decision, patterns in (("deny", self._KIMI_DENY_PATTERNS),
+                                           ("allow", self._KIMI_NEWER_ALLOW_PATTERNS))
+                for pattern in patterns)
         return False
 
     def _write_kimi_permissions(self) -> bool:
@@ -462,7 +469,7 @@ class KimiProvider(BaseCLIProvider):
                 for decision, patterns in (("deny", self._KIMI_DENY_PATTERNS),
                                            ("allow", self._KIMI_NEWER_ALLOW_PATTERNS))
                 for pattern in patterns
-                if f'"{pattern}"' not in existing)
+                if not self._legacy_rule_present(existing, decision, pattern))
             if not to_write:
                 return True  # zaten yazılı — idempotent
             if existing and not existing.endswith("\n"):
@@ -529,7 +536,6 @@ class KimiProvider(BaseCLIProvider):
         )
 
     def _build_cmd(self, prompt: str, thinking_level: str = "medium", workspace: str = None) -> list:
-        self._write_kimi_permissions()
         self._kimi_error_reported = False
         workspace = workspace or os.getcwd()
 
