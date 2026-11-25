@@ -51,6 +51,7 @@ os.environ["PATH"] = os.pathsep.join(
 #   backend codex-mcp-bridge <http_url> → providers.codex_unitymcp_bridge (Codex stdio köprüsü)
 #   backend agy-hook --state <file>     → agy_step_gate.main (agy PreToolUse hook, every approval mode)
 #   backend mail-mcp-server             → unity_ai_mcp.mail_server.main (Claude chats' mail tools)
+#   backend mcp-server --agents-only    → unity_ai_mcp.agent_tools_server (Claude chats' sub-agent tools)
 #   backend agent-mcp-server            → unity_ai_mcp.agent_server.main (terminal agents' Gamachine tools)
 #   backend computer-mcp-server         → computer_use.server.main (computer-use tools)
 #   backend browser-mcp-server          → browser_use.server.main (agent browser tools)
@@ -170,6 +171,7 @@ from routes.scene_editor_routes import create_scene_editor_router
 from routes.connector_routes import create_connector_router
 from routes.chat_files_routes import create_chat_files_router
 from routes.claude_session_routes import create_claude_session_router
+from routes.subagent_routes import create_subagent_router
 
 
 # Root logger seviyesini explicit INFO yap
@@ -456,6 +458,8 @@ app.include_router(create_workspace_router(db))
 app.include_router(create_lsp_router(db))
 _conversation_router = create_conversation_router(db)
 app.include_router(_conversation_router)
+# After the conversation router: it binds the sub-agent driver's hooks.
+app.include_router(create_subagent_router(db, list_models=_config_router.list_models))
 app.include_router(create_profile_router(db))
 app.include_router(create_chat_files_router(db))
 app.include_router(create_usage_router(usage_service))

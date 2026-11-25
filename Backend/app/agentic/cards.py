@@ -93,6 +93,16 @@ class Card:
     # Question cards only: [{question, options: [label], multi}], so a phone
     # can offer the choices. Question text and labels, never other params.
     questions: Optional[List[dict]] = None
+    # A sub-agent's card: the chat that started it and "<name> (<model>)",
+    # so the parent chat can show the card (the card stays the child's).
+    parent_conversation_id: Optional[int] = None
+    agent_label: Optional[str] = None
+
+    def agent_tag(self) -> dict:
+        if self.parent_conversation_id is None:
+            return {}
+        return {"parent_conversation_id": self.parent_conversation_id,
+                "agent_label": self.agent_label}
 
     def public(self) -> dict:
         out = {"card_id": self.card_id, "conversation_id": self.conversation_id,
@@ -100,6 +110,7 @@ class Card:
                "risk": self.risk, "created_at": _iso(self.created_at)}
         if self.questions:
             out["questions"] = self.questions
+        out.update(self.agent_tag())
         return out
 
 
@@ -107,12 +118,35 @@ _LOCK = threading.Lock()
 _OPEN: Dict[str, Card] = {}
 _CLOSED: "OrderedDict[str, Card]" = OrderedDict()
 _ledger_writer: Optional[Callable[[dict], Any]] = None
+# tagger(conversation_id) -> {"parent_conversation_id", "agent_label"} for a
+# sub-agent's chat, else None (agentic/subagents.py sets it).
+_tagger: Optional[Callable[[int], Optional[dict]]] = None
 _ledger_failure_logged = False
 
 
 def set_ledger(writer: Optional[Callable[[dict], Any]]) -> None:
     global _ledger_writer
     _ledger_writer = writer
+
+
+def set_tagger(tagger: Optional[Callable[[int], Optional[dict]]]) -> None:
+    global _tagger
+    _tagger = tagger
+
+
+def agent_tag(conversation_id: Optional[int]) -> dict:
+    """The sub-agent tag of a chat's cards; {} for any other chat. Never raises."""
+    if conversation_id is None or _tagger is None:
+        return {}
+    try:
+        tag = _tagger(conversation_id)
+    except Exception:
+        logger.debug("[cards] agent tag not read", exc_info=True)
+        return {}
+    if not tag:
+        return {}
+    return {"parent_conversation_id": tag.get("parent_conversation_id"),
+            "agent_label": tag.get("agent_label")}
 
 
 # Called with ("opened" | "closed", card) after the change, on the caller's
@@ -176,7 +210,8 @@ def open_card(card_id: str, *, conversation_id: Optional[int], kind: str,
                     risk=risk or None, created_at=time.time(),
                     params_hash=params_hash(params), approval_mode=_current_mode(),
                     resolver=resolver,
-                    questions=_question_list(questions) if kind == "question" else None)
+                    questions=_question_list(questions) if kind == "question" else None,
+                    **agent_tag(conversation_id))
         with _LOCK:
             _CLOSED.pop(card_id, None)
             _OPEN[card_id] = card
@@ -185,7 +220,7 @@ def open_card(card_id: str, *, conversation_id: Optional[int], kind: str,
         return None
     if conversation_id is not None:
         turn_events.append(conversation_id, "card_opened", card_id=card_id, card_kind=card.kind,
-                           tool=card.tool, summary=card.summary)
+                           tool=card.tool, summary=card.summary, **card.agent_tag())
     _notify("opened", card)
     return card
 

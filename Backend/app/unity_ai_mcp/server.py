@@ -39,6 +39,7 @@ from unity_ai_mcp.approval_bridge import BACKEND_URL, _get_headers
 from unity_ai_mcp.tools.file_tools import register_file_tools
 from unity_ai_mcp.tools.bash_tool import register_bash_tool
 from unity_ai_mcp.tools.mailbox_tools import register_mailbox_tools
+from unity_ai_mcp.tools.agent_tools import register_agent_tools
 from unity_ai_mcp.tools.show_tools import register_show_tools
 from unity_ai_mcp.tools.script_tools import register_script_tool
 
@@ -110,6 +111,8 @@ def create_server(workspace: str = "") -> MCPServer:
     # Scripts reach the file, shell and chat-mail tools (whatever their names are today).
     register_mailbox_tools(mcp)
     script_tool_names = [tool.name for tool in mcp._tool_manager.list_tools()]
+    # Sub-agent tools stay out of scripts: a loop must not start helpers.
+    register_agent_tools(mcp)
     register_show_tools(mcp)
     register_harness_tools(mcp)
     register_script_tool(mcp, get_workspace, script_tool_names)
@@ -186,12 +189,17 @@ def main():
     # Claude chats' harness-only server (harness_notes.claude_server_entry): reusing this
     # subcommand keeps the frozen binary's dispatch list in main.py unchanged.
     parser.add_argument("--harness-only", action="store_true")
+    # Claude chats' sub-agent server (agentic.subagents.claude_server_entry), same reuse.
+    parser.add_argument("--agents-only", action="store_true")
     args, _ = parser.parse_known_args()
     _workspace_path = args.workspace or os.getcwd()
 
     if args.harness_only:
         from unity_ai_mcp.harness_server import create_server as create_harness_server
         mcp = create_harness_server()
+    elif args.agents_only:
+        from unity_ai_mcp.agent_tools_server import create_server as create_agents_server
+        mcp = create_agents_server()
     else:
         mcp = create_server()
     mcp.run(transport="stdio")

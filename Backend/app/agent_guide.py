@@ -192,6 +192,15 @@ def with_script_tool(guide: str) -> str:
     return _add_block(guide, SCRIPT_TOOL_LINE_EN, SCRIPT_TOOL_LINE_TR)
 
 
+SUBAGENTS_LINE_EN = "- Sub-agents: agent_models and agent_start run other connected CLI models as background helpers in this folder (agent_message, agent_stop, agent_list, agent_result); start only what the job needs, ask the user before parallel writers in one folder (offer a worktree), and do not poll: each result arrives here by itself."
+SUBAGENTS_LINE_TR = "- Alt ajanlar: agent_models ve agent_start, bağlı diğer CLI modellerini bu klasörde arka planda yardımcı olarak çalıştırır (agent_message, agent_stop, agent_list, agent_result); yalnız işin gerektirdiği kadarını başlat, aynı klasörde paralel yazan ajanlardan önce kullanıcıya sor (worktree öner) ve yoklama yapma: her sonuç buraya kendiliğinden gelir."
+
+
+def with_subagents(guide: str) -> str:
+    """Only for a CLI main agent's chat (never a sub-agent's own chat)."""
+    return _add_block(guide, SUBAGENTS_LINE_EN, SUBAGENTS_LINE_TR)
+
+
 def bind_settings_store(store) -> None:
     """Use the app database supplied when the config router is created."""
     global _settings_store

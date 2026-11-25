@@ -1971,6 +1971,16 @@ class AgentRunner:
             language, project_open=bool(getattr(self, "workspace_path", None)),
             unity_state="connected" if toggle_on else "off", addendum=addendum)
 
+    def _with_subagents(self, guide: str) -> str:
+        """The sub-agent line for a CLI main agent's guide; never for a
+        read-only run or a sub-agent's own chat (depth 1)."""
+        if not guide or getattr(self, "read_only", False):
+            return guide
+        from agentic import subagents
+        if not subagents.may_start(getattr(self, "conversation_id", None)):
+            return guide
+        return agent_guide.with_subagents(guide)
+
     def _turn_notes(self, extra_mode: str = ""):
         """This turn's (kind, text) notes for a Briefing: the live Unity state and
         the approval mode. A session's model hears each again only when it changed."""
@@ -2931,7 +2941,7 @@ class AgentRunner:
         # The agy session sends the guide and the notes its process lacks.
         session.turn_notes = () if _is_slash_command(user_message) else self._turn_notes()
         turn_complete = False
-        session.agent_guide = self._agent_guide
+        session.agent_guide = self._with_subagents(self._agent_guide)
         try:
             async with contextlib.aclosing(session.stream(
                 message, model=self.model_name, cwd=self.workspace_path or ".",
@@ -3015,6 +3025,7 @@ class AgentRunner:
                 _cli_guide = agent_guide.with_connectors(_cli_guide)
             # Cursor, Copilot, OpenCode and Kimi mount the unityai server, which serves run_script.
             _cli_guide = agent_guide.with_script_tool(_cli_guide)
+            _cli_guide = self._with_subagents(_cli_guide)
         _note_text = "\n\n".join(text for _, text in self._turn_notes())
         _guide_units = len(((_cli_guide or "") + _note_text).encode("utf-16-le")) // 2
         _prompt_cap = 24000 - _guide_units
@@ -3290,6 +3301,7 @@ class AgentRunner:
         from computer_use import registration
         from browser_use import registration as browser_registration
         from connectors import registration as connectors_registration
+        from agentic import subagents as _subagents
         # Harness notes: the guide tells every chat to call harness_search, and
         # the three tools only read, so read-only sessions get them too.
         _harness_entry = harness_notes.claude_server_entry(self.conversation_id)
@@ -3300,6 +3312,10 @@ class AgentRunner:
             _mail_entry = _mailbox.claude_server_entry(self.conversation_id)
             if _mail_entry is not None:
                 mcp_servers_cfg[_mailbox.CLAUDE_SERVER_NAME] = _mail_entry
+            # Sub-agent tools; a sub-agent's own chat gets none (depth 1).
+            _agents_entry = _subagents.claude_server_entry(self.conversation_id)
+            if _agents_entry is not None:
+                mcp_servers_cfg[_subagents.CLAUDE_SERVER_NAME] = _agents_entry
             _computer_entry = registration.claude_server_entry(self.conversation_id)
             if _computer_entry is not None:
                 mcp_servers_cfg[registration.SERVER_NAME] = _computer_entry
@@ -3318,6 +3334,8 @@ class AgentRunner:
             _session_guide = agent_guide.with_browser_use(_session_guide)
         if connectors_registration.SERVER_NAME in mcp_servers_cfg:
             _session_guide = agent_guide.with_connectors(_session_guide)
+        if _subagents.CLAUDE_SERVER_NAME in mcp_servers_cfg:
+            _session_guide = agent_guide.with_subagents(_session_guide)
         model = self.model_name if (self.model_name or "").startswith("claude-") else None
 
         # Effort: kayıtçıdan (effort_caps) eşlenir — "auto" veya desteklenmeyen seviye →
@@ -3781,6 +3799,7 @@ class AgentRunner:
                 _session_guide = agent_guide.with_connectors(_session_guide)
             # Codex mounts the unityai server, which serves run_script.
             _session_guide = agent_guide.with_script_tool(_session_guide)
+            _session_guide = self._with_subagents(_session_guide)
         # The thread holds the guide from its first turn until a compaction
         # (codex_session forgets it there) or a new thread on a dead app-server.
         _briefing = agent_guide.briefing_of(session)

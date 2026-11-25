@@ -271,7 +271,11 @@ class DatabaseManager:
                             "hidden INTEGER NOT NULL DEFAULT 0", "side_of INTEGER",
                             "title_source TEXT NOT NULL DEFAULT 'auto'",
                             "auto_title_runs INTEGER NOT NULL DEFAULT 0",
-                            "copied_until INTEGER", "workspace TEXT"):
+                            "copied_until INTEGER", "workspace TEXT",
+                            # agent_of: a sub-agent's hidden chat names the chat
+                            # that started it (agentic/subagents.py). Not
+                            # parent_id: that one means "branch of".
+                            "agent_of INTEGER"):
                 try:
                     cursor.execute(f"ALTER TABLE conversations ADD COLUMN {col_def}")
                 except sqlite3.OperationalError:
@@ -392,6 +396,26 @@ class DatabaseManager:
                 effort_level TEXT,
                 ultracode INTEGER NOT NULL DEFAULT 0,
                 updated_at REAL NOT NULL)''')
+            # Sub-agents (agentic/subagents.py): one row per hidden child chat.
+            cursor.execute('''CREATE TABLE IF NOT EXISTS subagents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                parent_conv INTEGER NOT NULL,
+                child_conv INTEGER NOT NULL UNIQUE,
+                name TEXT NOT NULL,
+                provider_type TEXT NOT NULL,
+                model_name TEXT NOT NULL,
+                effort TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                last_result TEXT)''')
+            cursor.execute(
+                'CREATE INDEX IF NOT EXISTS idx_subagents_parent ON subagents (parent_conv)')
+            # Results the runaway fuse kept from waking their parent: stored
+            # rows of the parent chat, queued for its next user turn.
+            cursor.execute('''CREATE TABLE IF NOT EXISTS subagent_held (
+                message_id INTEGER PRIMARY KEY,
+                parent_conv INTEGER NOT NULL)''')
             conn.commit()
 
     def _migrate_ai_configs_table(self, conn: sqlite3.Connection):
@@ -557,7 +581,8 @@ class DatabaseManager:
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             rows = conn.execute(
                 'SELECT id, title, created_at, updated_at, parent_id, hidden, title_source '
-                'FROM conversations WHERE user_id = ? AND side_of IS NULL ORDER BY updated_at DESC',
+                'FROM conversations WHERE user_id = ? AND side_of IS NULL AND agent_of IS NULL '
+                'ORDER BY updated_at DESC',
                 (user_id,)
             ).fetchall()
             # title_source lets the renderer drop an in-flight AI title frame
@@ -781,8 +806,9 @@ class DatabaseManager:
             conn.execute('DELETE FROM turn_settings WHERE conversation_id = ?', (conv_id,))
             conn.execute('DELETE FROM conversations WHERE id = ?', (conv_id,))
             side_ids = self._delete_side_rows_of(conn, [conv_id])
+            child_ids = self._delete_subagent_rows_of(conn, [conv_id])
             conn.commit()
-        chat_files.remove_folders(self.db_path, [conv_id] + side_ids)
+        chat_files.remove_folders(self.db_path, [conv_id] + side_ids + child_ids)
 
     @staticmethod
     def _delete_side_rows_of(conn: sqlite3.Connection, main_ids: List[int]) -> List[int]:
@@ -795,6 +821,24 @@ class DatabaseManager:
             main_ids)]
         DatabaseManager._delete_rows(conn, side_ids)
         return side_ids
+
+    @staticmethod
+    def _delete_subagent_rows_of(conn: sqlite3.Connection, ids: List[int]) -> List[int]:
+        """Inside the caller's transaction: the sub-agent chats `ids` started,
+        and every sub-agent / held-result row naming any of them. Returns the
+        deleted child chat ids."""
+        if not ids:
+            return []
+        marks = ','.join('?' * len(ids))
+        child_ids = [r[0] for r in conn.execute(
+            f'SELECT id FROM conversations WHERE agent_of IN ({marks}) ORDER BY id ASC', ids)]
+        DatabaseManager._delete_rows(conn, child_ids)
+        every = list(ids) + child_ids
+        marks = ','.join('?' * len(every))
+        conn.execute(f'DELETE FROM subagents WHERE parent_conv IN ({marks}) '
+                     f'OR child_conv IN ({marks})', every + every)
+        conn.execute(f'DELETE FROM subagent_held WHERE parent_conv IN ({marks})', every)
+        return child_ids
 
     @staticmethod
     def _delete_rows(conn: sqlite3.Connection, ids: List[int]) -> None:
@@ -837,6 +881,9 @@ class DatabaseManager:
                     (conv_id,))]
             self._delete_rows(conn, ids)
             side_ids = self._delete_side_rows_of(conn, ids)
+            # Sub-agent chats go with the chat that started them, listed after
+            # the family so callers purge and close them like any deleted id.
+            ids += self._delete_subagent_rows_of(conn, ids)
             conn.commit()
         chat_files.remove_folders(self.db_path, ids + side_ids)
         return ids, side_ids
@@ -927,6 +974,115 @@ class DatabaseManager:
             return None
         return {"language": row[0], "ui_language": row[1], "thinking_level": row[2],
                 "effort_level": row[3], "ultracode": bool(row[4])}
+
+    # ===================== SUB-AGENTS =====================
+    _SUBAGENT_COLS = ('id, parent_conv, child_conv, name, provider_type, model_name, effort, '
+                      'status, created_at, updated_at, last_result')
+
+    @staticmethod
+    def _subagent_row(r) -> Dict[str, Any]:
+        return {"id": r[0], "parent_conv": r[1], "child_conv": r[2], "name": r[3],
+                "provider_type": r[4], "model_name": r[5], "effort": r[6], "status": r[7],
+                "created_at": r[8], "updated_at": r[9], "last_result": r[10]}
+
+    def create_subagent(self, parent_conv: int, user_id: int, name: str, provider_type: str,
+                        model_name: str, effort: str, status: str) -> Optional[Dict[str, Any]]:
+        """A hidden child chat of `parent_conv` (same user, same folder, its
+        model stamped) and its sub-agent row, in one transaction. None if the
+        parent is gone, another user's, a side chat or itself a sub-agent's."""
+        now_s = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now = time.time()
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute('BEGIN IMMEDIATE')
+            row = conn.execute(
+                'SELECT user_id, side_of, agent_of, workspace FROM conversations WHERE id = ?',
+                (parent_conv,)).fetchone()
+            if row is None or row[0] != user_id or row[1] is not None or row[2] is not None:
+                return None
+            # title_source 'user': a hidden chat needs no AI title (it would spend quota).
+            child = conn.execute(
+                'INSERT INTO conversations (user_id, title, created_at, updated_at, hidden, '
+                'agent_of, workspace, provider_type, model_name, title_source) '
+                "VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, 'user')",
+                (user_id, name, now_s, now_s, parent_conv, row[3], provider_type, model_name)
+            ).lastrowid
+            agent_id = conn.execute(
+                'INSERT INTO subagents (parent_conv, child_conv, name, provider_type, model_name, '
+                'effort, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                (parent_conv, child, name, provider_type, model_name, effort, status, now, now)
+            ).lastrowid
+            conn.commit()
+        return self.get_subagent(agent_id)
+
+    def get_subagent(self, agent_id: int) -> Optional[Dict[str, Any]]:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            r = conn.execute(f'SELECT {self._SUBAGENT_COLS} FROM subagents WHERE id = ?',
+                             (agent_id,)).fetchone()
+        return self._subagent_row(r) if r else None
+
+    def get_subagent_by_child(self, child_conv: int) -> Optional[Dict[str, Any]]:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            r = conn.execute(f'SELECT {self._SUBAGENT_COLS} FROM subagents WHERE child_conv = ?',
+                             (child_conv,)).fetchone()
+        return self._subagent_row(r) if r else None
+
+    def list_subagents(self, parent_conv: int) -> List[Dict[str, Any]]:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            rows = conn.execute(f'SELECT {self._SUBAGENT_COLS} FROM subagents '
+                                'WHERE parent_conv = ? ORDER BY id ASC', (parent_conv,)).fetchall()
+        return [self._subagent_row(r) for r in rows]
+
+    def get_agent_of(self, conv_id: int) -> Optional[int]:
+        """The chat that started this sub-agent chat; None for any other chat."""
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            row = conn.execute('SELECT agent_of FROM conversations WHERE id = ?',
+                               (conv_id,)).fetchone()
+        return row[0] if row else None
+
+    def set_subagent_status(self, agent_id: int, status: str,
+                            last_result: Optional[str] = None,
+                            only_from: Optional[Tuple[str, ...]] = None) -> bool:
+        """Set the status (and the last result, when given). With `only_from`,
+        only a row whose status is one of those changes."""
+        sql = 'UPDATE subagents SET status = ?, updated_at = ?'
+        args: List[Any] = [status, time.time()]
+        if last_result is not None:
+            sql += ', last_result = ?'
+            args.append(last_result)
+        sql += ' WHERE id = ?'
+        args.append(agent_id)
+        if only_from:
+            sql += f' AND status IN ({",".join("?" * len(only_from))})'
+            args += list(only_from)
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            cur = conn.execute(sql, args)
+            conn.commit()
+            return cur.rowcount > 0
+
+    def interrupt_running_subagents(self) -> int:
+        """Startup: a sub-agent `running` in a previous run is `interrupted`."""
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            cur = conn.execute("UPDATE subagents SET status = 'interrupted', updated_at = ? "
+                               "WHERE status = 'running'", (time.time(),))
+            conn.commit()
+            return cur.rowcount
+
+    def add_held_result(self, parent_conv: int, message_id: int) -> None:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute('INSERT OR IGNORE INTO subagent_held (message_id, parent_conv) '
+                         'VALUES (?, ?)', (message_id, parent_conv))
+            conn.commit()
+
+    def take_held_results(self, parent_conv: int) -> List[int]:
+        """The held result rows of a chat, oldest first, at most once."""
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
+            conn.execute('BEGIN IMMEDIATE')
+            ids = [r[0] for r in conn.execute(
+                'SELECT message_id FROM subagent_held WHERE parent_conv = ? ORDER BY message_id',
+                (parent_conv,))]
+            conn.execute('DELETE FROM subagent_held WHERE parent_conv = ?', (parent_conv,))
+            conn.commit()
+        return ids
 
     # ===================== SIDE CHATS =====================
     def create_side_chat(self, main_id: int, user_id: int) -> Optional[int]:
@@ -1110,7 +1266,8 @@ class DatabaseManager:
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             rows = conn.execute(
                 'SELECT id, title, parent_id, hidden FROM conversations '
-                'WHERE user_id = ? AND side_of IS NULL ORDER BY updated_at DESC, id DESC',
+                'WHERE user_id = ? AND side_of IS NULL AND agent_of IS NULL '
+                'ORDER BY updated_at DESC, id DESC',
                 (user_id,)).fetchall()
             return [{"id": r[0], "title": r[1] or "", "is_branch": r[2] is not None,
                      "parent_id": r[2], "hidden": bool(r[3])} for r in rows]
@@ -1127,7 +1284,8 @@ class DatabaseManager:
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute('BEGIN IMMEDIATE')
             n = conn.execute(
-                'SELECT COUNT(*) FROM conversations WHERE id IN (?, ?) AND side_of IS NULL',
+                'SELECT COUNT(*) FROM conversations WHERE id IN (?, ?) AND side_of IS NULL '
+                'AND agent_of IS NULL',
                 (from_conv, to_conv)).fetchone()[0]
             if from_conv == to_conv or n != 2:
                 return None

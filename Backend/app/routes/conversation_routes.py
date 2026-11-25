@@ -29,6 +29,7 @@ from agentic import cards as _cards
 from agentic import chat_model
 from agentic import chat_titles
 from agentic import mailbox
+from agentic import subagents
 from agentic import turn_events
 from agentic import turn_replies
 from agentic import turn_runner
@@ -130,9 +131,12 @@ def _build_handoff_context(memory: str, history_messages: list,
             # The terminal-import divider is a UI row, not conversation.
             if content.startswith("⌨️"):
                 continue
-            if not mailbox.is_mail_message(content):
+            if subagents.is_result_message(content):
+                role = "SUB-AGENT RESULT (your sub-agent, not the user)"
+            elif not mailbox.is_mail_message(content):
                 continue
-            role = "MAIL (another chat's AI, not the user)"
+            else:
+                role = "MAIL (another chat's AI, not the user)"
         if len(content) > per_msg_cap:
             content = content[:per_msg_cap] + " …[kısaltıldı]"
         line = f"{role}: {content}"
@@ -276,6 +280,20 @@ class _TurnReply:
             # file."), which was forwarded as the answer.
             return self._streamed.strip()
         return self._streamed.strip() or self._response.strip()
+
+
+def _sse_event(frame: Any) -> Optional[types.SimpleNamespace]:
+    """A turn body's SSE frame as an event (`type`, `data`); None for anything else."""
+    if not isinstance(frame, str) or not frame.startswith("data: {"):
+        return None
+    try:
+        payload = json.loads(frame[6:])
+    except ValueError:
+        return None
+    if not isinstance(payload, dict) or not isinstance(payload.get("type"), str):
+        return None
+    return types.SimpleNamespace(type=payload["type"],
+                                 data={k: v for k, v in payload.items() if k != "type"})
 
 
 # Kaba tahminin paydası. Bu sayı bir ÖLÇÜM DEĞİL, 4 May 2026'dan beri kodda
@@ -2013,6 +2031,9 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
         ids, side_ids = db.delete_conversation_family_and_sides(conv_id)
         for cid in ids:
             _purge_conversation_state(cid)
+            # Its sub-agents' turns (and a result turn of its own) have no
+            # chat left to answer in.
+            turn_runner.cancel_background_turns(cid)
         for cid in ids:
             await _close_conversation_sessions(cid)
         # Side chats of the deleted ids: sessions only. Their purge would repeat
@@ -2486,8 +2507,40 @@ Max 300 kelime. Türkçe yaz.
             await frames.aclose()
 
     async def _background_turn(turn: turn_runner.TurnInput):
-        async for frame in _turn_stream(turn, None):
+        if not subagents.is_child(turn.conversation_id):
+            async for frame in _turn_stream(turn, None):
+                yield frame
+            return
+        async for frame in _subagent_turn(turn):
             yield frame
+
+    async def _subagent_turn(turn: turn_runner.TurnInput):
+        """A sub-agent chat's turn: its last reply (or error) goes to the
+        chat that started it when the turn ends (agentic/subagents.py)."""
+        conv = turn.conversation_id
+        floor = subagents.max_message_id(conv)
+        reply = _TurnReply()
+        errors: List[str] = []
+        ran = cancelled = False
+        try:
+            async for frame in _turn_stream(turn, None):
+                event = _sse_event(frame)
+                if event is not None:
+                    ran = True
+                    reply.add(event)
+                    if event.type == "error":
+                        errors.append(str(event.data.get("message") or "error"))
+                yield frame
+        except (asyncio.CancelledError, GeneratorExit):
+            cancelled = True
+            raise
+        except Exception as exc:
+            errors.append(f"{type(exc).__name__}: {exc}")
+            raise
+        finally:
+            if ran or cancelled:
+                subagents.child_turn_ended(conv, reply.value(), errors[-1] if errors else None,
+                                           cancelled, floor)
 
     turn_runner.set_executor(_background_turn, accept=_accept_input,
                              has_pending=_has_pending_inputs)
@@ -2580,6 +2633,12 @@ Max 300 kelime. Türkçe yaz.
             # notices stay: that work finished and still needs its continuation.
             wake_queue.drop_mail_notices(turn.conversation_id)
             wake_queue.reset_chain(turn.conversation_id)
+            # Sub-agent results: the fuse resets, held results ride this turn.
+            try:
+                subagents.on_user_message(turn.conversation_id)
+            except Exception:
+                logger.exception("[subagents] conv=%s held results not queued",
+                                 turn.conversation_id)
             # The user's next message ends a computer-use Stop; a wake that lost its ticket is not one.
             if turn.origin != "wake":
                 _computer_halted.discard(turn.conversation_id)
@@ -3159,12 +3218,31 @@ Max 300 kelime. Türkçe yaz.
             # Unknown keeps the Stop rule that held before side chats, or an ordinary chat's own pending card outlives its Stop.
             if ordinary is not False and _abort_pending_mcp_approvals(conversation_id):
                 stopped = True
+            # A main agent's Stop stops the sub-agents it started.
+            if await subagents.stop_children(conversation_id):
+                stopped = True
             return {"status": "ok" if stopped else "no_session"}
         except Exception as e:
             logger.warning(f"[chat-stop] iptal hatası: {e}")
             return {"status": "error", "error": str(e)}
 
     router.stop_chat = stop_chat
+
+    async def _stop_subagent_chat(child_id: int) -> None:
+        """Stop a sub-agent chat: its provider turn and cards as a Stop does,
+        the in-stream gates it waits on (a rejection), and its background turn."""
+        await stop_chat(child_id)
+        for gate_id in [g for g in (*_APPROVAL_GATES, *_QUESTION_GATES)
+                        if _GATE_OWNERS.get(g) == child_id]:
+            _release_gate(gate_id, wake=True)
+        turn_runner.cancel_background_turns(child_id)
+
+    def _resume_subagent_chat(child_id: int) -> None:
+        # The main agent continues it: the Stop's computer-use halt is lifted,
+        # as a user message lifts it in an ordinary chat.
+        _computer_halted.discard(child_id)
+
+    subagents.configure(db, stop_child=_stop_subagent_chat, resume_child=_resume_subagent_chat)
 
     async def list_slash_commands(provider: str = "claude") -> dict:
         """Chat'te '/' autocomplete + Skills galerisi için komut/skill kataloğu.
@@ -4019,7 +4097,10 @@ Max 300 kelime. Türkçe yaz.
         """Frontend'in açık onay isteklerini SSE yerine polling ile alması için."""
         _check_token(x_session_token)
         _sweep_mcp_gates()
-        return {"pending": _mcp_pending}
+        # A sub-agent's card stays its own chat's; the tag lets the parent show it.
+        return {"pending": {gid: {**entry, **_cards.agent_tag(entry.get("conversation_id"))}
+                            if isinstance(entry, dict) else entry
+                            for gid, entry in _mcp_pending.items()}}
 
     # ── Chat mailbox routes ──────────────────────────────────────────────────
     # The unityai server and the Claude mail server call these with the app

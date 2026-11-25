@@ -126,6 +126,8 @@ class _Gate:
 _LOCK = threading.Lock()
 _GATES: Dict[int, _Gate] = {}
 _TASKS: Set[asyncio.Task] = set()
+# The chat each background task runs for (cancel_background_turns).
+_TASK_CONV: Dict[asyncio.Task, int] = {}
 _ERRORS: Dict[int, Deque[dict]] = {}
 _EXECUTOR: Optional[Executor] = None
 # accept(conv, text, origin): store a background input and its pending mark.
@@ -409,11 +411,13 @@ def _spawn(conv_id: int, loop) -> None:
     turn = TurnInput(conversation_id=conv_id, origin="background", http=False)
     task = running.create_task(_drive(turn, _EXECUTOR))
     _TASKS.add(task)
+    _TASK_CONV[task] = conv_id
     task.add_done_callback(lambda t: _task_done(t, turn))
 
 
 def _task_done(task: asyncio.Task, turn: TurnInput) -> None:
     _TASKS.discard(task)
+    _TASK_CONV.pop(task, None)
     if not turn.started:
         # Cancelled before its first step: its body never ran, so nothing
         # released the gate. Its inputs are still pending (not claimed).
@@ -485,6 +489,16 @@ async def shutdown() -> None:
         held = [c for c, g in _GATES.items() if g.detached]
     for conv_id in held:
         _release(conv_id)
+
+
+def cancel_background_turns(conv_id: int) -> int:
+    """Cancel this chat's running background turns (a stopped sub-agent, a
+    deleted chat); the gate is released as for any ended turn. Inputs it has
+    not claimed stay pending. Returns how many were cancelled."""
+    tasks = [t for t, c in list(_TASK_CONV.items()) if c == conv_id and not t.done()]
+    for t in tasks:
+        t.cancel()
+    return len(tasks)
 
 
 def forget(conv_id: int) -> None:
