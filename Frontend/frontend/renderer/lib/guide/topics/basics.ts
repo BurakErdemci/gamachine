@@ -55,7 +55,7 @@ export const BASICS: GuideTopic[] = [
     id: "approvals", group: "basics", since_version: "baseline", available_when: "always",
     title: T("Onay modu", "Approval mode"),
     summary: T("Ne zaman sana soracağımı seç: her işte, yalnız kritikte ya da hiç.", "Choose when I ask you: every time, only for critical work, or never."),
-    keywords: T("onay güvenli otomatik adım adım izin", "approval safe auto step permission"),
+    keywords: T("onay güvenli otomatik izin", "approval safe auto permission"),
     steps: [
       { anchor: "mode-chip", side: "below", align: "end", ui: "mode",
         title: T("Riskli işte önce sana sorarım", "I ask before anything risky"),

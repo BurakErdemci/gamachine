@@ -53,7 +53,7 @@ beforeEach(() => {
   holdNextPut = false
   mocked.get.mockReset().mockImplementation((url: string) => {
     const u = String(url)
-    if (u.endsWith('/approval-mode')) return Promise.resolve({ data: { mode: 'step', stored: true } })
+    if (u.endsWith('/approval-mode')) return Promise.resolve({ data: { mode: 'balanced', stored: true } })
     if (u.endsWith('/conversations/1')) {
       listCalls += 1
       const data = snapshot()

@@ -9,7 +9,6 @@ import { tr } from '../renderer/lib/i18n'
 // asks, so "I ask before I change anything" there was a false claim (Burak, 2 Oct 2026).
 describe('EmptyChat · promise follows the approval mode', () => {
   const cases = [
-    ['step', 'empty.sub', 'quest.asks'],
     ['balanced', 'empty.subBalanced', 'quest.asksBalanced'],
     ['auto', 'empty.subAuto', 'quest.asksAuto'],
   ] as const
@@ -28,8 +27,8 @@ describe('EmptyChat · promise follows the approval mode', () => {
     expect(container.textContent).not.toContain('sorarım')
   })
 
-  it('without a mode it keeps the strictest (step) promise', () => {
+  it('without a mode it keeps the strictest (Safe Auto) promise', () => {
     const { container } = render(<EmptyChat projectName="P" onPick={vi.fn()} />)
-    expect(container.querySelector('.empty-sub .lex-d')?.textContent).toBe(tr['empty.sub'])
+    expect(container.querySelector('.empty-sub .lex-d')?.textContent).toBe(tr['empty.subBalanced'])
   })
 })

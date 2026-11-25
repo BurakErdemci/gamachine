@@ -32,7 +32,7 @@ function sheet(over: Partial<PhoneMenuSheetProps> = {}) {
     currentModel: { provider_type: 'subscription', model_name: 'claude-sonnet-4-6' },
     onOpenModels: vi.fn(), onModelChanged: vi.fn(),
     effortLevels: ['auto', 'low', 'high'], thinkingLevel: 'auto', onEffortChanged: vi.fn(),
-    mode: 'step', loading: true, isCompacting: false, onCompact: vi.fn(), onStop: vi.fn(),
+    mode: 'balanced', loading: true, isCompacting: false, onCompact: vi.fn(), onStop: vi.fn(),
     showToast: vi.fn(), request,
     ...over,
   }
@@ -47,7 +47,7 @@ describe('the menu', () => {
     expect(screen.getByRole('dialog', { name: tr['phone.menu'] })).toBeTruthy()
     expect(row('model').textContent).toContain('Claude Sonnet')
     expect(row('effort').textContent).toContain(tr['effort.label.auto'])
-    expect(row('mode').textContent).toContain(tr['mode.step'])
+    expect(row('mode').textContent).toContain(tr['mode.balanced'])
     expect(row('compact').textContent).toBe(tr['phone.sheet.compact'])
     expect(row('stop').textContent).toBe(tr['phone.sheet.stop'])
   })
@@ -119,8 +119,16 @@ describe('set_effort', () => {
 })
 
 describe('set_approval_mode', () => {
-  it('Dengeli goes at once', async () => {
+  it('offers Otomatik and Güvenli Otomatik only, no step option', () => {
     sheet()
+    fireEvent.click(row('mode'))
+    expect(screen.getByText(tr['mode.auto'])).toBeTruthy()
+    expect(screen.getByText(tr['mode.balanced'])).toBeTruthy()
+    expect(screen.queryByText(/adım adım|step by step/i)).toBeNull()
+  })
+
+  it('Dengeli goes at once', async () => {
+    sheet({ mode: 'auto' })
     fireEvent.click(row('mode'))
     fireEvent.click(screen.getByText(tr['mode.balanced']))
     await waitFor(() => expect(request).toHaveBeenCalledWith('set_approval_mode', { mode: 'balanced' }))

@@ -74,7 +74,7 @@ describe('file card ownership across chats', () => {
       return { chat, pendingGenFiles, setPendingGenFiles }
     })
     const send = (content: string) => {
-      act(() => { void result.current.chat.sendMessage(content, '', 'tr', 'step', 'medium', result.current.setPendingGenFiles, vi.fn()) })
+      act(() => { void result.current.chat.sendMessage(content, '', 'tr', 'balanced', 'medium', result.current.setPendingGenFiles, vi.fn()) })
     }
 
     await act(async () => { await result.current.chat.selectConversation({ id: 1 } as any) })
@@ -103,7 +103,7 @@ describe('file card ownership across chats', () => {
     })
 
     await act(async () => { await result.current.chat.selectConversation({ id: 1 } as any) })
-    act(() => { void result.current.chat.sendMessage('first chat', '', 'tr', 'step', 'medium', result.current.setPendingGenFiles, vi.fn()) })
+    act(() => { void result.current.chat.sendMessage('first chat', '', 'tr', 'balanced', 'medium', result.current.setPendingGenFiles, vi.fn()) })
     await flush()
     streams[1].push({ type: 'response', content: '```csharp\npublic class First {}\n```', conversation_id: 1 })
     await waitFor(() => expect(result.current.pendingGenFiles?.files[0].name).toBe('First.cs'))
@@ -126,7 +126,7 @@ describe('file card ownership across chats', () => {
       return { chat, fs }
     })
     const send = (content: string) => {
-      act(() => { void result.current.chat.sendMessage(content, '', 'tr', 'step', 'medium', vi.fn(), result.current.fs.setPendingDelete) })
+      act(() => { void result.current.chat.sendMessage(content, '', 'tr', 'balanced', 'medium', vi.fn(), result.current.fs.setPendingDelete) })
     }
 
     await act(async () => { await result.current.chat.selectConversation({ id: 1 } as any) })
@@ -162,7 +162,7 @@ describe('client-only error after switching chats', () => {
 
     const { result } = renderHook(() => useChat(API, USER, SUB_CONFIG, '/ws', vi.fn(), vi.fn(), (name: string) => name))
     await act(async () => { await result.current.selectConversation({ id: 1 } as any) })
-    act(() => { void result.current.sendMessage('question', '', 'tr', 'step', 'medium', vi.fn(), vi.fn()) })
+    act(() => { void result.current.sendMessage('question', '', 'tr', 'balanced', 'medium', vi.fn(), vi.fn()) })
     await waitFor(() => expect(streams[1]).toBeDefined())
     streams[1].push({ type: 'error', message: 'provider failed', conversation_id: 1 })
     streams[1].close()
@@ -180,7 +180,7 @@ describe('client-only error after switching chats', () => {
     const { result } = renderHook(() => useChat(API, USER, SUB_CONFIG, '/ws', vi.fn(), vi.fn(), (name: string) => name))
     const hasError = () => result.current.messages.some((m: any) => String(m.content).includes('provider failed'))
     await act(async () => { await result.current.selectConversation({ id: 1 } as any) })
-    act(() => { void result.current.sendMessage('question', '', 'tr', 'step', 'medium', vi.fn(), vi.fn()) })
+    act(() => { void result.current.sendMessage('question', '', 'tr', 'balanced', 'medium', vi.fn(), vi.fn()) })
     await waitFor(() => expect(streams[1]).toBeDefined())
     streams[1].push({ type: 'error', message: 'provider failed' })
     streams[1].close()
@@ -192,7 +192,7 @@ describe('client-only error after switching chats', () => {
     }
     expect(hasError()).toBe(true)
 
-    act(() => { void result.current.sendMessage('again', '', 'tr', 'step', 'medium', vi.fn(), vi.fn()) })
+    act(() => { void result.current.sendMessage('again', '', 'tr', 'balanced', 'medium', vi.fn(), vi.fn()) })
     await flush()
     streams[1].push({ type: 'response', content: 'fine now' })
     streams[1].push({ type: 'done', stop_reason: 'complete' })
@@ -227,7 +227,7 @@ describe('new-chat selection race', () => {
 
     const { result } = renderHook(() => useChat(API, USER, SUB_CONFIG, '/ws', vi.fn(), vi.fn(), (name: string) => name))
     await act(async () => { await result.current.selectConversation({ id: 1 } as any) })
-    act(() => { void result.current.sendMessage('A', '', 'tr', 'step', 'medium', vi.fn(), vi.fn()) })
+    act(() => { void result.current.sendMessage('A', '', 'tr', 'balanced', 'medium', vi.fn(), vi.fn()) })
     await waitFor(() => expect(aSignal).toBeDefined())
 
     let creating: Promise<number | null> | undefined
@@ -262,7 +262,7 @@ describe('new-chat selection race', () => {
     const { result } = renderHook(() => useChat(API, USER, SUB_CONFIG, '/ws', vi.fn(), vi.fn(), (name: string) => name))
 
     // Left alone: the screen follows the new chat.
-    act(() => { void result.current.sendMessage('first', '', 'tr', 'step', 'medium', vi.fn(), vi.fn()) })
+    act(() => { void result.current.sendMessage('first', '', 'tr', 'balanced', 'medium', vi.fn(), vi.fn()) })
     await act(async () => { releases[0]({ data: { id: 5 } }); await Promise.resolve() })
     await waitFor(() => expect(targets).toEqual([5]))
     expect(result.current.activeConvId).toBe(5)
@@ -270,7 +270,7 @@ describe('new-chat selection race', () => {
     // Another chat picked meanwhile: the send still goes to the new chat, off screen.
     await act(async () => { await result.current.selectConversation({ id: 9 } as any) })
     act(() => { result.current.setActiveConvId(null) })
-    act(() => { void result.current.sendMessage('second', '', 'tr', 'step', 'medium', vi.fn(), vi.fn()) })
+    act(() => { void result.current.sendMessage('second', '', 'tr', 'balanced', 'medium', vi.fn(), vi.fn()) })
     await act(async () => { await result.current.selectConversation({ id: 2 } as any) })
     await act(async () => { releases[1]({ data: { id: 6 } }); await Promise.resolve() })
     await waitFor(() => expect(targets).toEqual([5, 6]))

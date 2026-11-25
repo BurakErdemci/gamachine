@@ -3,12 +3,11 @@ import React from 'react';
 import { useLang, type TKey } from '../../lib/i18n';
 import type { GenerationMode } from './types';
 
-// Same three modes and labels (the `mode.*` keys) as the guide tour's mode step, so the two
+// Same two modes and labels (the `mode.*` keys) as the guide tour's mode step, so the two
 // can never name a mode differently.
 const MODES: Array<{ id: GenerationMode; label: TKey; desc: TKey }> = [
   { id: 'auto', label: 'mode.auto', desc: 'mode.autoDesc' },
   { id: 'balanced', label: 'mode.balanced', desc: 'mode.balancedDesc' },
-  { id: 'step', label: 'mode.step', desc: 'mode.stepDesc' },
 ];
 
 interface ModeChipProps {
@@ -24,7 +23,7 @@ interface ModeChipProps {
  */
 export const ModeChip: React.FC<ModeChipProps> = ({ value, onOpen }) => {
   const { t } = useLang();
-  const current = MODES.find(m => m.id === value) ?? MODES[0];
+  const current = MODES.find(m => m.id === value) ?? MODES[1];
   return (
     <button
       type="button"

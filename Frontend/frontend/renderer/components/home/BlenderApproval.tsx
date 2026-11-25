@@ -9,7 +9,7 @@ export interface BlenderCardInfo {
   /** Length of the full code; the backend caps `code` for display. */
   codeChars: number;
   truncated: boolean;
-  /** The classifier's trigger; empty in step mode for code it calls routine. */
+  /** The classifier's trigger; empty for code it calls routine. */
   reason: string;
   mode: string;
 }
@@ -39,7 +39,7 @@ interface BlenderApprovalProps {
 /** Python the agent wants to run in the user's Blender: why it asks, the code itself, and the answers. */
 export const BlenderApproval: React.FC<BlenderApprovalProps> = ({ info, onAnswer, phonePaired }) => {
   const { t } = useLang();
-  const reason = stripBidi(info.reason) || t(info.mode === 'step' ? 'bl.card.stepReason' : 'bl.card.riskUnknown');
+  const reason = stripBidi(info.reason) || t('bl.card.riskUnknown');
   return (
     <div className="contents" data-risky="true">
       <ApprovalCard

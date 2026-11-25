@@ -196,8 +196,8 @@ describe('settings mapping · old modal -> new pages', () => {
   it('Mode tab -> Onay modu page', () => {
     const onApprovalModeChange = vi.fn()
     render(<SettingsScreen {...base({ page: 'onay', approvalMode: 'balanced', onApprovalModeChange })} />)
-    fireEvent.click(screen.getByText(cevir('set.mode.stepTitle')))
-    expect(onApprovalModeChange).toHaveBeenCalledWith('step')
+    fireEvent.click(screen.getByText(cevir('set.mode.autoTitle')))
+    expect(onApprovalModeChange).toHaveBeenCalledWith('auto')
   })
 
   it('General tab theme / fonts / text size / intro -> Görünüm', () => {
@@ -314,6 +314,12 @@ describe('settings entry points', () => {
     expect(onOpen).toHaveBeenCalledTimes(1)
     // No dropdown of its own any more: the page is where the mode is chosen.
     expect(screen.queryByRole('listbox')).toBeNull()
+  })
+
+  it('the shield shows a legacy step value as Safe Auto', () => {
+    render(<ModeChip value={'step' as any} onOpen={vi.fn()} />)
+    expect(screen.getByTestId('mode-chip').getAttribute('data-mode')).toBe('balanced')
+    expect(screen.getByTestId('mode-chip').textContent).not.toMatch(/adım adım|step by step/i)
   })
 
   it('sidebar: Ayarlar opens settings, the phone icon opens the remote page', () => {

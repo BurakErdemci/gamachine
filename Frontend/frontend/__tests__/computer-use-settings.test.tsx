@@ -28,7 +28,7 @@ const invoke = vi.fn(async (channel: string, req: any) => {
   switch (req.op) {
     case 'status':
       return { available: host.available, running: host.running,
-        settings: { enabled: host.enabled, mode: 'step', active: host.enabled, grants: host.grants,
+        settings: { enabled: host.enabled, mode: 'balanced', active: host.enabled, grants: host.grants,
           runtime: { running: host.running, driver_path: null, socket_path: null }, halted: [] },
         permissions: { accessibility: host.accessibility, screen: host.screen } }
     case 'enable': case 'disable':

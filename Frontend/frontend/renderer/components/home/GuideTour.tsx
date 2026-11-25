@@ -19,8 +19,7 @@ export interface GuideTourProps {
   onNameDraft: (v: string) => void;
 }
 
-const MODES: { id: GenerationMode; label: 'mode.step' | 'mode.balanced' | 'mode.auto'; sub: 'tour.modeStep' | 'tour.modeBalanced' | 'tour.modeAuto' }[] = [
-  { id: 'step', label: 'mode.step', sub: 'tour.modeStep' },
+const MODES: { id: GenerationMode; label: 'mode.balanced' | 'mode.auto'; sub: 'tour.modeBalanced' | 'tour.modeAuto' }[] = [
   { id: 'balanced', label: 'mode.balanced', sub: 'tour.modeBalanced' },
   { id: 'auto', label: 'mode.auto', sub: 'tour.modeAuto' },
 ];

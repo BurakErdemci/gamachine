@@ -190,11 +190,13 @@ export interface ExportModalState {
   exportResult: { success: boolean; message: string } | null;
 }
 
-export type GenerationMode = 'auto' | 'balanced' | 'step';
+export type GenerationMode = 'auto' | 'balanced';
 
 /**
- * Narrows a backend/IPC answer to a mode. Anything unknown becomes 'step':
- * the UI must never show a looser mode than the backend may be enforcing.
+ * Narrows a backend/IPC answer to a mode. Anything but 'auto' becomes
+ * 'balanced' (Safe Auto), the stricter of the two: the UI must never show a
+ * looser mode than the backend may be enforcing. A legacy 'step' from an old
+ * backend or desktop lands here too.
  */
 export const toGenerationMode = (value: unknown): GenerationMode =>
-  value === 'auto' || value === 'balanced' ? value : 'step';
+  value === 'auto' ? 'auto' : 'balanced';

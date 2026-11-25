@@ -73,7 +73,7 @@ Harness.defaultChat = {
   contextUsage: { percent: 42, message_count: 3 } as any,
   menu: {
     models: { local: [], cloud: [], subscription: [] }, currentModel: { provider_type: 'subscription', model_name: 'x' },
-    effortLevels: null, thinkingLevel: 'auto', onEffortChanged: vi.fn(), mode: 'step',
+    effortLevels: null, thinkingLevel: 'auto', onEffortChanged: vi.fn(), mode: 'balanced',
     loading: false, isCompacting: false, onCompact: vi.fn(), onStop: vi.fn(),
   },
 } as PhoneShellProps['chat']

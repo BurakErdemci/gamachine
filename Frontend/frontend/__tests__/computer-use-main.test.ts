@@ -348,8 +348,8 @@ describe('ComputerUseHost', () => {
   it.each([
     ['darwin', true, true, 'auto', 1], ['darwin', false, true, 'auto', 0],
     ['darwin', true, false, 'auto', 0], ['darwin', true, true, 'balanced', 1],
-    ['darwin', true, true, 'step', 1], ['darwin', true, false, 'step', 0],
-    ['linux', true, true, 'auto', 0], ['linux', true, true, 'step', 0],
+    ['darwin', true, false, 'balanced', 0],
+    ['linux', true, true, 'auto', 0], ['linux', true, true, 'balanced', 0],
   ])('reconciles %s available=%s enabled=%s mode=%s', async (platform, available, enabled, mode, count) => {
     const f = fixture({ platform: platform as string, available: available as boolean })
     f.settings({ enabled: enabled as boolean, mode: mode as string })
@@ -363,11 +363,11 @@ describe('ComputerUseHost', () => {
     f.host.beginPolling()
     await vi.advanceTimersByTimeAsync(0)
     expect(f.host.running).toBe(true)
-    f.settings({ enabled: true, mode: 'step' })
+    f.settings({ enabled: true, mode: 'balanced' })
     await vi.advanceTimersByTimeAsync(7000)
     expect(f.host.running).toBe(true)
     expect(f.spawn).toHaveBeenCalledTimes(1)
-    f.settings({ enabled: false, mode: 'step' })
+    f.settings({ enabled: false, mode: 'balanced' })
     await vi.advanceTimersByTimeAsync(8000)
     expect(f.host.running).toBe(false)
     expect(f.children[0].kill.mock.calls[0]).toEqual(['SIGTERM'])

@@ -20,7 +20,7 @@ beforeEach(() => {
   list = [conv(1), conv(2)]
   vi.mocked(axios.get).mockReset().mockImplementation(async (url: string) => {
     if (String(url).endsWith('/conversations/1')) return { data: list.map(c => ({ ...c })) }
-    if (String(url).endsWith('/approval-mode')) return { data: { mode: 'step', stored: true } }
+    if (String(url).endsWith('/approval-mode')) return { data: { mode: 'balanced', stored: true } }
     return { data: [] }
   })
 })

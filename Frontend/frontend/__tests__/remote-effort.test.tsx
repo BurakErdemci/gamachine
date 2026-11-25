@@ -103,7 +103,7 @@ beforeEach(() => {
   mockedAxios.post.mockReset().mockResolvedValue({ data: {} })
   mockedAxios.put.mockReset().mockResolvedValue({ data: {} })
   mockedAxios.get.mockReset().mockImplementation(async (url: string) => {
-    if (String(url).endsWith('/approval-mode')) return { data: { mode: 'step', stored: true } }
+    if (String(url).endsWith('/approval-mode')) return { data: { mode: 'balanced', stored: true } }
     if (String(url).includes('/context-usage')) return { data: { percent: 1, should_compact: false, message_count: 0 } }
     return { data: [] }
   })

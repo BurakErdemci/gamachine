@@ -32,6 +32,7 @@ import { FileDeleteApproval } from '../renderer/components/home/FileDeleteApprov
 import { McpApprovalCards } from '../renderer/components/home/McpApprovalCards'
 import { riskReasonLabel } from '../renderer/components/home/RiskReasonLine'
 import { cevir, aktifDilAyarla, translations } from '../renderer/lib/i18n'
+import { toGenerationMode } from '../renderer/components/home/types'
 
 const mockedGet = (axios as any).get as ReturnType<typeof vi.fn>
 const KEY = 'unityai-generation-mode'
@@ -40,7 +41,7 @@ afterEach(() => { cleanup() })
 
 describe('Settings screen · Onay modu page', () => {
   // Round 11: the modal's "Work mode" tab became the screen's "Onay modu" page; the cards are a
-  // radiogroup (aria-checked) in the mockup's order step → balanced → auto.
+  // radiogroup (aria-checked) in the mockup's order balanced → auto.
   const props: any = {
     open: true,
     aiConfig: { provider_type: 'anthropic', model_name: '', api_key: '' },
@@ -58,7 +59,7 @@ describe('Settings screen · Onay modu page', () => {
   const openOnay = () => fireEvent.click(screen.getByRole('button', { name: cevir('set.nav.onay') }))
 
   it('the first page holds the language; Unity and the models have their own pages', () => {
-    render(<SettingsScreen {...props} approvalMode="step" onApprovalModeChange={vi.fn()} />)
+    render(<SettingsScreen {...props} approvalMode="balanced" onApprovalModeChange={vi.fn()} />)
     expect(screen.getByText(cevir('set.uiLang'))).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Unity' }))
     expect(screen.getByTestId('unity-mcp-row')).toBeTruthy()
@@ -68,49 +69,47 @@ describe('Settings screen · Onay modu page', () => {
 
   it('mode page explains auto and writes through the handler', () => {
     const onChange = vi.fn()
-    render(<SettingsScreen {...props} approvalMode="step" onApprovalModeChange={onChange} />)
+    render(<SettingsScreen {...props} approvalMode="balanced" onApprovalModeChange={onChange} />)
     openOnay()
     expect(screen.getByText(cevir('settings.modeAutoExplain'))).toBeTruthy()
     fireEvent.click(screen.getByText(cevir('set.mode.autoTitle')))
     expect(onChange).toHaveBeenCalledWith('auto')
   })
 
-  it('the auto card is red whether or not it is selected; balanced and step are not', () => {
-    for (const mode of ['auto', 'balanced', 'step'] as const) {
+  it('the auto card is red whether or not it is selected; balanced is not', () => {
+    for (const mode of ['auto', 'balanced'] as const) {
       render(<SettingsScreen {...props} approvalMode={mode} onApprovalModeChange={vi.fn()} />)
       openOnay()
       const autoTitle = screen.getByText(cevir('set.mode.autoTitle'))
       const autoCard = autoTitle.closest('button')!
       const balancedCard = screen.getByText(cevir('set.mode.balancedTitle')).closest('button')!
-      const stepCard = screen.getByText(cevir('set.mode.stepTitle')).closest('button')!
       // The colour comes from settings.css, keyed on data-warn (the rule
       // itself is checked below), so the card and its title carry the state.
       expect(autoTitle.getAttribute('data-warn')).toBe('true')
       expect(autoCard.getAttribute('data-warn')).toBe('true')
-      for (const card of [balancedCard, stepCard]) {
-        expect(card.getAttribute('data-warn')).toBeNull()
-        expect(card.querySelector('[data-warn]')).toBeNull()
-      }
-      expect(screen.getByText(cevir('settings.modeStepExplain'))).toBeTruthy()
+      expect(balancedCard.getAttribute('data-warn')).toBeNull()
+      expect(balancedCard.querySelector('[data-warn]')).toBeNull()
       expect(screen.getByText(cevir('settings.modeBalancedExplain'))).toBeTruthy()
       cleanup()
     }
   })
 
-  it('shows three mode cards in order, balanced marked recommended, and writes balanced', () => {
+  it('shows two mode cards in order, balanced marked recommended, and writes balanced', () => {
     const onChange = vi.fn()
-    render(<SettingsScreen {...props} approvalMode="step" onApprovalModeChange={onChange} />)
+    render(<SettingsScreen {...props} approvalMode="auto" onApprovalModeChange={onChange} />)
     openOnay()
-    const titles = [cevir('set.mode.stepTitle'), cevir('set.mode.balancedTitle'), cevir('set.mode.autoTitle')]
+    const titles = [cevir('set.mode.balancedTitle'), cevir('set.mode.autoTitle')]
     const cards = titles.map(title => screen.getByText(title).closest('button')!)
-    // DOM order (mockup round 11): step, balanced, auto — from most to least asking.
+    // DOM order (mockup round 11): balanced, auto — from more to less asking.
     expect(cards[0].compareDocumentPosition(cards[1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(cards[1].compareDocumentPosition(cards[2]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // The step mode is gone: the page offers exactly these two radios.
+    expect(screen.getAllByRole('radio')).toHaveLength(2)
+    expect(document.querySelector('[data-mode="step"]')).toBeNull()
     const badges = screen.getAllByTestId('mode-recommended-badge')
     expect(badges).toHaveLength(1)
     expect(badges[0].textContent).toBe(cevir('mode.recommended'))
-    expect(cards[1].contains(badges[0])).toBe(true)
-    fireEvent.click(cards[1])
+    expect(cards[0].contains(badges[0])).toBe(true)
+    fireEvent.click(cards[0])
     expect(onChange).toHaveBeenCalledWith('balanced')
   })
 
@@ -120,7 +119,7 @@ describe('Settings screen · Onay modu page', () => {
     const balancedCard = screen.getByText(cevir('set.mode.balancedTitle')).closest('button')!
     expect(balancedCard.getAttribute('role')).toBe('radio')
     expect(balancedCard.getAttribute('aria-checked')).toBe('true')
-    expect(screen.getByText(cevir('set.mode.stepTitle')).closest('button')!.getAttribute('aria-checked')).toBe('false')
+    expect(screen.getByText(cevir('set.mode.autoTitle')).closest('button')!.getAttribute('aria-checked')).toBe('false')
   })
 
   it('settings.css draws the warning and the highlight from those attributes', () => {
@@ -136,12 +135,10 @@ describe('Settings screen · Onay modu page', () => {
   it('the new mode-card wording is in both languages, without the removed trust line', () => {
     aktifDilAyarla('tr')
     expect(cevir('settings.modeAutoTitle')).toBe('⚠ OTO MOD — ONAY YOK')
-    expect(cevir('settings.modeStepTitle')).toBe('✋ Adım adım')
     expect(cevir('settings.modeAutoExplain')).toContain('izinleri atla')
     aktifDilAyarla('en')
     try {
       expect(cevir('settings.modeAutoTitle')).toBe('⚠ AUTO MODE — NO APPROVALS')
-      expect(cevir('settings.modeStepTitle')).toBe('✋ Step by step')
       expect(cevir('settings.modeAutoExplain')).toContain('bypass permissions')
     } finally {
       aktifDilAyarla('tr')
@@ -190,6 +187,16 @@ const hook = (showToast = vi.fn()) => renderHook(() => useChat(
   (n: string) => n,
 ))
 
+describe('toGenerationMode', () => {
+  it('maps step and unknown values to balanced, keeps auto and balanced', () => {
+    expect(toGenerationMode('step')).toBe('balanced')
+    expect(toGenerationMode('plan')).toBe('balanced')
+    expect(toGenerationMode(undefined)).toBe('balanced')
+    expect(toGenerationMode('balanced')).toBe('balanced')
+    expect(toGenerationMode('auto')).toBe('auto')
+  })
+})
+
 describe('useChat · backend-owned mode', () => {
   beforeEach(() => {
     ipcInvoke.mockReset()
@@ -210,11 +217,21 @@ describe('useChat · backend-owned mode', () => {
   it('migrates the old localStorage value once, over the fresh-install auto', async () => {
     window.localStorage.setItem(KEY, 'step')
     mockedGet.mockResolvedValue({ data: { mode: 'auto', stored: false } })
-    ipcInvoke.mockResolvedValue({ mode: 'step', previous: 'auto' })
+    ipcInvoke.mockResolvedValue({ mode: 'balanced', previous: 'auto' })
     const { result } = hook()
-    await waitFor(() => expect(ipcInvoke).toHaveBeenCalledWith('approval-mode-set', 'step', 'migrate'))
+    // The removed step choice migrates to Safe Auto, the mode that replaced it.
+    await waitFor(() => expect(ipcInvoke).toHaveBeenCalledWith('approval-mode-set', 'balanced', 'migrate'))
     await waitFor(() => expect(window.localStorage.getItem(KEY)).toBeNull())
-    expect(result.current.generationMode).toBe('step')
+    expect(result.current.generationMode).toBe('balanced')
+  })
+
+  it('migrates an old auto choice as auto', async () => {
+    window.localStorage.setItem(KEY, 'auto')
+    mockedGet.mockResolvedValue({ data: { mode: 'balanced', stored: false } })
+    ipcInvoke.mockResolvedValue({ mode: 'auto', previous: 'balanced' })
+    const { result } = hook()
+    await waitFor(() => expect(ipcInvoke).toHaveBeenCalledWith('approval-mode-set', 'auto', 'migrate'))
+    await waitFor(() => expect(result.current.generationMode).toBe('auto'))
   })
 
   it('a fresh install shows the backend auto and writes nothing', async () => {
@@ -225,19 +242,27 @@ describe('useChat · backend-owned mode', () => {
     expect(window.localStorage.getItem(KEY)).toBeNull()
   })
 
-  it('a backend answering balanced is shown as balanced, not coerced to step', async () => {
+  it('a backend answering balanced is shown as balanced, not coerced', async () => {
     mockedGet.mockResolvedValue({ data: { mode: 'balanced', stored: false } })
     const { result } = hook()
     await waitFor(() => expect(result.current.generationMode).toBe('balanced'))
     expect(ipcInvoke).not.toHaveBeenCalledWith('approval-mode-set', expect.anything(), expect.anything())
   })
 
-  it('an unknown backend mode still falls back to step', async () => {
+  it('a legacy step answer from an old backend is shown as balanced', async () => {
+    mockedGet.mockResolvedValue({ data: { mode: 'step', stored: true } })
+    const { result } = hook()
+    await waitFor(() => expect(mockedGet).toHaveBeenCalled())
+    await act(async () => { await Promise.resolve() })
+    expect(result.current.generationMode).toBe('balanced')
+  })
+
+  it('an unknown backend mode falls back to balanced', async () => {
     mockedGet.mockResolvedValue({ data: { mode: 'plan', stored: true } })
     const { result } = hook()
     await waitFor(() => expect(mockedGet).toHaveBeenCalled())
     await act(async () => { await Promise.resolve() })
-    expect(result.current.generationMode).toBe('step')
+    expect(result.current.generationMode).toBe('balanced')
   })
 
   it('a migration answered with balanced is shown as balanced', async () => {
@@ -245,13 +270,13 @@ describe('useChat · backend-owned mode', () => {
     mockedGet.mockResolvedValue({ data: { mode: 'balanced', stored: false } })
     ipcInvoke.mockResolvedValue({ mode: 'balanced', previous: 'balanced' })
     const { result } = hook()
-    await waitFor(() => expect(ipcInvoke).toHaveBeenCalledWith('approval-mode-set', 'step', 'migrate'))
+    await waitFor(() => expect(ipcInvoke).toHaveBeenCalledWith('approval-mode-set', 'balanced', 'migrate'))
     await waitFor(() => expect(result.current.generationMode).toBe('balanced'))
   })
 
   it('the selector writes balanced through Electron main and shows it', async () => {
-    mockedGet.mockResolvedValue({ data: { mode: 'step', stored: true } })
-    ipcInvoke.mockResolvedValue({ mode: 'balanced', previous: 'step', approved_pending: [] })
+    mockedGet.mockResolvedValue({ data: { mode: 'auto', stored: true } })
+    ipcInvoke.mockResolvedValue({ mode: 'balanced', previous: 'auto', approved_pending: [] })
     const { result } = hook()
     await waitFor(() => expect(mockedGet).toHaveBeenCalled())
     await act(async () => { await result.current.setGenerationMode('balanced', 'settings') })
@@ -259,7 +284,7 @@ describe('useChat · backend-owned mode', () => {
     expect(result.current.generationMode).toBe('balanced')
   })
 
-  it('an agy refusal of balanced names balanced, not step', async () => {
+  it('an agy refusal names Safe Auto', async () => {
     mockedGet.mockResolvedValue({ data: { mode: 'auto', stored: true } })
     ipcInvoke.mockResolvedValue({ refused: { code: 'agy_step_refused', message: 'x', pids: '77' } })
     const showToast = vi.fn()
@@ -278,17 +303,17 @@ describe('useChat · backend-owned mode', () => {
     expect(ipcInvoke).not.toHaveBeenCalledWith('approval-mode-set', expect.anything(), expect.anything())
   })
 
-  it('shows step and writes nothing until the backend answers', async () => {
+  it('shows balanced and writes nothing until the backend answers', async () => {
     mockedGet.mockReturnValue(new Promise(() => {}))
     const { result } = hook()
     await waitFor(() => expect(mockedGet).toHaveBeenCalled())
-    expect(result.current.generationMode).toBe('step')
+    expect(result.current.generationMode).toBe('balanced')
     expect(ipcInvoke).not.toHaveBeenCalledWith('approval-mode-set', expect.anything(), expect.anything())
   })
 
   it('the selector writes through Electron main, not localStorage', async () => {
-    mockedGet.mockResolvedValue({ data: { mode: 'step', stored: true } })
-    ipcInvoke.mockResolvedValue({ mode: 'auto', previous: 'step' })
+    mockedGet.mockResolvedValue({ data: { mode: 'balanced', stored: true } })
+    ipcInvoke.mockResolvedValue({ mode: 'auto', previous: 'balanced' })
     const { result } = hook()
     await waitFor(() => expect(mockedGet).toHaveBeenCalled())
     await act(async () => { await result.current.setGenerationMode('auto') })
@@ -298,13 +323,13 @@ describe('useChat · backend-owned mode', () => {
   })
 
   it('a refused write keeps the old mode and says so', async () => {
-    mockedGet.mockResolvedValue({ data: { mode: 'step', stored: true } })
+    mockedGet.mockResolvedValue({ data: { mode: 'balanced', stored: true } })
     ipcInvoke.mockRejectedValue(new Error('reddedildi'))
     const showToast = vi.fn()
     const { result } = hook(showToast)
     await waitFor(() => expect(mockedGet).toHaveBeenCalled())
     await act(async () => { await result.current.setGenerationMode('auto') })
-    expect(result.current.generationMode).toBe('step')
+    expect(result.current.generationMode).toBe('balanced')
     expect(showToast).toHaveBeenCalledWith(expect.stringContaining('reddedildi'), 'error')
   })
 
@@ -314,7 +339,7 @@ describe('useChat · backend-owned mode', () => {
     const showToast = vi.fn()
     const { result } = hook(showToast)
     await waitFor(() => expect(mockedGet).toHaveBeenCalled())
-    await act(async () => { await result.current.setGenerationMode('step') })
+    await act(async () => { await result.current.setGenerationMode('balanced') })
     expect(result.current.generationMode).toBe('auto')
     expect(showToast).toHaveBeenCalledWith(expect.stringContaining('pid 4242'), 'error')
     expect(showToast).not.toHaveBeenCalledWith(expect.stringContaining('Türkçe metin'), 'error')
@@ -346,7 +371,7 @@ describe('useChat · switching to balanced keeps the in-chat card', () => {
     ipcInvoke.mockReset()
     window.localStorage.clear()
     mockedGet.mockReset().mockImplementation(async (url: string) => {
-      if (String(url).endsWith('/approval-mode')) return { data: { mode: 'step', stored: true } }
+      if (String(url).endsWith('/approval-mode')) return { data: { mode: 'balanced', stored: true } }
       if (String(url).includes('/context-usage')) return { data: { percent: 0, message_count: 0 } }
       return { data: [] }
     })
@@ -362,10 +387,10 @@ describe('useChat · switching to balanced keeps the in-chat card', () => {
   /** One chat with one in-chat command card; `extra` adds the balanced-mode fields. */
   const withCard = async (gateId: string, extra: object) => {
     const r = hook()
-    await waitFor(() => expect(r.result.current.generationMode).toBe('step'))
+    await waitFor(() => expect(r.result.current.generationMode).toBe('balanced'))
     await act(async () => { await r.result.current.selectConversation({ id: 1 } as any) })
     await flush()
-    act(() => { void r.result.current.sendMessage('q', '', 'tr', 'step', 'medium', vi.fn(), vi.fn()) })
+    act(() => { void r.result.current.sendMessage('q', '', 'tr', 'balanced', 'medium', vi.fn(), vi.fn()) })
     await flush()
     act(() => { stream.push({ type: 'command_approval_needed', command: 'npm install left-pad', gate_id: gateId, ...extra }) })
     await flush()
@@ -388,7 +413,7 @@ describe('useChat · switching to balanced keeps the in-chat card', () => {
 
   it('switching to balanced keeps the card; switching to auto still clears it', async () => {
     const { result } = await withCard('g1', { risk_reason: 'shell_installer', risk_detail: 'npm' })
-    ipcInvoke.mockResolvedValue({ mode: 'balanced', previous: 'step', approved_pending: [] })
+    ipcInvoke.mockResolvedValue({ mode: 'balanced', previous: 'balanced', approved_pending: [] })
     await act(async () => { await result.current.setGenerationMode('balanced') })
     expect(result.current.generationMode).toBe('balanced')
     expect(result.current.pendingCommand?.gateId).toBe('g1')
@@ -427,7 +452,7 @@ describe('Risk reason line on approval cards', () => {
     expect(screen.getAllByTestId('card-warning')).toHaveLength(1)
   })
 
-  it('no reason, no line: auto/step cards look as before', () => {
+  it('no reason, no line: auto cards look as before', () => {
     render(<CommandApproval command="ls" onConfirm={vi.fn()} onCancel={vi.fn()} />)
     expect(screen.queryByTestId('risk-reason')).toBeNull()
   })
@@ -536,5 +561,11 @@ describe('Electron main accepts balanced', () => {
   it('the approval-mode-set handler lets balanced through', () => {
     const main = readFileSync(resolve(__dirname, '../main/background.ts'), 'utf8')
     expect(main).toMatch(/mode !== 'auto' && mode !== 'balanced' && mode !== 'step'/)
+  })
+
+  it('the handler sends a legacy step to the backend as balanced', () => {
+    const main = readFileSync(resolve(__dirname, '../main/background.ts'), 'utf8')
+    expect(main).toMatch(/const wireMode = mode === 'step' \? 'balanced' : mode/)
+    expect(main).toMatch(/\{ mode: wireMode, source: src \}/)
   })
 })

@@ -103,7 +103,7 @@ const open = async (id: number) => {
   await flush()
 }
 const send = async (text: string) => {
-  act(() => { void api.chat.sendMessage(text, '', 'tr', 'step', 'medium', vi.fn(), vi.fn()) })
+  act(() => { void api.chat.sendMessage(text, '', 'tr', 'balanced', 'medium', vi.fn(), vi.fn()) })
   await flush()
 }
 /** Mount, and let the first `/mcp-pending` answer land (the reload baseline). */

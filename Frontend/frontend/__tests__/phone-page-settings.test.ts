@@ -69,8 +69,8 @@ const boot = async () => {
   chatModel = { provider_type: 'subscription', model_name: 'claude-opus-5' }
   h.handlers = {
     get_config: (p: any) => ok(p?.chat_id !== undefined
-      ? { approval_mode: 'step', desktop_effort: pcEffort, ...chatModel, family: 'claude', effort_levels: LEVELS }
-      : { approval_mode: 'step', desktop_effort: pcEffort }),
+      ? { approval_mode: 'balanced', desktop_effort: pcEffort, ...chatModel, family: 'claude', effort_levels: LEVELS }
+      : { approval_mode: 'balanced', desktop_effort: pcEffort }),
     list_models: () => ok(catalog),
     list_chats: () => ok({ chats: [{ chat_id: '7', title: 'Sohbet 7', status: 'idle', model: chatModel.model_name }] }),
     pending_cards: () => ok({ cards: [] }),

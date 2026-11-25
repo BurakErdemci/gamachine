@@ -40,7 +40,7 @@ interface EmptyChatProps {
   /** Puts a starting prompt into the composer. */
   onPick: (prompt: string) => void;
   /** The approval mode decides what the greeting promises: "I ask first" was shown in auto mode
-   *  too, where nothing asks (Burak, 2 Oct). Absent means step, the strictest promise. */
+   *  too, where nothing asks (Burak, 2 Oct). Absent means Safe Auto, the strictest promise. */
   approvalMode?: GenerationMode;
   /** Opens the "import a Claude Code session" dialog; the link is hidden without it. */
   onImportSession?: () => void;
@@ -48,7 +48,6 @@ interface EmptyChatProps {
 
 // Copy per approval mode: what the greeting and the writing cards promise.
 const PROMISE: Record<GenerationMode, { sub: TKey; subQuest: TKey; asks: TKey }> = {
-  step: { sub: 'empty.sub', subQuest: 'empty.subQuest', asks: 'quest.asks' },
   balanced: { sub: 'empty.subBalanced', subQuest: 'empty.subQuestBalanced', asks: 'quest.asksBalanced' },
   auto: { sub: 'empty.subAuto', subQuest: 'empty.subQuestAuto', asks: 'quest.asksAuto' },
 };
@@ -61,9 +60,9 @@ const shield = (
 );
 
 /** Mockup "Yeni sohbet (bos)": the mascot greets as the quest giver, the board lists starters. */
-export const EmptyChat: React.FC<EmptyChatProps> = ({ userName, projectName, onPick, approvalMode = 'step', onImportSession }) => {
+export const EmptyChat: React.FC<EmptyChatProps> = ({ userName, projectName, onPick, approvalMode = 'balanced', onImportSession }) => {
   const { t } = useLang();
-  const promise = PROMISE[approvalMode] ?? PROMISE.step;
+  const promise = PROMISE[approvalMode] ?? PROMISE.balanced;
   const name = displayName(userName);
   const project = (projectName || '').trim() || 'Workspace';
   return (

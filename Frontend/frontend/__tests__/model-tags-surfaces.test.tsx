@@ -43,7 +43,7 @@ describe('tag wording on rendered surfaces', () => {
       open: true, onClose: vi.fn(), convId: 7, models,
       currentModel: { provider_type: 'subscription', model_name: 'gemini-3.8-flash' },
       onOpenModels: vi.fn(), onModelChanged: vi.fn(), effortLevels: ['auto'], thinkingLevel: 'auto', onEffortChanged: vi.fn(),
-      mode: 'step', loading: false, isCompacting: false, onCompact: vi.fn(), onStop: vi.fn(), showToast: vi.fn(), request: vi.fn(),
+      mode: 'balanced', loading: false, isCompacting: false, onCompact: vi.fn(), onStop: vi.fn(), showToast: vi.fn(), request: vi.fn(),
     } as unknown as PhoneMenuSheetProps
     render(<PhoneMenuSheet {...props} />)
     fireEvent.click(document.querySelector('[data-row="model"]') as HTMLElement)

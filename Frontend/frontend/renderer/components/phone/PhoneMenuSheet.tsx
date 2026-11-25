@@ -17,7 +17,6 @@ const linkRequest: PhoneRequest = (op, params) => {
 const MODES: Array<{ id: GenerationMode; label: TKey; desc: TKey }> = [
   { id: 'auto', label: 'mode.auto', desc: 'mode.autoDesc' },
   { id: 'balanced', label: 'mode.balanced', desc: 'mode.balancedDesc' },
-  { id: 'step', label: 'mode.step', desc: 'mode.stepDesc' },
 ];
 
 type View = 'menu' | 'model' | 'effort' | 'mode' | 'confirm-auto';
@@ -118,7 +117,7 @@ export function PhoneMenuSheet(props: PhoneMenuSheetProps) {
   const levels = (effortLevels ?? []).length > 1 ? effortLevels! : [];
   const picks = modelPicks(models, t);
   const currentPick = picks.find(p => p.provider_type === currentModel.provider_type && p.model_name === currentModel.model_name);
-  const currentMode = MODES.find(m => m.id === mode) ?? MODES[2];
+  const currentMode = MODES.find(m => m.id === mode) ?? MODES[1];
   const back = (
     <button type="button" className="phone-sheet-back" onClick={() => setView('menu')} aria-label={t('phone.sheet.backToMenu')}>‹</button>
   );

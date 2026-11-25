@@ -89,7 +89,7 @@ const SEARCH_KEYS: Record<SettingsPage, TKey[]> = {
   modeller: ['set.nav.modeller', 'set.defaultModel', 'set.group.subs', 'set.group.keys', 'set.customModel', 'set.group.local'],
   gorunum: ['set.nav.gorunum', 'settings.appearance.theme', 'settings.appearance.readingFont', 'settings.appearance.codeFont', 'settings.appearance.textSize', 'settings.appearance.intro'],
   unity: ['set.unity.conn', 'set.unity.trouble'],
-  onay: ['set.nav.onay', 'set.mode.stepTitle', 'set.mode.balancedTitle', 'set.mode.autoTitle'],
+  onay: ['set.nav.onay', 'set.mode.balancedTitle', 'set.mode.autoTitle'],
   bilgisayar: ['set.nav.bilgisayar', 'cu.set.master', 'cu.set.ax', 'cu.set.screen', 'cu.set.driver', 'cu.set.apps'],
   tarayici: ['set.nav.tarayici', 'bp.set.master'],
   baglayicilar: ['set.nav.baglayicilar', 'conn.lede', 'conn.caps'],

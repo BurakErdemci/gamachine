@@ -60,9 +60,9 @@ describe('BlenderApproval card', () => {
       .toBe(ceviriUygula('tr', 'bl.card.truncated', { shown: 1, total: 30000 }))
   })
 
-  it('explains a step-mode card that has no trigger', () => {
+  it('a card without a trigger says the risk is unknown, whatever mode an old desktop sent', () => {
     render(<BlenderApproval info={blenderCardInfo({ ...PARAMS, reason: '', mode: 'step' })} onAnswer={vi.fn()} />)
-    expect(screen.getByTestId('bl-card-risk').textContent).toContain(ceviriUygula('tr', 'bl.card.stepReason'))
+    expect(screen.getByTestId('bl-card-risk').textContent).toContain(ceviriUygula('tr', 'bl.card.riskUnknown'))
   })
 
   it('answers approve and reject, with no remember option', () => {
@@ -77,7 +77,7 @@ describe('BlenderApproval card', () => {
 
   it('has every label in both languages', () => {
     for (const key of ['bl.card.who', 'bl.card.name', 'bl.card.sentence', 'bl.card.riskUnknown',
-      'bl.card.stepReason', 'bl.card.truncated']) {
+      'bl.card.truncated']) {
       expect(ceviriUygula('tr', key)).not.toBe(key)
       expect(ceviriUygula('en', key)).not.toBe(key)
     }

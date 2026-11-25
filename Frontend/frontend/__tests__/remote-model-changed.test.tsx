@@ -110,7 +110,7 @@ beforeEach(() => {
     const m = u.match(/\/conversations\/(\d+)\/model$/)
     if (m) return { data: { ...(chatModels[Number(m[1])] ?? defaultModel), has_key: false } }
     if (u.includes('/get-ai-config/')) return { data: { ...defaultModel, has_key: false } }
-    if (u.endsWith('/approval-mode')) return { data: { mode: 'step', stored: true } }
+    if (u.endsWith('/approval-mode')) return { data: { mode: 'balanced', stored: true } }
     if (u.includes('/context-usage')) return { data: { percent: 1, should_compact: false, message_count: 0 } }
     if (u.includes('/mcp/unity/status')) return { data: { status: 'off' } }
     return { data: [] }

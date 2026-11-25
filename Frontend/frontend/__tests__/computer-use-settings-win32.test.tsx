@@ -21,7 +21,7 @@ const invoke = vi.fn(async (_channel: string, req: any) => {
 
 const hostStatus = (over: Record<string, unknown> = {}) => ({
   available: true, running: false,
-  settings: { enabled: false, mode: 'step', active: false, grants: [], runtime: { running: false, driver_path: null, socket_path: null }, halted: [] },
+  settings: { enabled: false, mode: 'balanced', active: false, grants: [], runtime: { running: false, driver_path: null, socket_path: null }, halted: [] },
   permissions: { accessibility: false, screen: 'denied' },
   ...over,
 })

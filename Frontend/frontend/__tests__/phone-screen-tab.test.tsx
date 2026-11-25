@@ -134,7 +134,7 @@ describe('PhoneScreenTab covered or re-rendered', () => {
       route, conversations: [{ id: 1, title: 'A', created_at: '', updated_at: '', parent_id: null }], activeConvId: 1, convStatus: {},
       unknownGates: 0, projectName: 'P', onSwitchProject: vi.fn(), onOpenSettings: vi.fn(), selectConversation: vi.fn(),
       createNewConversation: vi.fn(), session: null,
-      chat: { thread: <div />, composer: <textarea />, menu: { models: { local: [], cloud: [], subscription: [] }, currentModel: { provider_type: 'x', model_name: 'y' }, effortLevels: null, thinkingLevel: 'auto', onEffortChanged: vi.fn(), mode: 'step', loading: false, isCompacting: false, onCompact: vi.fn(), onStop: vi.fn() } },
+      chat: { thread: <div />, composer: <textarea />, menu: { models: { local: [], cloud: [], subscription: [] }, currentModel: { provider_type: 'x', model_name: 'y' }, effortLevels: null, thinkingLevel: 'auto', onEffortChanged: vi.fn(), mode: 'balanced', loading: false, isCompacting: false, onCompact: vi.fn(), onStop: vi.fn() } },
     } as any
     const { rerender } = render(<PhoneShell {...props} />)
     await waitFor(() => expect(seen()).toEqual([true]))

@@ -150,7 +150,7 @@ afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.resto
 
 const sendIn = async (id: number) => {
   await open(id)
-  act(() => { chat.sendMessage('q', '', 'tr', 'step', 'medium', vi.fn(), vi.fn()) })
+  act(() => { chat.sendMessage('q', '', 'tr', 'balanced', 'medium', vi.fn(), vi.fn()) })
   await flush()
 }
 

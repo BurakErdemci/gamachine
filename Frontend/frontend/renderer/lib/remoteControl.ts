@@ -306,7 +306,7 @@ export function parseCardClosed(data: unknown): CardClosed | null {
 // ── an approval mode a phone changed (`approval_mode_changed` frames) ────
 
 export interface ModeChanged {
-  mode: 'auto' | 'balanced' | 'step';
+  mode: 'auto' | 'balanced';
   previous: string;
   /** Cards the backend approved on the switch (0 unless it was to auto or balanced). */
   approvedPending: number;
@@ -314,7 +314,7 @@ export interface ModeChanged {
   by: string;
 }
 
-/** Strict on purpose: an unknown mode is ignored, never read as step or auto. */
+/** Strict on purpose: an unknown mode is ignored, never read as auto. A legacy 'step' from an old desktop is Safe Auto. */
 export function parseModeChanged(data: unknown): ModeChanged | null {
   if (!data || typeof data !== 'object') return null;
   const d = data as Record<string, unknown>;
@@ -323,7 +323,7 @@ export function parseModeChanged(data: unknown): ModeChanged | null {
   if (typeof d.by !== 'string' || phoneDeviceName(d.by) === null) return null;
   const pending = Number(d.approved_pending);
   return {
-    mode: d.mode,
+    mode: d.mode === 'step' ? 'balanced' : d.mode,
     previous: typeof d.previous === 'string' ? d.previous : '',
     approvedPending: Number.isSafeInteger(pending) && pending > 0 ? pending : 0,
     by: d.by,

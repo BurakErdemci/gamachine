@@ -88,14 +88,14 @@ const open = async (result: Api, id: number) => {
 }
 const startTurn = async (result: Api, conv?: number) => {
   act(() => {
-    void result.current.sendMessage('go', '', 'tr', 'step', 'medium', vi.fn(), vi.fn(),
+    void result.current.sendMessage('go', '', 'tr', 'balanced', 'medium', vi.fn(), vi.fn(),
       undefined, false, undefined, 'user', conv)
   })
   await flush()
   return turns[turns.length - 1]
 }
 const changed = (mode: string, extra: Record<string, unknown> = {}) => ({
-  type: 'approval_mode_changed', mode, previous: 'step', approved_pending: 0, by: 'phone:iPhone', at: 1, ...extra,
+  type: 'approval_mode_changed', mode, previous: 'balanced', approved_pending: 0, by: 'phone:iPhone', at: 1, ...extra,
 })
 const pushWake = async (frame: object) => { wakes.forEach(w => w.push(frame)); await flush() }
 const toastTexts = () => showToast.mock.calls.map(c => c[0])
@@ -106,7 +106,7 @@ beforeEach(() => {
   ipcInvoke.mockReset()
   mockedAxios.post.mockReset().mockResolvedValue({ data: {} })
   mockedAxios.get.mockReset().mockImplementation(async (url: string) => {
-    if (String(url).endsWith('/approval-mode')) return { data: { mode: 'step', stored: true } }
+    if (String(url).endsWith('/approval-mode')) return { data: { mode: 'balanced', stored: true } }
     if (String(url).includes('/context-usage')) return { data: { percent: 1, should_compact: false, message_count: 0 } }
     return { data: [] }
   })
@@ -118,16 +118,17 @@ describe('approval_mode_changed · the mode on screen', () => {
   it('a phone switch shows the new mode and names the phone', async () => {
     const { result } = hook()
     await flush()
-    expect(result.current.generationMode).toBe('step')
-
-    await pushWake(changed('balanced'))
-
     expect(result.current.generationMode).toBe('balanced')
-    expect(toastTexts()).toEqual([cevir('mode.changedByPhone', { cihaz: 'iPhone', mod: cevir('mode.balanced') })])
+
+    await pushWake(changed('auto'))
+
+    expect(result.current.generationMode).toBe('auto')
+    expect(toastTexts()).toEqual([cevir('mode.changedByPhone', { cihaz: 'iPhone', mod: cevir('mode.auto') })])
     expect(showToast.mock.calls[0][1]).toBe('info')
 
-    await pushWake(changed('step', { previous: 'balanced' }))
-    expect(result.current.generationMode).toBe('step')
+    // An old desktop's legacy 'step' is shown as Safe Auto.
+    await pushWake(changed('step', { previous: 'auto' }))
+    expect(result.current.generationMode).toBe('balanced')
   })
 
   it('says how many waiting approvals the switch to auto approved', async () => {
@@ -142,8 +143,8 @@ describe('approval_mode_changed · the mode on screen', () => {
   it('a switch to the mode already in force is adopted without a note', async () => {
     const { result } = hook()
     await flush()
-    await pushWake(changed('step', { previous: 'step' }))
-    expect(result.current.generationMode).toBe('step')
+    await pushWake(changed('balanced', { previous: 'balanced' }))
+    expect(result.current.generationMode).toBe('balanced')
     expect(showToast).not.toHaveBeenCalled()
   })
 
@@ -180,7 +181,7 @@ describe('approval_mode_changed · cards, as after the desktop\'s own switch', (
     expect(result.current.attention[2]?.approvals ?? []).toEqual([])
   })
 
-  it('balanced and step keep them: the backend approved none of the in-chat ones', async () => {
+  it('balanced (and a legacy step) keep them: the backend approved none of the in-chat ones', async () => {
     const { result } = hook()
     await twoChatsWithCards(result)
 
@@ -206,9 +207,9 @@ describe('approval_mode_changed · cards, as after the desktop\'s own switch', (
     const { result } = hook()
     await flush()
     ipcInvoke.mockResolvedValue({ refused: { code: 'agy_step_refused', pids: '7' } })
-    await act(async () => { await result.current.setGenerationMode('step') })
-    expect(result.current.generationMode).toBe('step')
-    expect(toastTexts()).toEqual([cevir('mode.agyStepRefused', { pids: '7' })])
+    await act(async () => { await result.current.setGenerationMode('auto') })
+    expect(result.current.generationMode).toBe('balanced')
+    expect(toastTexts()).toEqual([cevir('mode.agyBalancedRefused', { pids: '7' })])
   })
 })
 
@@ -228,7 +229,7 @@ describe('approval_mode_changed · frames that are not one', () => {
     for (const frame of bad) await pushWake(frame)
     wakes.forEach(w => w.pushRaw('{"type":"approval_mode_changed","mode":'))
     await flush()
-    expect(result.current.generationMode).toBe('step')
+    expect(result.current.generationMode).toBe('balanced')
     expect(showToast).not.toHaveBeenCalled()
 
     await pushWake(changed('auto'))
@@ -237,9 +238,11 @@ describe('approval_mode_changed · frames that are not one', () => {
 
   it('parses the fields it uses and clamps the count', () => {
     expect(parseModeChanged(changed('auto', { approved_pending: 2 })))
-      .toEqual({ mode: 'auto', previous: 'step', approvedPending: 2, by: 'phone:iPhone' })
-    expect(parseModeChanged(changed('step', { approved_pending: -4, previous: 5 })))
-      .toEqual({ mode: 'step', previous: '', approvedPending: 0, by: 'phone:iPhone' })
+      .toEqual({ mode: 'auto', previous: 'balanced', approvedPending: 2, by: 'phone:iPhone' })
+    expect(parseModeChanged(changed('balanced', { approved_pending: -4, previous: 5 })))
+      .toEqual({ mode: 'balanced', previous: '', approvedPending: 0, by: 'phone:iPhone' })
+    // A legacy 'step' from an old desktop reads as Safe Auto, never as an unknown mode.
+    expect(parseModeChanged(changed('step'))?.mode).toBe('balanced')
     expect(parseModeChanged(changed('step', { approved_pending: 'many' }))?.approvedPending).toBe(0)
     for (const bad of [null, undefined, 'x', 7, [], { type: 'card_closed' }]) {
       expect(parseModeChanged(bad as any)).toBeNull()

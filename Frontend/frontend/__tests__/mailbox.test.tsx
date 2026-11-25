@@ -96,7 +96,7 @@ describe('a note wakes a chat in the background', () => {
     const { result } = renderHook(() => useChat(API, USER, CONFIG, '/ws', vi.fn(), vi.fn(), (n: string) => n))
     await flush()
     act(() => {
-      result.current.setWakeDefaults({ lang: 'tr', genMode: 'step', thinkingLevel: 'auto',
+      result.current.setWakeDefaults({ lang: 'tr', genMode: 'balanced', thinkingLevel: 'auto',
         setPendingGenFiles: setGen, setPendingDelete: setDel })
       result.current.setActiveConvId(1)
       result.current.setChatInput('yarım taslak')
@@ -142,7 +142,7 @@ describe('a note wakes a chat in the background', () => {
     const { result } = renderHook(() => useChat(API, USER, CONFIG, '/ws', vi.fn(), vi.fn(), (n: string) => n))
     await flush()
     act(() => {
-      result.current.setWakeDefaults({ lang: 'tr', genMode: 'step', thinkingLevel: 'auto',
+      result.current.setWakeDefaults({ lang: 'tr', genMode: 'balanced', thinkingLevel: 'auto',
         setPendingGenFiles: vi.fn(), setPendingDelete: vi.fn() })
     })
     await act(async () => { wake.push({ type: 'wake', conversation_id: 7, count: 1, notices: ['mail|#3'], text: 'mail|#3' }) })

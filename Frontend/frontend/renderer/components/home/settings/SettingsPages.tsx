@@ -630,7 +630,6 @@ export const ApprovalPage = ({ mode, onChange, saved }: {
 }) => {
   const { t } = useLang();
   const options: { id: GenerationMode; title: TKey; explain: TKey; warn: boolean; recommended: boolean }[] = [
-    { id: 'step', title: 'set.mode.stepTitle', explain: 'settings.modeStepExplain', warn: false, recommended: false },
     { id: 'balanced', title: 'set.mode.balancedTitle', explain: 'settings.modeBalancedExplain', warn: false, recommended: true },
     { id: 'auto', title: 'set.mode.autoTitle', explain: 'settings.modeAutoExplain', warn: true, recommended: false },
   ];

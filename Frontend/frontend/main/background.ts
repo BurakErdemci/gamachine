@@ -911,12 +911,14 @@ handleSecure('approval-mode-set', async (_event, mode: unknown, source: unknown)
   if (mode !== 'auto' && mode !== 'balanced' && mode !== 'step') {
     throw new Error(mt('modeInvalid'))
   }
+  // 'step' was removed in 4.0.3; an old caller's value means Safe Auto.
+  const wireMode = mode === 'step' ? 'balanced' : mode
   const src = source === 'settings' || source === 'chat' || source === 'migrate' ? source : 'ui'
   let response
   try {
     response = await axios.post(
       `${getBackendBaseUrl()}/approval-mode`,
-      { mode, source: src },
+      { mode: wireMode, source: src },
       {
         timeout: 10000,
         headers: { 'X-Session-Token': localAppToken, 'X-Gamachine-UI-Secret': uiSecret },
@@ -926,7 +928,7 @@ handleSecure('approval-mode-set', async (_event, mode: unknown, source: unknown)
   } catch (error) {
     const detail = (error as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
     if (detail && typeof detail === 'object' && typeof (detail as { code?: unknown }).code === 'string') {
-      // A coded refusal (the flip to step was refused): returned, not thrown, so
+      // A coded refusal (the flip to Safe Auto was refused): returned, not thrown, so
       // the renderer can show it in its own language; an IPC error only carries
       // a message string.
       console.error('[approval-mode] refused:', (detail as { code: string }).code)

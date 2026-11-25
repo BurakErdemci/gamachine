@@ -76,6 +76,15 @@ describe('playing a topic', () => {
     expect(host.snapshot).toHaveBeenCalledTimes(1)
   })
 
+  it('the approvals topic lists the two modes and no step mode', () => {
+    const { host } = mockHost()
+    render(<Harness host={host} />)
+    act(() => api.playTopic('approvals'))
+    const items = Array.from(document.querySelectorAll('.tour-mode-list [data-mode]'))
+    expect(items.map(li => li.getAttribute('data-mode'))).toEqual(['balanced', 'auto'])
+    expect(document.querySelector('.tour-mode-list [data-mode="step"]')).toBeNull()
+  })
+
   it('Back lands on the same state as stepping forward: step 1 again runs only step 1', () => {
     const { host, calls } = mockHost()
     render(<Harness host={host} />)

@@ -105,7 +105,7 @@ const open = async (result: Api, id: number) => {
 }
 const startTurn = async (result: Api) => {
   act(() => {
-    void result.current.chat.sendMessage('go', '', 'tr', 'step', 'medium', vi.fn(), vi.fn(),
+    void result.current.chat.sendMessage('go', '', 'tr', 'balanced', 'medium', vi.fn(), vi.fn(),
       undefined, false, undefined, 'user', undefined)
   })
   await flush()

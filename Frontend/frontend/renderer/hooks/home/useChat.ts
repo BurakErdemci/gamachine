@@ -417,9 +417,9 @@ export const useChat = (
   const [pendingFix, setPendingFix] = useState<{ data: any; messageId?: number; applied?: boolean } | null>(null);
   // The approval mode is global and lives in the backend (closed-loop.md §5):
   // external MCP clients carry no request, so a per-request field could never
-  // make them auto. Until the backend answers, the UI shows step - the safe side
+  // make them auto. Until the backend answers, the UI shows Safe Auto - the safe side
   // (a fresh install then reads the backend's default; nothing is written here).
-  const [generationMode, setGenerationModeState] = useState<GenerationMode>('step');
+  const [generationMode, setGenerationModeState] = useState<GenerationMode>('balanced');
   const [editingId, setEditingId] = useState<number | null>(null);
   const [tempTitle, setTempTitle] = useState('');
 
@@ -445,7 +445,8 @@ export const useChat = (
         // valid old value nothing is written, so the backend's fresh-install
         // default stays unsaved and a later explicit choice is the first write.
         if (!res.data?.stored && (legacy === 'auto' || legacy === 'step') && ipc?.invoke) {
-          const out = await ipc.invoke('approval-mode-set', legacy, 'migrate');
+          // The old 'step' choice becomes Safe Auto, the mode that replaced it.
+          const out = await ipc.invoke('approval-mode-set', legacy === 'auto' ? 'auto' : 'balanced', 'migrate');
           mode = toGenerationMode(out?.mode);
           legacy = null;
         }
@@ -491,7 +492,7 @@ export const useChat = (
         // The mode did not change; say why in the UI's language when the code is known.
         const refused = out.refused as { code?: string; message?: string; pids?: string };
         showToast(refused.code === 'agy_step_refused'
-          ? cevir(mode === 'balanced' ? 'mode.agyBalancedRefused' : 'mode.agyStepRefused', { pids: refused.pids || '?' })
+          ? cevir('mode.agyBalancedRefused', { pids: refused.pids || '?' })
           : cevir('mode.writeFailed', { hata: refused.message || String(refused.code) }), 'error');
         return;
       }

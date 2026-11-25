@@ -61,7 +61,7 @@ const Harness: React.FC = () => {
     onOpenConversation: chat.selectConversation,
   })
   api = { chat, pendingDelete, send: () => {
-    void chat.sendMessage('delete x', '', 'en', 'step', 'medium', setPendingGen, setPendingDelete)
+    void chat.sendMessage('delete x', '', 'en', 'balanced', 'medium', setPendingGen, setPendingDelete)
   } }
   return null
 }
