@@ -343,6 +343,8 @@ def test_codex_only_first_turn_of_each_thread_includes_guide(monkeypatch, contex
         yield {"type": "done"}
     session.stream = stream
     monkeypatch.setattr(codex_session, "_SESSIONS", {})
+    # The Codex path asks whether Unity MCP runs, which probes 127.0.0.1:8080: the owner's live port.
+    monkeypatch.setattr(unity_mcp_manager, "is_running", lambda: False)
     monkeypatch.setattr(codex_session, "get_session", lambda *args, **kwargs: session)
     monkeypatch.setattr(CodexProvider, "_write_mcp_config", lambda *args: None)
     async def scenario():
