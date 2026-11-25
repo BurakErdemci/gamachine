@@ -19,6 +19,35 @@ import tempfile
 import sys
 
 import pytest
+import socket
+
+# The owner's live app, Unity MCP and relay listen on these ports. Any test that reaches one would
+# probe or change the real app and make its result depend on whether the app runs (measured
+# 25 Nov 2026: 20+ tests probed 127.0.0.1:8080 through unity_mcp_manager). A refused connection
+# reads as "nothing listens there", which is what every test expects.
+_BANNED_PORTS = frozenset({8000, 8080, 8799, 8888})
+_real_connect = socket.socket.connect
+_real_connect_ex = socket.socket.connect_ex
+
+
+def _is_banned(address) -> bool:
+    return isinstance(address, tuple) and len(address) >= 2 and address[1] in _BANNED_PORTS
+
+
+def _guarded_connect(self, address, *args, **kwargs):
+    if _is_banned(address):
+        raise ConnectionRefusedError(f"test guard: {address} is the owner's live app")
+    return _real_connect(self, address, *args, **kwargs)
+
+
+def _guarded_connect_ex(self, address, *args, **kwargs):
+    if _is_banned(address):
+        return errno.ECONNREFUSED
+    return _real_connect_ex(self, address, *args, **kwargs)
+
+
+socket.socket.connect = _guarded_connect
+socket.socket.connect_ex = _guarded_connect_ex
 
 # `app/` sys.path'e burada ekleniyor. Mevcut test dosyalarının her biri bunu
 # kendisi yapıyordu; sonuç, satırı unutan bir dosyanın YALNIZCA başka bir test
