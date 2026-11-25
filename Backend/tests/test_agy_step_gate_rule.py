@@ -1,4 +1,4 @@
-"""The agy step-mode hook (`backend agy-hook`): allow rule and fail-closed paths.
+"""The agy approval hook (`backend agy-hook`): allow rule and fail-closed paths.
 
 The allowed shapes are the ones agy 1.2.8 was measured to emit for the unityai
 bridge on Windows (PowerShell 5.1) on 25 Sep 2026; the attack corpus is what a
@@ -197,7 +197,7 @@ class TestDecide(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.state = os.path.join(self.tmp.name, "step-gate.json")
-        gate.write_state(self.state, "step", WIN_L)
+        gate.write_state(self.state, "balanced", WIN_L)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -209,7 +209,9 @@ class TestDecide(unittest.TestCase):
     def run_call(self, command):
         return {"toolCall": {"name": "run_command", "args": {"CommandLine": command}}}
 
-    def test_step_mode(self):
+    def test_balanced_mode_without_a_hook_workspace(self):
+        # No .agents/hooks.json above the hook's directory: only the bridge
+        # call shapes pass; nothing can be confined, so nothing else does.
         self.assertEqual(self.decide(self.run_call(WIN_ALLOWED[0])), "allow")
         self.assertEqual(self.decide(self.run_call("python -c \"open('x','w')\"")), "deny")
         for name in gate.GATED_TOOLS:
@@ -217,20 +219,22 @@ class TestDecide(unittest.TestCase):
 
     def test_native_writers_obey_approval_and_use_hook_workspace(self):
         from unittest.mock import patch
-        gate.write_state(self.state, "step", WIN_L, workspace=os.path.join(self.tmp.name, "other-chat"))
+        gate.write_state(self.state, "balanced", WIN_L, workspace=os.path.join(self.tmp.name, "other-chat"))
         agents = os.path.join(self.tmp.name, ".agents")
         os.makedirs(agents)
         with open(os.path.join(agents, "hooks.json"), "w", encoding="utf-8") as stream:
             json.dump({gate.STEP_GATE_KEY: {}}, stream)
         for name in ("write_to_file", "replace_file_content"):
-            args = {"TargetFile": "a.txt", "CodeContent": "new"}
+            # A protected path, so balanced asks for the card.
+            args = {"TargetFile": ".git/a.txt", "CodeContent": "new"}
             for approved in (True, False):
                 with patch.object(gate.agy_native_approval, "request_native_write",
                                   return_value=(approved, "native refusal")) as ask:
-                    payload = json.dumps({"toolCall": {"name": name, "args": args}}).encode()
+                    payload = json.dumps({"toolCall": {"name": name, "args": args},
+                                          "workspacePaths": [self.tmp.name]}).encode()
                     self.assertEqual(gate.decide(payload, self.state, windows=True, cwd=agents)["decision"],
                                      "allow" if approved else "deny")
-                    ask.assert_called_once_with(name, args, self.tmp.name)
+                    ask.assert_called_once_with(name, args, self.tmp.name, base=self.tmp.name)
 
     def test_auto_mode_allows_everything(self):
         gate.write_state(self.state, "auto", WIN_L)
@@ -243,14 +247,18 @@ class TestDecide(unittest.TestCase):
         with open(self.state, "w") as f:
             f.write("{half")
         self.assertEqual(self.decide(self.run_call(WIN_ALLOWED[0])), "deny")
-        gate.write_state(self.state, "sideways", WIN_L)
-        self.assertEqual(self.decide(self.run_call(WIN_ALLOWED[0])), "deny")
-        gate.write_state(self.state, "step", WIN_L)
+        # A mode the hook does not know (the removed "step" included): reads only.
+        for unknown in ("sideways", "step"):
+            gate.write_state(self.state, unknown, WIN_L)
+            self.assertEqual(self.decide(self.run_call(WIN_ALLOWED[0])), "deny")
+            self.assertEqual(self.decide({"toolCall": {"name": "write_file", "args": {}}}), "deny")
+            self.assertEqual(self.decide({"toolCall": {"name": "view_file", "args": {}}}), "allow")
+        gate.write_state(self.state, "balanced", WIN_L)
         self.assertEqual(self.decide(b"not json"), "deny")
         self.assertEqual(self.decide({"toolCall": {"name": "run_command"}}), "deny")
         self.assertEqual(self.decide({"toolCall": {"name": "run_command", "args": {"CommandLine": 7}}}), "deny")
         self.assertEqual(self.decide({"toolCall": {"name": 7}}), "deny")
-        # Since 4.0.3 every tool reaches the hook and step is an allow-list.
+        # Since 4.0.3 every tool reaches the hook and balanced is an allow-list.
         self.assertEqual(self.decide({"toolCall": {"name": "some_new_tool"}}), "deny")
         gate.write_state(self.state, gate.SIDE_MODE, WIN_L)
         self.assertEqual(self.decide({"toolCall": {"name": "some_new_tool"}}), "deny")
@@ -267,7 +275,7 @@ class TestSubcommand(unittest.TestCase):
         backend = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         with tempfile.TemporaryDirectory() as tmp:
             state = os.path.join(tmp, "s.json")
-            gate.write_state(state, "step", WIN_L)
+            gate.write_state(state, "balanced", WIN_L)
             cases = [({"toolCall": {"name": "run_command", "args": {"CommandLine": "del x"}}}, "deny"),
                      ({"toolCall": {"name": "write_to_file", "args": {}}}, "deny"),
                      (None, "deny")]

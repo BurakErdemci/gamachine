@@ -12,7 +12,7 @@ from collections.abc import Hashable, Mapping
 from datetime import datetime, timedelta
 from typing import AsyncGenerator, Dict, Optional
 
-from agy_step_gate import SIDE_MODE
+from agy_step_gate import BALANCED_MODE, SIDE_MODE
 from .agy_provider import AgyProvider, AgyStepGateError, _gate_write_failed, gate_state_path
 from .cli_base import BaseCLIProvider, _CREATE_NO_WINDOW, build_spawn_env
 from .saglayici_sahipligi import SaglayiciSahipligi, oturumu_kapat
@@ -554,32 +554,25 @@ def _global_auto_mode() -> bool:
 
     Not `self.auto_approve` from the request: the hook's state file must
     follow the backend's mode, whoever set the flag. Unreadable counts as
-    step (fail closed).
+    balanced (fail closed).
     """
     try:
         from agentic import approval_mode
         return approval_mode.is_auto()
     except Exception:
-        logger.warning("[agy] approval mode unreadable; treating it as step", exc_info=True)
+        logger.warning("[agy] approval mode unreadable; treating it as balanced", exc_info=True)
         return False
 
 
 def _global_gate_mode() -> str:
-    """The hook state for the published mode: "auto", "balanced" or "step".
+    """The hook state for the published mode: "auto" or "balanced".
 
-    Asks _global_auto_mode first, so auto has one source; anything that is
-    not auto and not balanced, unreadable included, is step. Callers that
-    write the file hold _gate_lock(), under which the mode cannot change
-    between the two reads (set_mode publishes under the same lock).
+    Asks _global_auto_mode, the one source of auto; anything else,
+    unreadable included, is balanced. Callers that write the file hold
+    _gate_lock(), under which the mode cannot change (set_mode publishes
+    under the same lock).
     """
-    if _global_auto_mode():
-        return "auto"
-    try:
-        from agentic import approval_mode
-        return "balanced" if approval_mode.current_mode() == "balanced" else "step"
-    except Exception:
-        logger.warning("[agy] approval mode unreadable; treating it as step", exc_info=True)
-        return "step"
+    return "auto" if _global_auto_mode() else BALANCED_MODE
 
 
 def _gate_lock():
@@ -597,7 +590,7 @@ def _gate_lock():
 # Every agy child whose hook may read the state file, from the spawn's state
 # write until the child is reaped: token -> process (None while spawning). A
 # closing child stays here after close() drops its session from _SESSIONS,
-# which is what lets a flip to step still reach it (verification round 2,
+# which is what lets a flip to balanced still reach it (verification round 2,
 # 26 Sep 2026: close deregistered first, so a flip in that gap found no
 # session and left the closing child's hook in auto). Guarded by _gate_lock().
 _GATED_CHILDREN: Dict[object, object] = {}
@@ -638,8 +631,9 @@ def _begin_side_turn(session) -> None:
 
 def _end_side_turn(session) -> None:
     """Called before _SIDE_DONE is set, so no main turn writes the state file
-    before this: puts the state file back to the mode published NOW (not the one before the turn: a flip to step
-    during the turn must not be undone by a stale auto)."""
+    before this: puts the state file back to the mode published NOW (not the
+    one before the turn: a flip to balanced during the turn must not be undone
+    by a stale auto)."""
     global _SIDE_TURN
     with _gate_lock():
         if _SIDE_TURN is not session:
@@ -737,12 +731,11 @@ def _sync_gate_state() -> bool:
     Every agy process has the hook (agy_provider._write_step_gate installs it
     in both modes) and the hook reads this one global file on every tool
     call. The mode is read and the file written under _gate_lock(), so this
-    can never write auto after step was published.
+    can never write auto after balanced was published.
 
-    False only when step or balanced mode is on and the file may still say
-    auto; the caller must then stop the process. A failed write then first
-    tries to delete the file, since a hook with no state file denies
-    everything.
+    False only when balanced is on and the file may still say auto; the
+    caller must then stop the process. A failed write then first tries to
+    delete the file, since a hook with no state file denies everything.
     """
     from . import agy_provider
     with _gate_lock():
@@ -751,21 +744,18 @@ def _sync_gate_state() -> bool:
             # deny it ("closed" or "side") or follows the mode it was closed
             # in, and a rewrite now could loosen it (side -> auto, audit 24 Nov
             # 2026). It is left as is: this only ever loosens toward the
-            # published mode, and a flip to step or balanced is written by
+            # published mode, and a flip to balanced is written by
             # tighten_gate_state before it is published.
             logger.error("[agy] closed child still alive; gate state left as it is")
             return True
         mode = _effective_gate_mode()
         try:
-            if mode in ("balanced", SIDE_MODE):
-                agy_provider.write_gate_state(mode=mode)
-            else:
-                agy_provider.write_gate_state(auto=(mode == "auto"))
+            agy_provider.write_gate_state(mode=mode)
             return True
         except Exception:
             logger.warning("[agy] gate state not rewritten (mode=%s)", mode, exc_info=True)
             if mode == "auto":
-                return True  # a stale "step" only over-restricts
+                return True  # a stale gated state only over-restricts
             # A stale "auto" must not outlive balanced either.
             return _remove_gate_state()
 
@@ -802,39 +792,59 @@ def _kill_gated_children() -> list:
     return list(survivors.values())
 
 
+def _state_file_mode() -> Optional[str]:
+    """The mode the hook's state file says now; None when it is absent or
+    unreadable (the hook then denies every call)."""
+    from . import agy_provider
+    try:
+        with open(agy_provider.gate_state_path(), encoding="utf-8") as f:
+            mode = json.load(f).get("mode")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return mode if isinstance(mode, str) else None
+
+
 def tighten_gate_state() -> None:
-    """approval_mode calls this under GATE_LOCK before it publishes step.
+    """approval_mode calls this under GATE_LOCK before it publishes balanced.
 
     Nothing reads the file when no agy child exists, and a spawn writes it
     under the same lock, so then there is nothing to do. Otherwise the file
-    must deny per the step grammar before step is published: write step,
-    else remove it, else stop every child that could read it. If a child
-    survives all three, this raises and step is not published (verification
-    round 3, 26 Sep 2026: step was published over a live child whose hook
-    still allowed).
+    must apply the balanced rules before balanced is published: write
+    balanced, else remove it, else stop every child that could read it. If a
+    child survives all three, this raises and balanced is not published
+    (verification round 3, 26 Sep 2026: a gated mode was published over a
+    live child whose hook still allowed).
     """
     from . import agy_provider
     with _gate_lock():
         if not _GATED_CHILDREN and not any(_may_have_child(s) for s in _SESSIONS.values()):
             return
+        if _stop_retired_children() and _state_file_mode() not in ("auto", BALANCED_MODE):
+            # A closed child survived its kill and the file already denies
+            # more than balanced would ("closed", "side", absent or
+            # unreadable); writing balanced would hand that child routine
+            # writes back. The removed step state was tight enough for this.
+            logger.error("[agy] closed child still alive; gate state left denying")
+            return
         try:
             if _SIDE_TURN is not None:
-                # Side is tighter than step; replacing it with step would
-                # loosen a running side question.
+                # Side is tighter than balanced; replacing it would loosen
+                # a running side question.
                 agy_provider.write_gate_state(mode=SIDE_MODE)
             else:
-                agy_provider.write_gate_state(auto=False)
+                agy_provider.write_gate_state(mode=BALANCED_MODE)
             return
         except Exception:
-            logger.warning("[agy] gate state not tightened to step", exc_info=True)
+            logger.warning("[agy] gate state not tightened to balanced", exc_info=True)
         if _remove_gate_state():
             return
-        logger.error("[agy] gate state still allows; stopping every agy child before step")
+        logger.error("[agy] gate state still allows; stopping every agy child before balanced")
         survivors = _kill_gated_children()
         if survivors:
             pids = ", ".join(str(getattr(p, "pid", "?")) for p in survivors)
+            # The code stays agy_step_refused: the frontend and the relay key on it.
             raise AgyStepGateError(
-                "Adım adım onay moduna geçilemedi: agy'nin onay kapısı "
+                "Güvenli oto moduna geçilemedi: agy'nin onay kapısı "
                 f"({agy_provider.gate_state_path()}) güncellenemedi ve çalışan agy "
                 f"süreci durdurulamadı (pid {pids}).\n"
                 "Mod değişmedi. agy sürecini kapatın ya da uygulamayı yeniden başlatın, "
@@ -953,9 +963,9 @@ class AgyStreamSession(SaglayiciSahipligi):
         """
         self._auto_approve = bool(value)
         if self.is_live and not _sync_gate_state():
-            # Step mode and the hook may still allow: this process must not
-            # keep running. Its turn then ends with the exit error.
-            logger.error("[agy] gate state stale in step mode; stopping pid=%s",
+            # Balanced is on and the hook may still allow: this process must
+            # not keep running. Its turn then ends with the exit error.
+            logger.error("[agy] gate state stale in balanced mode; stopping pid=%s",
                          getattr(self._active_process, "pid", None))
             try:
                 process_tree.end_tree_sync(self._active_process, strict=True)
@@ -1065,7 +1075,7 @@ class AgyStreamSession(SaglayiciSahipligi):
         gap still reaches its file. The state file is shared by every agy
         child, so it is set to "closed" only when no other child may be
         reading it; otherwise it keeps following the mode (the other children
-        need it), which in step mode already denies per the step grammar.
+        need it), which in balanced already denies every critical call.
 
         So beside another child in auto mode, only the kill takes this child's
         write access away. If that kill fails, the session stays registered
@@ -1158,8 +1168,7 @@ class AgyStreamSession(SaglayiciSahipligi):
                 # this also writes "side" and verifies both, or raises.
                 try:
                     with _gate_lock():
-                        AgyProvider(binary_name=model)._write_step_gate(
-                            cwd, step_mode=True, mode=SIDE_MODE)
+                        AgyProvider(binary_name=model)._write_step_gate(cwd, mode=SIDE_MODE)
                 except AgyStepGateError:
                     await self._stop_process(force=True)
                     raise
@@ -1198,8 +1207,8 @@ class AgyStreamSession(SaglayiciSahipligi):
         try:
             # The mode is read and the state written in one critical section
             # (the ordering rule at approval_mode.GATE_LOCK), and the child is
-            # gated from this write on: a flip to step before the spawn below
-            # rewrites this file before step is published.
+            # gated from this write on: a flip to balanced before the spawn
+            # below rewrites this file before balanced is published.
             with _gate_lock():
                 _refuse_beside_retired_child()
                 mode = _effective_gate_mode()
@@ -1208,10 +1217,7 @@ class AgyStreamSession(SaglayiciSahipligi):
                 # In every mode this raises AgyStepGateError unless the gate
                 # is verifiably installed, so agy is never spawned ungated;
                 # stream() turns the raise into the user's error message.
-                if mode in ("balanced", SIDE_MODE):
-                    provider._write_step_gate(cwd, step_mode=True, mode=mode)
-                else:
-                    provider._write_step_gate(cwd, step_mode=(mode != "auto"))
+                provider._write_step_gate(cwd, mode=mode)
             instructions = provider._stream_instructions()
             self._stderr_tail = b""
             self._usage_totals = {}

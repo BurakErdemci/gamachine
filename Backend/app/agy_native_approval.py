@@ -37,9 +37,11 @@ def _read_file(path):
 
 
 def _state_matches(path):
+    # Only Safe Auto asks for a card; auto never reaches here, and any other
+    # state (closed, side, unknown) must not be approved into a write.
     with open(path, encoding="utf-8") as stream:
         state = json.load(stream)
-    return state.get("mode") in ("step", "balanced")
+    return state.get("mode") == "balanced"
 
 
 _ARG_NAMES = {name.replace("_", "").lower(): name for name in (
@@ -205,8 +207,12 @@ def _approval(params, workspace, total_deadline):
     raise TimeoutError("Approval timed out.")
 
 
-def request_native_write(tool_name, args, workspace):
-    """Return (allowed, reason); never write the target and never allow on error."""
+def request_native_write(tool_name, args, workspace, base=None):
+    """Return (allowed, reason); never write the target and never allow on error.
+
+    `workspace` is the hook workspace the card is for; `base` the directory
+    agy resolves a relative target against (the hook payload's
+    workspacePaths[0]), the workspace when not given."""
     deadline = time.monotonic() + TOTAL_SECONDS
     try:
         import action_risk  # stdlib-only; like agy_step_gate, only on a gated write
@@ -215,6 +221,9 @@ def request_native_write(tool_name, args, workspace):
         if not isinstance(workspace, str) or not workspace or not os.path.isabs(workspace):
             return False, "Missing or invalid hook workspace."
         workspace = os.path.realpath(workspace)
+        base = workspace if base is None else base
+        if not isinstance(base, str) or not base or not os.path.isabs(base):
+            return False, "Missing or invalid agy workspace."
         args = _normalized_args(args, tool_name)
         if not isinstance(args.get("TargetFile"), str) or not args["TargetFile"]:
             return False, "Missing or invalid TargetFile."
@@ -224,7 +233,7 @@ def request_native_write(tool_name, args, workspace):
                 or (drive and not tail.startswith(("/", "\\")))):
             return False, "Unverified TargetFile path: use a plain absolute or relative path."
         target = args["TargetFile"].replace("\\", os.sep).replace("/", os.sep)
-        target = target if os.path.isabs(target) else os.path.join(workspace, target)
+        target = target if os.path.isabs(target) else os.path.join(base, target)
         path = os.path.realpath(target)
         # Outside the workspace is the card's decision (owner decision, 4 Nov
         # 2026); Gamachine's own key and token files are refused in every mode.

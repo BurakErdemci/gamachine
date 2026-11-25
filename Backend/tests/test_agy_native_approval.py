@@ -16,7 +16,7 @@ def approval(tmp_path, monkeypatch):
     agents.mkdir()
     (agents / "hooks.json").write_text(json.dumps({gate.STEP_GATE_KEY: {}}), encoding="utf-8")
     state = tmp_path / "state.json"
-    gate.write_state(str(state), "step", "unityai", workspace=str(tmp_path))
+    gate.write_state(str(state), "balanced", "unityai", workspace=str(tmp_path))
     token = native.state_path.set(str(state))
     monkeypatch.setenv("LOCAL_APP_TOKEN", "session-secret")
     monkeypatch.setenv("GAMACHINE_CONVERSATION_ID", "42")
@@ -181,8 +181,10 @@ def test_poll_timeout_uses_wall_clock(approval, monkeypatch):
     assert now[0] <= 160
 
 
-@pytest.mark.parametrize("mode", ["closed", "side", "auto"])
+@pytest.mark.parametrize("mode", ["closed", "side", "auto", "step"])
 def test_mode_changed_before_allow(approval, mode):
+    # "step" is the removed mode's state an older backend may have left: it
+    # must not approve a write either.
     workspace, state, _, answers = approval
     def flip():
         gate.write_state(str(state), mode, "unityai", workspace=str(workspace))
@@ -201,11 +203,16 @@ def test_file_changed_before_allow(approval):
     assert not allowed and "file changed since the card was shown" in reason
 
 
+def _critical_write(workspace, target=".git/a.txt"):
+    # A protected path: balanced asks for a card (a routine write needs none).
+    return {"toolCall": {"name": "write_to_file", "args": {
+        "TargetFile": target, "CodeContent": "new"}}, "workspacePaths": [str(workspace)]}
+
+
 def test_missing_workspace_in_state_uses_hook_workspace(approval):
     workspace, state, calls, _ = approval
-    gate.write_state(str(state), "step", "unityai")
-    payload = {"toolCall": {"name": "write_to_file", "args": {
-        "TargetFile": "a.txt", "CodeContent": "new"}}}
+    gate.write_state(str(state), "balanced", "unityai")
+    payload = _critical_write(workspace)
     assert gate.decide(json.dumps(payload).encode(), str(state),
                        cwd=str(workspace / ".agents"))["decision"] == "allow"
     assert json.loads(calls[0].data)["workspace_path"] == str(workspace)
@@ -213,21 +220,20 @@ def test_missing_workspace_in_state_uses_hook_workspace(approval):
 
 def test_state_workspace_from_another_chat_is_ignored(approval):
     workspace, state, calls, answers = approval
-    gate.write_state(str(state), "step", "unityai", workspace=str(workspace / "another-chat"))
+    gate.write_state(str(state), "balanced", "unityai", workspace=str(workspace / "another-chat"))
     def change_workspace():
-        gate.write_state(str(state), "step", "unityai", workspace=None)
+        gate.write_state(str(state), "balanced", "unityai", workspace=None)
         return {"status": "resolved", "approved": True}
     answers[:] = [change_workspace]
-    payload = {"toolCall": {"name": "write_to_file", "args": {
-        "TargetFile": "a.txt", "CodeContent": "new"}}}
+    payload = _critical_write(workspace)
     assert gate.decide(json.dumps(payload).encode(), str(state),
                        cwd=str(workspace / ".agents"))["decision"] == "allow"
     body = json.loads(calls[0].data)
     assert body["workspace_path"] == str(workspace)
-    assert body["params"]["path"] == str(workspace / "a.txt")
+    assert body["params"]["path"] == str(workspace / ".git" / "a.txt")
 
 
-@pytest.mark.parametrize("mode", ["step", "balanced"])
+@pytest.mark.parametrize("mode", ["balanced"])
 def test_missing_hook_workspace_denies_without_asking(approval, tmp_path_factory, mode):
     workspace, state, calls, _ = approval
     gate.write_state(str(state), mode, "unityai", workspace=str(workspace))
@@ -321,7 +327,8 @@ def test_symlink_outside_workspace_asks_for_the_real_target(approval, tmp_path_f
 def test_hook_exception_always_prints_deny_json(approval, monkeypatch, capsys):
     workspace, state, _, _ = approval
     monkeypatch.chdir(workspace / ".agents")
-    payload = {"toolCall": {"name": "write_to_file", "args": {"TargetFile": "a.txt"}}}
+    payload = {"toolCall": {"name": "write_to_file", "args": {"TargetFile": ".git/a.txt"}},
+               "workspacePaths": [str(workspace)]}
     monkeypatch.setattr(gate.sys, "stdin", type("Input", (), {
         "buffer": io.BytesIO(json.dumps(payload).encode())})())
     with patch.object(native, "request_native_write", side_effect=RuntimeError("unexpected")) as ask:

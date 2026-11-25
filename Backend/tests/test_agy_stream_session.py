@@ -291,16 +291,16 @@ class TestAgyStreamSession(unittest.IsolatedAsyncioTestCase):
         from providers import agy_provider
         session = agy_session.get_session(11)
         await self.collect(session)
-        self.assertEqual(AgyProvider._write_step_gate.call_args.kwargs, {"step_mode": False})
+        self.assertEqual(AgyProvider._write_step_gate.call_args.kwargs, {"mode": "auto"})
         agy_provider.write_gate_state.reset_mock()
         self.auto = False
         await asyncio.wait_for(self.collect(session, "second turn"), 5)
         self.assertEqual(len(self.processes), 1)
         self.assertIsNone(self.processes[0].returncode)
-        agy_provider.write_gate_state.assert_called_once_with(auto=False)
+        agy_provider.write_gate_state.assert_called_once_with(mode="balanced")
         self.assertFalse(session.auto_approve)
 
-    async def test_flip_to_step_during_an_auto_turn_reaches_the_hook_state(self):
+    async def test_flip_to_balanced_during_an_auto_turn_reaches_the_hook_state(self):
         # The previously accepted window: a process spawned in auto, mid-turn.
         from agentic import approval_mode
         from providers import agy_provider
@@ -312,7 +312,7 @@ class TestAgyStreamSession(unittest.IsolatedAsyncioTestCase):
         agy_provider.write_gate_state.reset_mock()
         self.auto = False
         approval_mode._propagate_to_live_sessions(False)
-        agy_provider.write_gate_state.assert_called_once_with(auto=False)
+        agy_provider.write_gate_state.assert_called_once_with(mode="balanced")
         release.set()
         events = await asyncio.wait_for(turn, 5)
         self.assertEqual(events[-1]["type"], "done")
@@ -324,11 +324,11 @@ class TestAgyStreamSession(unittest.IsolatedAsyncioTestCase):
 
     async def test_flip_during_spawn_is_written_before_the_first_stdin_line(self):
         # The verification round's window: auto when the state was written,
-        # step by the time the process exists (no live process to update yet).
+        # balanced by the time the process exists (no live process to update yet).
         from providers import agy_provider
         order = []
-        agy_provider.write_gate_state.side_effect = lambda auto: order.append(
-            ("state", auto, sum(len(p.stdin.lines) for p in self.processes)))
+        agy_provider.write_gate_state.side_effect = lambda mode: order.append(
+            ("state", mode, sum(len(p.stdin.lines) for p in self.processes)))
         real_spawn = self.spawn
 
         async def flipping_spawn(*argv, **kwargs):
@@ -338,8 +338,8 @@ class TestAgyStreamSession(unittest.IsolatedAsyncioTestCase):
         with patch.object(agy_session.asyncio, "create_subprocess_exec", side_effect=flipping_spawn):
             events = await self.collect()
         self.assertEqual(events[-1]["type"], "done")
-        self.assertEqual(AgyProvider._write_step_gate.call_args.kwargs, {"step_mode": False})
-        self.assertIn(("state", False, 0), order)
+        self.assertEqual(AgyProvider._write_step_gate.call_args.kwargs, {"mode": "auto"})
+        self.assertIn(("state", "balanced", 0), order)
 
     async def test_stale_state_after_spawn_stops_the_process(self):
         from providers import agy_provider
@@ -387,7 +387,7 @@ class TestAgyStreamSession(unittest.IsolatedAsyncioTestCase):
         agy_provider.write_gate_state.reset_mock()
         self.auto = False
         approval_mode._propagate_to_live_sessions(False)
-        agy_provider.write_gate_state.assert_called_once_with(auto=False)
+        agy_provider.write_gate_state.assert_called_once_with(mode="balanced")
         release.set()
         await asyncio.wait_for(turn, 5)
         await session.close()
@@ -401,7 +401,7 @@ class TestAgyStreamSession(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(-8, agy_session._SESSIONS)
         self.assertIsNotNone(self.processes[0].returncode)
 
-    async def test_mode_flip_refreshes_hook_state_of_a_live_step_process(self):
+    async def test_mode_flip_refreshes_hook_state_of_a_live_balanced_process(self):
         from providers import agy_provider
         self.auto = False
         session = agy_session.get_session(11)
@@ -411,10 +411,10 @@ class TestAgyStreamSession(unittest.IsolatedAsyncioTestCase):
         # GLOBAL mode, not the value that was set.
         self.auto = True
         session.auto_approve = False
-        agy_provider.write_gate_state.assert_called_once_with(auto=True)
+        agy_provider.write_gate_state.assert_called_once_with(mode="auto")
         self.assertEqual(len(self.processes), 1)
 
-    async def test_step_mode_without_a_verified_gate_never_spawns(self):
+    async def test_balanced_without_a_verified_gate_never_spawns(self):
         from providers.agy_provider import AgyStepGateError
         self.auto = False
         AgyProvider._write_step_gate.side_effect = AgyStepGateError("kapı kurulamadı: X")
@@ -428,7 +428,7 @@ class TestAgyStreamSession(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[-1]["type"], "done")
         self.assertEqual(len(self.spawns), 1)
 
-    async def test_unreadable_mode_spawns_in_step_mode(self):
+    async def test_unreadable_mode_spawns_in_balanced(self):
         from agentic import approval_mode
         with patch.object(approval_mode, "is_auto", side_effect=RuntimeError("store gone")):
             self.assertFalse(REAL_GLOBAL_AUTO_MODE())

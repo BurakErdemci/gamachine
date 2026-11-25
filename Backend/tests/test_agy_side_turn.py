@@ -22,6 +22,7 @@ import unity_tool_policy
 from agentic.side_prompt import SideTurn
 from providers import agy_provider, agy_session
 from providers.agy_provider import AgyProvider, STEP_GATE_KEY, STEP_GATE_TOOLS
+from agy_step_gate import MAIN_HOOK_MATCHERS
 from providers.cli_base import BaseCLIProvider
 from tests.test_agy_stream_session import TURNS, FakeProcess
 
@@ -148,9 +149,9 @@ class TestSideHook(HookCase):
 
 
 class TestOtherModesUnchanged(HookCase):
-    """Side questions changed nothing outside "side": the step tools keep their
+    """Side questions changed nothing outside "side": the gated tools keep their
     verdicts (a 410-call differential against the previous hook found none).
-    Tools beyond those are an allow-list in step and balanced since 4.0.3
+    Tools beyond those are an allow-list in balanced since 4.0.3
     (test_agy_gate_fail_closed.py); auto still allows them."""
 
     def test_tools_only_the_side_matcher_names_are_allowed_in_auto(self):
@@ -160,18 +161,21 @@ class TestOtherModesUnchanged(HookCase):
             self.assertEqual(self.decide(call(name, {"ServerName": "meshy"}))["decision"],
                              "allow", name)
 
-    def test_step_tools_keep_their_verdicts(self):
+    def test_gated_tools_keep_their_verdicts_in_balanced(self):
+        # No hook workspace above the hook's directory: nothing can be
+        # confined, so every gated call is critical.
         bridge = f'& "{LAUNCHER}" delete-file --path "a.txt"'
-        gate.write_state(self.state, "step", LAUNCHER)
+        gate.write_state(self.state, "balanced", LAUNCHER)
         for name in gate.GATED_TOOLS:
+            out = self.decide(call(name))
+            self.assertEqual(out["decision"], "deny")
             if name in ("write_to_file", "replace_file_content"):
-                out = self.decide(call(name))
-                self.assertEqual(out["decision"], "deny")
                 self.assertIn("workspace", out["reason"])
             else:
-                self.assertEqual(self.decide(call(name)), gate._deny(gate.WRITE_REASON))
-        self.assertEqual(self.decide(call("run_command", {"CommandLine": "whoami"})),
-                         gate._deny(gate.RUN_REASON))
+                self.assertIn("Safe Auto", out["reason"])
+        shell = self.decide(call("run_command", {"CommandLine": "whoami"}))
+        self.assertEqual(shell["decision"], "deny")
+        self.assertIn("unityai", shell["reason"])
         self.assertEqual(self.decide(call("run_command", {"CommandLine": bridge}))["decision"], "allow")
         gate.write_state(self.state, "auto", LAUNCHER)
         for name in STEP_GATE_TOOLS:
@@ -206,21 +210,23 @@ class TestSideHooksFile(unittest.TestCase):
 
     def test_only_a_side_child_gets_the_wide_matcher(self):
         provider = AgyProvider()
-        self.assertTrue(provider._write_step_gate(self.ws, step_mode=True, mode=gate.SIDE_MODE))
+        self.assertTrue(provider._write_step_gate(self.ws, mode=gate.SIDE_MODE))
         self.assertEqual(self.matchers_and_mode(),
                          (list(STEP_GATE_TOOLS) + list(gate.SIDE_HOOK_MATCHERS), "side"))
         for listed in ("call_mcp_tool", "generate_image", "schedule", "invoke_subagent",
                        "send_message", "browser_click_element", ".*"):
             self.assertIn(listed, gate.SIDE_HOOK_MATCHERS)
         # The next main child's spawn writes the main matcher back.
-        self.assertTrue(provider._write_step_gate(self.ws, step_mode=False))
-        self.assertEqual(self.matchers_and_mode(), ([".*"], "auto"))
-        self.assertTrue(provider._write_step_gate(self.ws, step_mode=True, mode="balanced"))
-        self.assertEqual(self.matchers_and_mode(), ([".*"], "balanced"))
+        self.assertTrue(provider._write_step_gate(self.ws, mode="auto"))
+        self.assertEqual(self.matchers_and_mode(), (list(MAIN_HOOK_MATCHERS), "auto"))
+        self.assertTrue(provider._write_step_gate(self.ws, mode="balanced"))
+        self.assertEqual(self.matchers_and_mode(), (list(MAIN_HOOK_MATCHERS), "balanced"))
 
     def test_side_state_name(self):
         self.assertEqual(agy_provider.gate_mode_name(mode=gate.SIDE_MODE), "side")
-        self.assertEqual(agy_provider.gate_mode_name(mode="whatever"), "step")
+        # Fail closed to the strictest approval mode; "step" is gone.
+        self.assertEqual(agy_provider.gate_mode_name(mode="whatever"), "balanced")
+        self.assertEqual(agy_provider.gate_mode_name(mode="step"), "balanced")
 
 
 class _UnkillableProcess(FakeProcess):
@@ -365,7 +371,7 @@ class TestSideTurn(unittest.IsolatedAsyncioTestCase):
         # Main turns of different chats run at the same time now; the "side"
         # state is still one file every child reads, so a side question
         # still needs every chat idle (Burak, 27 Sep 2026).
-        self.mode = "step"
+        self.mode = "balanced"
         main, release = await self.blocked_main_turn(MAIN_ID + 100)
         try:
             self.assertTrue(agy_session.agy_turn_busy())
@@ -374,7 +380,7 @@ class TestSideTurn(unittest.IsolatedAsyncioTestCase):
                              [("error", "agy_side_busy")])
             self.assertEqual(events[0].data["message"], agy_session.SIDE_BUSY_MESSAGE)
             self.assertEqual(len(self.processes), 1)  # the main child only
-            self.assertEqual(self.file_mode(), "step")  # never loosened to "side" under it
+            self.assertEqual(self.file_mode(), "balanced")  # never loosened to "side" under it
             self.assertIsNone(agy_session._SIDE_TURN)
         finally:
             release.set()
@@ -383,11 +389,11 @@ class TestSideTurn(unittest.IsolatedAsyncioTestCase):
         # With every chat idle, the side question runs.
         events = await asyncio.wait_for(self.collect(self.side_runner()._run_inner("q")), 5)
         self.assertEqual(events[-1].type, "done")
-        self.assertEqual(self.spawn_modes, ["step", "side"])
+        self.assertEqual(self.spawn_modes, ["balanced", "side"])
         self.assert_back_to_published()
 
     async def test_two_chats_preempting_a_side_turn_both_spawn_on_the_published_mode(self):
-        self.mode = "step"
+        self.mode = "balanced"
         self.plans = [{"turns": [[TURNS[0][0]]]}]  # the side child never answers
         side = asyncio.create_task(self.collect(self.side_runner()._run_inner("q")))
         await asyncio.wait_for(self.wait_written(0), 5)
@@ -414,7 +420,7 @@ class TestSideTurn(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([e.data.get("code") for e in side_events], ["agy_side_preempted"])
         self.assertEqual([events[-1]["type"] for events in results], ["done", "done"])
         # Neither main child was spawned while the file still said "side".
-        self.assertEqual(self.spawn_modes, ["side", "step", "step"])
+        self.assertEqual(self.spawn_modes, ["side", "balanced", "balanced"])
         self.assert_back_to_published()
 
     def surviving_closed_child(self):
@@ -449,7 +455,7 @@ class TestSideTurn(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.file_mode(), "auto")
 
     async def test_a_crashed_side_turn_restores_the_state_and_frees_the_lock(self):
-        self.mode = "step"
+        self.mode = "balanced"
         self.plans = [{"crash": True, "turns": []}]
         events = await self.collect(self.side_runner()._run_inner("q"))
         self.assertEqual(events[-1].type, "error")
@@ -473,7 +479,7 @@ class TestSideTurn(unittest.IsolatedAsyncioTestCase):
             self.assert_back_to_published()
 
     async def test_a_main_turn_stops_the_side_turn_and_runs_after_it(self):
-        self.mode = "step"
+        self.mode = "balanced"
         self.plans = [{"turns": [[TURNS[0][0]]]}, {}]  # side waits forever; main is normal
         side = asyncio.create_task(self.collect(self.side_runner(language="tr")._run_inner("q")))
         await asyncio.wait_for(self.wait_written(0), 5)
@@ -489,7 +495,7 @@ class TestSideTurn(unittest.IsolatedAsyncioTestCase):
         # side child was stopped, on the published mode.
         self.assertNotIn("status", [e["type"] for e in main_events])
         self.assertTrue(self.processes[0].killed)
-        self.assertEqual(self.spawn_modes, ["side", "step"])
+        self.assertEqual(self.spawn_modes, ["side", "balanced"])
         self.assert_back_to_published()
         self.assertEqual(agy_session.side_stop_message("agy_side_preempted", "en"),
                          "The main chat started, so the side question was stopped.")
@@ -497,7 +503,7 @@ class TestSideTurn(unittest.IsolatedAsyncioTestCase):
     async def test_a_flip_during_the_side_turn_cannot_loosen_it(self):
         release = asyncio.Event()
         self.plans = [{"release": release}]
-        self.mode = "step"
+        self.mode = "balanced"
         turn = asyncio.create_task(self.collect(self.side_runner()._run_inner("q")))
         await asyncio.wait_for(self.wait_written(0), 5)
         self.mode = "auto"

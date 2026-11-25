@@ -1,7 +1,7 @@
-"""agy's gate is an allow-list in step and balanced mode (4.0.3).
+"""agy's gate is an allow-list in balanced mode (4.0.3).
 
-Measured 24 Nov 2026 with agy 1.5.15 on v4.0.2: step mode wrote two files with
-no card, because agy 1.5.x writes with write_file / edit_file and the hook
+Measured 24 Nov 2026 with agy 1.5.15 on v4.0.2: a gated mode wrote two files
+with no card, because agy 1.5.x writes with write_file / edit_file and the hook
 was only asked about the 1.2.x names. The payload below has the hook stdin
 keys and the write_file arguments of that measurement. The approval server
 is the one faked part (it is the backend, outside the hook).
@@ -100,9 +100,9 @@ def test_balanced_unparseable_native_writes_are_denied_without_a_card(hooked, na
     assert cards == []
 
 
-# (c) a tool the gate does not know is denied in step and balanced.
+# (c) a tool the gate does not know is denied in balanced.
 
-@pytest.mark.parametrize("mode", ["step", "balanced"])
+@pytest.mark.parametrize("mode", ["balanced"])
 @pytest.mark.parametrize("name", ["some_future_tool", "delete_file", "move", "generate_image",
                                   "invoke_subagent", "schedule", "execute_browser_javascript"])
 def test_unknown_tools_are_denied(hooked, mode, name):
@@ -125,7 +125,7 @@ def test_a_call_without_a_tool_name_is_denied(hooked, mode):
 
 # (d) known reads still pass, and auto still allows what its rules do not name.
 
-@pytest.mark.parametrize("mode", ["step", "balanced", "auto"])
+@pytest.mark.parametrize("mode", ["balanced", "auto"])
 @pytest.mark.parametrize("name,args", [
     ("view_file", {"AbsolutePath": "a.txt"}), ("list_dir", {"DirectoryPath": "."}),
     ("grep_search", {"Query": "x"}), ("find_by_name", {"Pattern": "*.cs"}),
@@ -134,6 +134,19 @@ def test_a_call_without_a_tool_name_is_denied(hooked, mode):
 ])
 def test_known_reads_and_mcp_calls_pass(hooked, mode, name, args):
     assert hooked[1](mode, name, args) == {"decision": "allow"}
+
+
+@pytest.mark.parametrize("name,args,verdict", [
+    ("view_file", {"AbsolutePath": "a.txt"}, "allow"), ("list_dir", {"DirectoryPath": "."}, "allow"),
+    ("write_file", {"Path": "a.txt", "Content": "x"}, "deny"),
+    ("run_command", {"CommandLine": "echo hi"}, "deny"),
+    ("call_mcp_tool", {"ServerName": "unityMCP", "ToolName": "manage_scene"}, "deny"),
+])
+def test_a_step_state_left_by_an_older_backend_allows_reads_only(hooked, name, args, verdict):
+    # "step" was removed in 4.0.3; the hook no longer knows it and fails closed.
+    out = hooked[1]("step", name, args)
+    assert out["decision"] == verdict, out
+    assert hooked[2] == []
 
 
 def test_auto_secret_rule_sees_write_file(hooked, tmp_path, monkeypatch):
@@ -185,9 +198,9 @@ def _entries(ws):
         return json.load(f)[STEP_GATE_KEY]["PreToolUse"]
 
 
-@pytest.mark.parametrize("step_mode,mode", [(True, None), (True, "balanced"), (False, None)])
-def test_hooks_file_sends_every_tool_to_the_hook(installed, step_mode, mode):
-    assert AgyProvider()._write_step_gate(str(installed), step_mode=step_mode, mode=mode)
+@pytest.mark.parametrize("mode", ["balanced", "auto"])
+def test_hooks_file_sends_every_tool_to_the_hook(installed, mode):
+    assert AgyProvider()._write_step_gate(str(installed), mode=mode)
     entries = _entries(installed)
     # agy's matcher is a regex; Python's re stands in for its engine here.
     for name in ("write_file", "edit_file", "write_to_file", "run_command", "view_file",
@@ -198,18 +211,21 @@ def test_hooks_file_sends_every_tool_to_the_hook(installed, step_mode, mode):
             assert all(e["hooks"][0]["timeout"] >= NATIVE_WRITE_TIMEOUT_SECONDS for e in hit), name
 
 
-def test_step_write_file_through_the_real_hook_waits_for_the_card(installed):
-    AgyProvider()._write_step_gate(str(installed), step_mode=True)
+def test_balanced_critical_write_file_through_the_real_hook_waits_for_the_card(installed):
+    AgyProvider()._write_step_gate(str(installed), mode="balanced")
     shim = _entries(installed)[0]["hooks"][0]["command"]
     server = HTTPServer(("127.0.0.1", 0), _Approvals)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     env = dict(os.environ, UNITYAI_URL=f"http://127.0.0.1:{server.server_port}",
                LOCAL_APP_TOKEN="t", NO_PROXY="127.0.0.1", no_proxy="127.0.0.1")
     argv = ["cmd", "/c", shim] if sys.platform == "win32" else [shim]
-    args = {"Content": "hello", "Overwrite": False, "Path": "made.txt"}
+    # A protected path: balanced asks for the card.
+    args = {"Content": "hello", "Overwrite": False, "Path": ".git/made.txt"}
 
-    def run():
-        out = subprocess.run(argv, input=json.dumps(payload("write_file", args, str(installed))).encode(),
+    def run(step):
+        # Each call has its own stepIdx, as agy numbers them.
+        body = dict(payload("write_file", args, str(installed)), stepIdx=step)
+        out = subprocess.run(argv, input=json.dumps(body).encode(),
                              capture_output=True, timeout=60, env=env,
                              cwd=str(installed / ".agents"))
         assert out.returncode == 0, out.stderr
@@ -217,9 +233,9 @@ def test_step_write_file_through_the_real_hook_waits_for_the_card(installed):
 
     try:
         _Approvals.cards, _Approvals.approved = [], False
-        refused = run()
+        refused = run(3)
         _Approvals.approved = True
-        approved = run()
+        approved = run(4)
     finally:
         server.shutdown()
         server.server_close()
@@ -227,5 +243,5 @@ def test_step_write_file_through_the_real_hook_waits_for_the_card(installed):
     assert approved == {"decision": "allow"}
     assert [c["params"]["content"] for c in _Approvals.cards] == ["hello\n", "hello\n"]
     assert {c["params"]["path"] for c in _Approvals.cards} == {
-        os.path.realpath(installed / "made.txt")}
-    assert not (installed / "made.txt").exists()
+        os.path.realpath(installed / ".git" / "made.txt")}
+    assert not (installed / ".git" / "made.txt").exists()

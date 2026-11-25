@@ -7,13 +7,15 @@ import logging
 from typing import Optional
 from .cli_base import BaseCLIProvider
 from agy_step_gate import (ALL_TOOLS_MATCHER, BALANCED_MODE, CLOSED_MODE, GATED_TOOLS,
-                           NATIVE_WRITERS, PS_UTF8_PREFIX, RUN_TOOL,
+                           MAIN_HOOK_MATCHERS, NATIVE_WRITERS, PS_UTF8_PREFIX, RUN_TOOL,
                            SIDE_HOOK_MATCHERS, SIDE_MODE, STEP_GATE_HOOKS_FILE, STEP_GATE_KEY,
                            bare_word, write_state)
 
 logger = logging.getLogger(__name__)
 
-# Step mode gate for agy's own file-writing tools.
+# The approval gate for agy's own file-writing and shell tools (the "step
+# gate": the name of its hook entry and files, kept so old entries are
+# replaced rather than left beside new ones).
 #
 # `disabledTools` no longer turns them off: agy 1.2.8 still lists and runs
 # write_to_file with it set (measured 25 Sep 2026, the file was created). No
@@ -24,7 +26,7 @@ logger = logging.getLogger(__name__)
 # always-proceed). The hook shows approval cards for the native writers
 # (write_file/edit_file on agy 1.5.x, write_to_file/replace_file_content on
 # 1.2.x); other writes and shell commands still go through the unityai bridge,
-# and a tool the gate does not know is denied in step and balanced.
+# and a tool the gate does not know is denied in balanced.
 #
 # run_command is gated too: the hook (`backend agy-hook`, agy_step_gate.py)
 # allows only the exact unityai bridge call shapes and denies every other
@@ -43,20 +45,25 @@ NATIVE_WRITE_TIMEOUT_SECONDS = 180
 def step_gate_matchers(mode: Optional[str] = None) -> tuple:
     """The hooks.json matchers of a child spawned in `mode`.
 
-    Every non-side child (auto, step, balanced) matches every tool: a list of
-    names let agy 1.5.15's write_file and edit_file write with no card in step
-    mode (24 Nov 2026), and a child spawned in auto keeps its hooks after a
-    flip to step, so auto needs the same matcher, and the secret and Unity
+    Every non-side child (auto, balanced) matches every tool: a list of
+    names let agy 1.5.15's write_file and edit_file write with no card
+    (24 Nov 2026), and a child spawned in auto keeps its hooks after a
+    flip to balanced, so auto needs the same matchers, and the secret and Unity
     file rules that hold in auto see those writes too. Cost: one hook process
     per tool call, about 0.22 s median through the .cmd shim (Windows dev
     layout, 24 Nov 2026).
+    Beside ".*" stand the exact names of every known writer, run_command and
+    the other known changers (MAIN_HOOK_MATCHERS, audit H1 25 Nov 2026), so
+    an agy build that does not read ".*" as a regex still gates them. A call
+    two entries match costs a second hook process; agy_step_gate.decide_once
+    gives it the first one's decision, never a second card.
     A side question's child keeps its list (Burak, 27 Sep 2026), unchanged.
     agy reads hooks.json only at start; spawns are serialized by the spawn
     section (BaseCLIProvider._AGY_LOCK), so each child gets the file written
     just before it, and no main child starts while a side question runs
     (agy_session.stream), so concurrent main children all read these same
     matchers."""
-    return STEP_GATE_TOOLS + SIDE_HOOK_MATCHERS if mode == SIDE_MODE else (ALL_TOOLS_MATCHER,)
+    return STEP_GATE_TOOLS + SIDE_HOOK_MATCHERS if mode == SIDE_MODE else MAIN_HOOK_MATCHERS
 
 
 def _matcher_timeout(matcher: str, mode: Optional[str]) -> int:
@@ -105,7 +112,7 @@ def _gate_dir() -> str:
 
 
 class AgyStepGateError(RuntimeError):
-    """The gate is not verifiably installed, so agy is not started (in either
+    """The gate is not verifiably installed, so agy is not started (in any
     mode, see _write_step_gate). The message reaches the user as is, hence
     Turkish; a `code` (with its `params`) lets the UI show its own language."""
 
@@ -115,35 +122,35 @@ class AgyStepGateError(RuntimeError):
         self.params = params
 
 
-_GATE_HEAD = ("Adım adım onay modu açık, ama onay kapısı kurulamadığı için agy "
-              "başlatılmadı (kapı olmadan agy her yazma ve komutu onay sormadan çalıştırırdı).\n")
+_GATE_HEAD = ("Onay kapısı kurulamadığı için agy başlatılmadı (kapı olmadan agy kritik "
+              "yazma ve komutları da onay sormadan çalıştırırdı).\n")
 _GATE_HEAD_AUTO = ("Onay kapısı kurulamadığı için agy başlatılmadı. Otomatik moddasınız, ama "
-                   "kapı olmadan başlayan bir agy, konuşma sırasında adım adım onay moduna "
+                   "kapı olmadan başlayan bir agy, konuşma sırasında Güvenli oto moduna "
                    "geçseniz de her yazma ve komutu onay sormadan çalıştırmaya devam ederdi.\n")
 
 
-def _gate_head(step_mode: bool) -> str:
-    return _GATE_HEAD if step_mode else _GATE_HEAD_AUTO
+def _gate_head(mode: str) -> str:
+    return _GATE_HEAD_AUTO if mode == "auto" else _GATE_HEAD
 
 
-def _gate_hooks_unreadable(path: str, detail, step_mode: bool = True) -> str:
-    return (_gate_head(step_mode)
+def _gate_hooks_unreadable(path: str, detail, mode: str = BALANCED_MODE) -> str:
+    return (_gate_head(mode)
             + f"Sorun: {path} dosyası okunamıyor ya da geçerli bir JSON nesnesi değil ({detail}).\n"
             "Bu dosyada size ait hook'lar olabileceği için Gamachine ona dokunmadı. Dosyayı "
             "düzeltin (en dışta { ... } olan geçerli bir JSON olmalı) ya da içinde sizin "
             "eklediğiniz bir şey yoksa silin; sonra mesajınızı yeniden gönderin.")
 
 
-def _gate_write_failed(path: str, detail, step_mode: bool = True) -> str:
-    return (_gate_head(step_mode)
+def _gate_write_failed(path: str, detail, mode: str = BALANCED_MODE) -> str:
+    return (_gate_head(mode)
             + f"Sorun: {path} yazılamadı ({detail}).\n"
             "Dosyanın ve klasörünün yazılabilir olduğundan emin olun (izin, dolu disk, dosyayı "
             "kilitleyen bir program ya da çalışma klasörünün dışına yönlendirilmiş bir klasör "
             "olabilir); sonra mesajınızı yeniden gönderin.")
 
 
-def _gate_not_verified(path: str, detail, step_mode: bool = True) -> str:
-    return (_gate_head(step_mode)
+def _gate_not_verified(path: str, detail, mode: str = BALANCED_MODE) -> str:
+    return (_gate_head(mode)
             + f"Sorun: {path} yazıldı ama geri okunduğunda onay kapısı doğrulanamadı ({detail}).\n"
             "Dosyayı aynı anda değiştiren başka bir program olabilir; onu kapatıp mesajınızı "
             "yeniden gönderin.")
@@ -155,18 +162,18 @@ def gate_state_path() -> str:
 
 def gate_mode_name(auto: bool = False, mode: Optional[str] = None) -> str:
     """The state-file mode for a published approval mode, or "side" during a
-    read-only side question (tighter than step); anything else is step
-    (fail closed)."""
+    read-only side question (tighter than balanced); anything else is
+    balanced (fail closed: the strictest approval mode there is)."""
     if mode is not None:
-        return mode if mode in ("auto", BALANCED_MODE, SIDE_MODE) else "step"
-    return "auto" if auto else "step"
+        return mode if mode in ("auto", BALANCED_MODE, SIDE_MODE) else BALANCED_MODE
+    return "auto" if auto else BALANCED_MODE
 
 
 def write_gate_state(auto: bool = False, closed: bool = False, mode: Optional[str] = None,
                      workspace: Optional[str] = None) -> None:
     """Mode and launcher the hook reads on every call ("auto" allows every
-    call, "step" applies agy_step_gate's grammar, "balanced" also lets the
-    calls action_risk calls routine through). `mode` wins over `auto`.
+    call, "balanced" applies agy_step_gate's rules: reads, the unityai bridge
+    and the calls action_risk calls routine pass). `mode` wins over `auto`.
     Written at spawn and on every mode flip, so a flip in either direction
     bites on a running agy's next tool call. `closed` writes CLOSED_MODE,
     which denies every call: a closing session's child never needs a tool
@@ -403,9 +410,9 @@ class AgyProvider(BaseCLIProvider):
             "  probing the .system_generated / brain / transcript folders. Just do the task.\n\n"
             "Create a file (or replace its whole content) with write_file, and change one\n"
             "exact, unique snippet with edit_file. On an older agy without those tools:\n"
-            "Use write_to_file and replace_file_content to create or edit files: in step\n"
-            "mode they show an approval card and run only after explicit approval.\n"
-            "Safe Auto allows routine writes; critical writes show the same card.\n"
+            "Use write_to_file and replace_file_content to create or edit files.\n"
+            "Safe Auto allows routine writes; a critical write shows an approval card\n"
+            "and runs only after explicit approval.\n"
             "For an unverified replacement use write_file with the full content.\n"
             "Any other built-in tool that changes or runs something is refused.\n"
             "For deletes and shell commands use run_command calling 'unityai' with its\n"
@@ -473,7 +480,7 @@ class AgyProvider(BaseCLIProvider):
                            "closed and the model sees a shell error, not the reason", command)
         return command
 
-    def _write_step_gate(self, workspace: str, step_mode: bool, mode: Optional[str] = None) -> bool:
+    def _write_step_gate(self, workspace: str, mode: str) -> bool:
         """Installs Gamachine's hook entry in the workspace `.agents/hooks.json`
         in EVERY mode, keeping every other hook the user has there, and writes
         the state file the hook reads on every call. Returns True; anything
@@ -482,15 +489,15 @@ class AgyProvider(BaseCLIProvider):
 
         Why every mode: agy reads hooks.json only when it starts, and it always
         runs with --dangerously-skip-permissions. A process spawned without the
-        entry could never be tightened: a flip to step during its turn, or
-        between this call and the spawn, left step mode with an agy whose
-        writes and shell commands ran with no card (verification round, 26 Sep
-        2026). With the entry installed, the mode lives only in the state file:
+        entry could never be tightened: a flip to a gated mode during its
+        turn, or between this call and the spawn, left that mode with an agy
+        whose writes and shell commands ran with no card (verification round,
+        26 Sep 2026). With the entry installed, the mode lives only in the state file:
         agy_session rewrites it on every flip, and the flip bites on the next
         tool call.
 
         Why auto mode refuses too: spawning ungated in auto would be safe only
-        if a later flip to step could still reach that process, and nothing
+        if a later flip to balanced could still reach that process, and nothing
         can (it has no hook to consult; killing it on the flip races its next
         tool call). The cost is that a broken hooks.json blocks agy in auto as
         well; the message says how to fix it.
@@ -505,11 +512,11 @@ class AgyProvider(BaseCLIProvider):
         path = os.path.join(os.path.realpath(workspace), *STEP_GATE_HOOKS_FILE.split("/"))
         state_path = gate_state_path()
         try:
-            write_gate_state(auto=not step_mode, mode=mode, workspace=workspace)
+            write_gate_state(mode=mode, workspace=workspace)
         except OSError as e:
             # A stale "auto" state file would make an installed hook allow everything.
             logger.error("[agy] gate state not written (%s)", e)
-            raise AgyStepGateError(_gate_write_failed(state_path, e, step_mode)) from e
+            raise AgyStepGateError(_gate_write_failed(state_path, e, mode)) from e
         existed = os.path.exists(path)
         hooks = {}
         if existed:
@@ -520,28 +527,28 @@ class AgyProvider(BaseCLIProvider):
                     raise ValueError("top level is not an object")
             except (OSError, ValueError) as e:
                 logger.error("[agy] %s is unreadable (%s); left untouched", path, e)
-                raise AgyStepGateError(_gate_hooks_unreadable(path, e, step_mode)) from e
+                raise AgyStepGateError(_gate_hooks_unreadable(path, e, mode)) from e
         try:
             command = self._step_gate_command()
         except OSError as e:
-            raise AgyStepGateError(_gate_write_failed(_gate_dir(), e, step_mode)) from e
+            raise AgyStepGateError(_gate_write_failed(_gate_dir(), e, mode)) from e
         hooks[STEP_GATE_KEY] = {"PreToolUse": _gate_entries(command, mode)}
         if not guvenli_config_yaz(workspace, STEP_GATE_HOOKS_FILE, json.dumps(hooks, indent=2)):
             logger.error("[agy] %s could not be written; gate not installed", path)
-            raise AgyStepGateError(_gate_write_failed(path, "güvenli yazma reddedildi", step_mode))
+            raise AgyStepGateError(_gate_write_failed(path, "güvenli yazma reddedildi", mode))
         if not existed:
             # Only a file we created: it holds an absolute path of this machine.
             ensure_gitignored(workspace, [STEP_GATE_HOOKS_FILE])
-        problem = self._step_gate_problem(path, state_path, command, step_mode, mode)
+        problem = self._step_gate_problem(path, state_path, command, mode)
         if problem:
             logger.error("[agy] gate not verified: %s", problem)
-            raise AgyStepGateError(_gate_not_verified(path, problem, step_mode))
+            raise AgyStepGateError(_gate_not_verified(path, problem, mode))
         return True
 
     def _step_gate_problem(self, path: str, state_path: str, command: str,
-                           step_mode: bool = True, mode: Optional[str] = None) -> Optional[str]:
+                           mode: str = BALANCED_MODE) -> Optional[str]:
         """What agy and the hook will read, re-read from disk; None when it is our gate."""
-        want_mode = gate_mode_name(not step_mode, mode)
+        want_mode = gate_mode_name(mode=mode)
         try:
             with open(state_path, encoding="utf-8") as f:
                 state = json.load(f)
