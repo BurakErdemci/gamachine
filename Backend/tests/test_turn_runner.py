@@ -651,3 +651,70 @@ async def test_compaction_keeps_an_input_still_pending_for_a_later_turn(db, rout
     await asyncio.gather(first, wake)
     await _idle(cid)
     assert any("ONEMLI SONUC" in m for m in _Runner.messages)
+
+
+# ── turn 4: compaction keeps the rows of running and waiting turns ──────
+async def test_an_api_auto_compaction_keeps_the_running_turns_own_message(db, router, monkeypatch):
+    cid = _chat(db)
+    _Runner.hold = asyncio.Event()
+    _Runner.script = ["hold", ("response", {"content": "A-CEVAP"}), DONE]
+    first = asyncio.create_task(_http_turn(router, cid, "soru bir"))
+    await asyncio.sleep(0.02)
+    second = asyncio.create_task(_http_turn(router, cid, "IKINCI-MESAJ"))
+    await asyncio.sleep(0.02)
+    orig_run = _Runner.run
+
+    async def run(self, message):
+        if "IKINCI" in message:
+            # The API loop compacts through the last row it was given (A-CEVAP),
+            # which was stored after this turn's own message.
+            self.compaction_store("OZET", self.kw["api_history"][-1]["id"])
+        async for ev in orig_run(self, message):
+            yield ev
+
+    monkeypatch.setattr(_Runner, "run", run)
+    _Runner.hold.set()
+    await asyncio.gather(first, second)
+    await _idle(cid)
+    contents = [c for _, c in _rows(db, cid)]
+    assert "IKINCI-MESAJ" in contents
+    assert "soru bir" not in contents and any("OZET" in c for c in contents)
+
+
+async def test_manual_compact_keeps_a_waiting_turns_message(db, router, monkeypatch):
+    cid = _chat(db)
+    for i in range(4):
+        db.add_message(cid, "user", f"eski soru {i}")
+        db.add_message(cid, "assistant", f"eski cevap {i}")
+
+    def no_provider(*a, **kw):
+        raise RuntimeError("no summary provider in tests")
+
+    async def no_cli(*a, **kw):
+        return None
+
+    monkeypatch.setattr(cr.AIProviderManager, "get_provider", no_provider)
+    monkeypatch.setattr(cr, "_cli_baglamini_kucult", no_cli)
+    _Runner.hold = asyncio.Event()
+    _Runner.script = ["hold", ("response", {"content": "C"}), DONE]
+    first = asyncio.create_task(_http_turn(router, cid, "çalışan"))
+    await asyncio.sleep(0.02)
+    second = asyncio.create_task(_http_turn(router, cid, "BEKLEYEN-MESAJ"))
+    await asyncio.sleep(0.02)
+    res = await _endpoint(router, "/conversations/{conv_id}/compact")(conv_id=cid, x_session_token="")
+    assert res["status"] == "success"
+    contents = [c for _, c in _rows(db, cid)]
+    assert "BEKLEYEN-MESAJ" in contents and "çalışan" in contents
+    assert "eski soru 0" not in contents
+    _Runner.hold.set()
+    await asyncio.gather(first, second)
+    assert _Runner.messages == ["çalışan", "BEKLEYEN-MESAJ"]
+
+
+def test_idle_compaction_is_unchanged(db):
+    cid = _chat(db)
+    ids = [db.add_message(cid, r, t) for r, t in
+           (("user", "s1"), ("assistant", "c1"), ("user", "s2"), ("assistant", "c2"))]
+    assert db.compact_conversation(cid, "OZET", through_id=ids[3])
+    rows = _rows(db, cid)
+    assert len(rows) == 1 and rows[0][0] == "assistant" and "OZET" in rows[0][1]

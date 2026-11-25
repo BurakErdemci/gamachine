@@ -1416,9 +1416,16 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
     # until the chat's next turn or its sessions close (agentic/turn_replies).
     _turn_reply_detached: Dict[int, int] = {}
 
-    # chat -> input rows of its HTTP turns accepted but not opened yet: an
-    # earlier turn opening first must not read them as already said.
+    # chat -> input rows of its turns accepted and not finished (waiting or
+    # running): an earlier turn opening first must not read them as already
+    # said, and compaction must not delete them (they have no pending mark).
     _waiting_rows: Dict[int, set] = {}
+
+    def _inflight_keep(conv_id: int) -> dict:
+        """Compaction's protection for the chat's running and waiting turns'
+        rows; nothing when the chat is idle (the call stays as it always was)."""
+        rows = _waiting_rows.get(conv_id)
+        return {"keep_ids": set(rows)} if rows else {}
 
     def _forget_waiting(conv_id: int, rows) -> None:
         waiting = _waiting_rows.get(conv_id)
@@ -2313,7 +2320,8 @@ Max 300 kelime. Türkçe yaz.
                        + "Sohbetin son mesajları:\n"
                        + "\n".join(tail))
 
-        if db.compact_conversation(conv_id, summary, through_id=through_id) is False:
+        if db.compact_conversation(conv_id, summary, through_id=through_id,
+                                   **_inflight_keep(conv_id)) is False:
             logger.info("[Compact] A newer compaction already covered this snapshot.")
 
         # The stored API reading measured the uncompacted history; until the next
@@ -2435,8 +2443,22 @@ Max 300 kelime. Türkçe yaz.
     async def _turn_stream(turn: turn_runner.TurnInput, accepted: Optional[_Accepted]):
         """A whole turn as SSE frames, opened once its caller holds the gate."""
         claimed: List[dict] = []
+        # This turn's rows stay in `_waiting_rows` until it ends.
+        inflight: List[int] = list(accepted.own_rows) if accepted is not None else []
+        frames = _turn_frames(turn, accepted, claimed, inflight)
         try:
-            stream = _open_turn(turn, accepted, claimed)
+            async for frame in frames:
+                yield frame
+        finally:
+            try:
+                await frames.aclose()
+            finally:
+                _forget_waiting(turn.conversation_id, inflight)
+
+    async def _turn_frames(turn: turn_runner.TurnInput, accepted: Optional[_Accepted],
+                           claimed: List[dict], inflight: List[int]):
+        try:
+            stream = _open_turn(turn, accepted, claimed, inflight)
         except Exception:
             logger.exception("[turn-gate] conv=%s turn not opened", turn.conversation_id)
             if claimed:
@@ -2576,7 +2598,7 @@ Max 300 kelime. Türkçe yaz.
                          own_rows=[r for r in (_turn_user_row, _wake_row) if r is not None])
 
     def _open_turn(turn: turn_runner.TurnInput, accepted: Optional[_Accepted],
-                   claimed: List[dict]):
+                   claimed: List[dict], inflight: List[int]):
         """Open one turn of a chat with its gate held: pending inputs (claimed
         into `claimed`), history, the runner. Returns its `stream()`, or None
         when there is nothing to run."""
@@ -2584,7 +2606,6 @@ Max 300 kelime. Türkçe yaz.
 
         conv = turn.conversation_id
         if turn.http:
-            _forget_waiting(conv, accepted.own_rows)
             user_id = turn.user_id
             if db.get_conversation_owner(conv) is None:
                 # Deleted while this turn waited: nothing runs, nothing is stored.
@@ -2686,6 +2707,8 @@ Max 300 kelime. Türkçe yaz.
                                  if m.get("role") == "system" and m.get("content") == mail_note][-1:]
                 _skip = (set(_own_ids) | set(db.pending_turn_input_ids(conv))
                          | _waiting_rows.get(conv, set()))
+                inflight.extend(_own_ids)
+                _waiting_rows.setdefault(conv, set()).update(_own_ids)
                 history_messages = ([m for m in history_messages if m.get("id") not in _skip]
                                     + [{"id": None, "role": "user", "content": ""}])
             context_summary = _build_handoff_context(
@@ -2730,7 +2753,8 @@ Max 300 kelime. Türkçe yaz.
                 if through_id is None:
                     db.save_memory(_conv, summary)
                 else:
-                    db.compact_conversation(_conv, summary, through_id=through_id)
+                    db.compact_conversation(_conv, summary, through_id=through_id,
+                                            **_inflight_keep(_conv))
             runner.compaction_store = _store_compaction
         except Exception:
             _end_turn_reply(turn.conversation_id, _turn_user_row, None, "error")

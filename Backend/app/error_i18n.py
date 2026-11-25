@@ -71,6 +71,8 @@ EN: dict[str, str] = {
     "🛑 İşlem kullanıcı tarafından durduruldu.": "🛑 Operation stopped by the user.",
     "Sırada — önceki agy işi bitince başlayacak":
         "Queued — starts when the earlier agy work finishes",
+    "Sırada — bu sohbetin önceki turu bitince başlayacak":
+        "Queued — starts when this chat's previous turn finishes",
     "Çalışıyor…": "Working…",
     "Codex app-server süreci beklenmedik şekilde kapandı.": "The Codex app-server process exited unexpectedly.",
     "AI yanıt üretemedi.": "AI could not produce a response.",

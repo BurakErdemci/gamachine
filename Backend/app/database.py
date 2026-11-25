@@ -1415,7 +1415,8 @@ class DatabaseManager:
             ).fetchone()
             return (row[0] or "") if row else ""
 
-    def compact_conversation(self, conv_id: int, summary: str, through_id: int | None = None) -> bool:
+    def compact_conversation(self, conv_id: int, summary: str, through_id: int | None = None,
+                             keep_ids=()) -> bool:
         """Sohbeti compact'la: özeti kaydet, eski mesajları sil, özet mesajını ekle."""
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with closing(sqlite3.connect(self.db_path)) as conn, conn:
@@ -1423,8 +1424,11 @@ class DatabaseManager:
             conn.execute('BEGIN IMMEDIATE')
             # An input still pending for a later turn (turn_inputs) is neither
             # summarised away nor overwritten: that turn has not answered it.
+            # `keep_ids`: rows of turns still running or waiting (the caller's
+            # gate knows them; they have no pending mark).
+            keep = ''.join(f' AND id != {int(i)}' for i in keep_ids)
             pending = ('id NOT IN (SELECT message_id FROM turn_inputs '
-                       'WHERE conversation_id = ?)')
+                       'WHERE conversation_id = ?)' + keep)
             if through_id is None:
                 boundary = conn.execute(
                     f'SELECT MAX(id) FROM messages WHERE conversation_id = ? AND {pending}',
