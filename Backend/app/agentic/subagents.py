@@ -719,12 +719,22 @@ def fuse_state(parent: int) -> dict:
             "paused": paused, "held": held}
 
 
-def continue_held(parent: int) -> dict:
+def continue_held(parent: int, in_flight: Optional[Callable[[int], bool]] = None) -> dict:
     """The fuse notice's Continue: the fuse resets and the held results ride
     one parent turn (as with a user message, without its text). Must be
-    called on the backend's event loop."""
+    called on the backend's event loop.
+
+    Refused while the chat or any of its helpers has a turn in flight: the
+    route takes the same app token the agent's tools carry, so a turn could
+    otherwise reset its own fuse; the user's click comes from an idle chat.
+    `in_flight(conv)`: the router's extra check (a provider turn outside the
+    gate)."""
     if _DB is None or _DB.count_held_results(parent) == 0:
         raise SubagentError(409, "No sub-agent results are waiting in this chat.", "nothing_held")
+    chats = [parent] + [r["child_conv"] for r in _DB.list_subagents(parent)]
+    if any(turn_runner.busy(c) or (in_flight is not None and in_flight(c)) for c in chats):
+        raise SubagentError(409, "This chat or one of its sub-agents is still running a turn; "
+                                 "Continue works once they are idle.", "turn_running")
     with _LOCK:
         _FUSE.pop(parent, None)
         _FUSE_NOTED.discard(parent)
@@ -732,13 +742,11 @@ def continue_held(parent: int) -> dict:
     ids = _DB.take_held_results(parent)
     if not ids:  # another Continue took them first
         raise SubagentError(409, "No sub-agent results are waiting in this chat.", "nothing_held")
-    busy = turn_runner.busy(parent)
     for mid in ids:
         _DB.queue_turn_input(parent, mid, RESULT_ORIGIN)
     turn_runner.kick(parent)
-    return {"status": "queued" if busy else "started", "released": len(ids),
-            "text": f"{len(ids)} sub-agent result(s) released to this chat's "
-                    + ("next turn." if busy else "turn.")}
+    return {"status": "started", "released": len(ids),
+            "text": f"{len(ids)} sub-agent result(s) released to this chat's turn."}
 
 
 # ── a child's turn ended ─────────────────────────────────────────────────────

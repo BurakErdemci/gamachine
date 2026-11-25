@@ -127,7 +127,8 @@ def test_off_reaches_every_cli_child_through_the_chat_env(store):
     agent_guide.set_script_tool_enabled(False)
     assert spawn_env.conversation_env(5) == {spawn_env.CONVERSATION_ENV: "5",
                                              spawn_env.SCRIPT_TOOL_ENV: "0"}
-    assert spawn_env.conversation_env(0) == {}
+    # One-shot calls (no chat id) carry the switch too, never a chat id.
+    assert spawn_env.conversation_env(0) == {spawn_env.SCRIPT_TOOL_ENV: "0"}
     # The one-shot CLIs' spawn env (cli_base merges conversation_env into it).
     env = spawn_env.build_spawn_env("cursor", overrides=spawn_env.conversation_env(5))
     assert env[spawn_env.SCRIPT_TOOL_ENV] == "0"
@@ -193,3 +194,70 @@ def test_the_agy_guide_has_the_run_script_line_only_when_on(store, enabled):
     first = asyncio.run(scenario())
     assert (agent_guide.SCRIPT_TOOL_LINE_EN in first) is enabled
     assert first.endswith("HINT\nfirst")
+
+
+# ── turn 2: every spawn path and the harness note ────────────────────────────
+def test_every_spawned_child_carries_the_switch_while_off(store):
+    assert spawn_env.SCRIPT_TOOL_ENV not in spawn_env.build_spawn_env("opencode")
+    agent_guide.set_script_tool_enabled(False)
+    for family in (None, "opencode", "kimi", "agy", "claude", "codex"):
+        assert spawn_env.build_spawn_env(family)[spawn_env.SCRIPT_TOOL_ENV] == "0", family
+    agent_guide.set_script_tool_enabled(True)
+    assert spawn_env.SCRIPT_TOOL_ENV not in spawn_env.build_spawn_env("kimi")
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_the_one_shot_and_cursor_unityai_entries_carry_the_switch(store, monkeypatch, tmp_path, enabled):
+    from providers import cursor_provider
+    from providers.cli_base import BaseCLIProvider
+    from providers.cursor_provider import CursorProvider
+    from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
+    monkeypatch.setattr(unity_mcp_manager, "mcp_url", lambda: None)
+    agent_guide.set_script_tool_enabled(enabled)
+    expected = {} if enabled else {spawn_env.SCRIPT_TOOL_ENV: "0"}
+
+    servers = BaseCLIProvider._product_mcp_servers_stdio(
+        SimpleNamespace(), "launcher", str(tmp_path), "http://backend.test")
+    env = servers["unityai"]["env"]
+    assert {k: v for k, v in env.items() if k == spawn_env.SCRIPT_TOOL_ENV} == expected
+
+    written = {}
+    provider = CursorProvider.__new__(CursorProvider)
+    provider._cursor_home = None
+    monkeypatch.setattr(CursorProvider, "_prepare_cursor_home", lambda self: str(tmp_path / "home"))
+    monkeypatch.setattr(CursorProvider, "_write_cli_policy", lambda self, ws: True)
+    monkeypatch.setattr(CursorProvider, "_apply_computer_servers", lambda self, *a, **k: [])
+    monkeypatch.setattr(cursor_provider, "read_user_json_config", lambda ws, rel: {})
+    monkeypatch.setattr(cursor_provider, "ensure_gitignored", lambda *a: None)
+
+    def capture(ws, rel, text):
+        written[rel] = __import__("json").loads(text)
+        return True
+
+    monkeypatch.setattr(cursor_provider, "guvenli_config_yaz", capture)
+    assert provider._register_mcp("launcher", str(tmp_path), "http://backend.test")
+    env = written[".cursor/mcp.json"]["mcpServers"]["unityai"]["env"]
+    assert {k: v for k, v in env.items() if k == spawn_env.SCRIPT_TOOL_ENV} == expected
+
+
+@pytest.mark.parametrize("off_by", ["setting", "env"])
+def test_the_script_tool_note_is_not_offered_while_off(store, monkeypatch, off_by):
+    import harness_notes
+    assert harness_notes.search("run_script")[0]["id"] == "script-tool"
+    assert harness_notes.read("script-tool")["success"] is True
+    if off_by == "setting":   # the backend (API loop tools)
+        agent_guide.set_script_tool_enabled(False)
+    else:                     # a server process the spawner marked
+        monkeypatch.setenv(spawn_env.SCRIPT_TOOL_ENV, "0")
+    assert "script-tool" not in [r["id"] for r in harness_notes.search("run_script javascript")]
+    got = harness_notes.read("script-tool")
+    assert got["success"] is False and "script-tool" not in got["known_ids"]
+    assert harness_notes.read("subagents")["success"] is True
+    assert "script-tool" in harness_notes.notes()   # the files stay; only the offer changes
+
+
+def test_the_claude_harness_server_entry_carries_the_switch(store):
+    import harness_notes
+    assert spawn_env.SCRIPT_TOOL_ENV not in harness_notes.claude_server_entry(5)["env"]
+    agent_guide.set_script_tool_enabled(False)
+    assert harness_notes.claude_server_entry(5)["env"][spawn_env.SCRIPT_TOOL_ENV] == "0"

@@ -298,6 +298,7 @@ async def test_continue_after_a_stop_releases_the_paused_results(env):
     await _until(lambda: len(_results(env.db, parent)) == 1)
     await _idle()
     assert _Runner.of(parent) == [] and subagents.fuse_state(parent)["paused"] is True
+    env.in_flight.discard(parent)   # the user's click comes from an idle chat
     done = await _post(env, "/subagents/continue", conversation_id=parent)
     assert done["released"] == 1
     await _idle()
@@ -322,3 +323,55 @@ def test_tools_guide_and_note_say_check_when_deciding_and_never_poll():
     note = harness_notes.read("subagents")["content"]
     for fact in ("waiting_approval", "no activity for N min", "Continue", "never poll it in a loop"):
         assert fact in note, fact
+
+
+# ── turn 2: the desktop's Stop, Continue only from an idle chat ──────────────
+async def test_the_desktops_stop_takes_string_ids_and_needs_no_running_parent_turn(env):
+    parent = _main(env)
+    started = await _start(env, parent)
+    child = started["chat_id"]
+    _Runner.scripts[child] = [("text", {"content": "çalışıyorum"}), "hang"]
+    await asyncio.sleep(0.02)
+    env.in_flight.discard(parent)   # the user clicks Stop in an idle chat
+    stopped = await _post(env, "/subagents/stop", conversation_id=str(parent),
+                          agent_id=str(started["agent_id"]))
+    assert stopped["status"] == "stopped"
+    await _idle(parent, child)
+    assert env.db.get_subagent(started["agent_id"])["status"] == "stopped"
+    for bad in ("abc", "", None, True, "1.5"):
+        with pytest.raises(HTTPException) as exc:
+            await _post(env, "/subagents/stop", conversation_id=parent, agent_id=bad)
+        assert exc.value.status_code == 404, bad
+
+
+async def test_continue_is_refused_while_the_chat_or_a_helper_runs_a_turn(env):
+    parent = _main(env)
+    await _trip_the_fuse(env, parent)
+    # The agent's own tool call comes from a running turn of the chat.
+    with pytest.raises(HTTPException) as exc:
+        await _post(env, "/subagents/continue", conversation_id=parent)
+    assert exc.value.status_code == 409 and exc.value.detail["code"] == "turn_running"
+    env.in_flight.discard(parent)
+    # A helper still at work: refused too.
+    busy = await _start_unchecked(env, parent)
+    _Runner.scripts[busy] = ["hang"]
+    await asyncio.sleep(0.02)
+    with pytest.raises(HTTPException) as exc:
+        await _post(env, "/subagents/continue", conversation_id=parent)
+    assert exc.value.status_code == 409 and exc.value.detail["code"] == "turn_running"
+    assert subagents.fuse_state(parent)["held"] == 1 and subagents.fuse_count(parent) == subagents.FUSE_LIMIT
+    env.in_flight.add(parent)
+    await _post(env, "/subagents/stop", conversation_id=parent,
+                agent_id=env.db.get_subagent_by_child(busy)["id"])
+    await _idle()
+    env.in_flight.discard(parent)
+    done = await _post(env, "/subagents/continue", conversation_id=parent)
+    assert done["released"] == 1
+
+
+async def _start_unchecked(env, parent):
+    env.in_flight.add(parent)
+    try:
+        return (await _start(env, parent, name="meşgul"))["chat_id"]
+    finally:
+        env.in_flight.discard(parent)

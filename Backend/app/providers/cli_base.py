@@ -38,6 +38,7 @@ from spawn_env import (  # noqa: F401  (yeniden dışa verim — bkz. yukarı)
     build_spawn_env,
     conversation_env,
     read_only_env,
+    script_tool_env,
 )
 
 
@@ -390,7 +391,8 @@ class BaseCLIProvider(AIProvider):
         # LOCAL_APP_TOKEN buraya BİLEREK yazılmıyor: bu dosya modelin
         # okuyabildiği yerde duruyor ve token backend'de tek yetki kanıtı.
         # Çocuk süreç sırrı 0600 dosyadan okuyor (bkz. local_token_file).
-        unityai_env = {"UNITYAI_URL": backend_url}
+        # The Script tool switch rides the entry too: an entry's env may replace the CLI's own.
+        unityai_env = {"UNITYAI_URL": backend_url, **script_tool_env()}
 
         from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
         servers = {

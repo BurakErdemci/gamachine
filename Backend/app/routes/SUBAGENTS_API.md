@@ -4,7 +4,11 @@ Every route takes the app token in `X-Session-Token`, the same token the CLI too
 is needed for the desktop UI. `conversation_id` is always the main (parent) chat. A chat id that is not
 the local user's answers 404; a side chat 403 (sub-agent routes) or 400 (queue routes); a sub-agent's own
 chat 403 on the sub-agent routes (depth 1). Errors are FastAPI `{"detail": ...}`; `detail` is a string,
-or `{"message", "code", ...}` where a code is listed below.
+or `{"message", "code", ...}` where a code is listed below. Ids in a JSON body may be numbers or strings
+of digits.
+
+The phone's web remote reaches every route below through the UI dispatcher (remote/ui_dispatch.py), with
+the same checks; `/subagents/start`, `/subagents/message` and the script-tool PUT stay desktop/agent only.
 
 ## GET /subagents/list?conversation_id=N
 
@@ -65,12 +69,24 @@ The `fuse` object above on its own.
 
 Body `{"conversation_id": N}`. The fuse notice's Continue: resets the fuse count, the notice flag and a
 Stop's pause, and the held results ride one turn of the chat (origin `subagent`, no user text), as they
-would with the user's next message. No running turn is needed.
+would with the user's next message.
 
-- 200 `{"status": "started" | "queued", "released": 2, "text": "..."}`; `queued`: a turn of the chat
-  is running and the results ride the next one.
+Only from an idle chat: refused while the chat or any of its helpers has a turn in flight, because the
+agent's own tools carry the same app token and must not reset their fuse from inside a turn. Offer the
+button when `fuse.held > 0` and nothing of the chat runs (typically after a Stop, or once the helpers
+are done).
+
+- 200 `{"status": "started", "released": 2, "text": "..."}`.
 - 409 `{"detail": {"message": "...", "code": "nothing_held"}}`: nothing is held (also for a second
   click: results are released once).
+- 409 `{"detail": {"message": "...", "code": "turn_running"}}`: the chat or a helper is running a turn.
+
+## POST /subagents/stop
+
+Body `{"conversation_id": N, "agent_id": A}` (the row's `id`). Stops the helper's running turn, drops its
+queued messages and refuses its open cards. No running turn of the chat is needed (the desktop's and the
+phone's Stop button). 200 `{"status": "stopped", "agent_id": A, "text": "..."}`, or its current status
+with "not running" when it was not running; 404 for an unknown or foreign `agent_id`.
 
 ## GET /agent-settings/script-tool, PUT /agent-settings/script-tool
 
@@ -79,9 +95,12 @@ GET answers `{"enabled": true}`; PUT takes `{"enabled": false}` and answers the 
 
 Off: Claude sessions do not mount the in-process `gamachineScript` server and get no run_script guide
 line; Codex, agy, Cursor, Copilot, OpenCode and Kimi get no guide line and their unityai server does
-not register run_script (the CLI's env carries `GAMACHINE_SCRIPT_TOOL=0`). The setting is read when a
-session or a CLI turn starts: a session that is already running (a live Claude or Codex session, a kept
-agy process) keeps its tools until its next start (a new chat, a model switch, an app restart).
+not register run_script: every spawned CLI's env and every unityai entry the app writes carry
+`GAMACHINE_SCRIPT_TOOL=0`, with or without a chat id. Off also hides the `script-tool` harness note
+(harness_search / harness_read). The setting is read when a session or a CLI turn starts: a live Codex
+session or a kept agy process keeps its tools until its next start (a new chat, a model switch, an app
+restart). A Claude chat's harness server entry changes with the switch, so its session is rebuilt at its
+next turn and follows the setting from then on.
 
 ## GET /conversations/{id}/queue
 

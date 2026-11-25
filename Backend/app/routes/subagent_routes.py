@@ -41,6 +41,16 @@ def _turn_in_flight(conv_id: int) -> bool:
         return False
 
 
+def _as_id(value: Any) -> Any:
+    """A chat or agent id as JSON may carry it: an int, or a string of digits
+    (the desktop renderer sends ids it read from the DOM as strings)."""
+    if type(value) is int:
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return value
+
+
 def create_subagent_router(db: Any,
                            list_models: Optional[Callable[..., Awaitable[dict]]] = None) -> APIRouter:
     router = APIRouter()
@@ -90,7 +100,7 @@ def create_subagent_router(db: Any,
     async def subagent_start(body: dict,
                              x_session_token: str = Header(alias="X-Session-Token", default="")):
         _check_token(x_session_token)
-        parent = body.get("conversation_id")
+        parent = _as_id(body.get("conversation_id"))
         user_id = _caller(x_session_token, parent, live=True)
         catalog = await _catalog()
         try:
@@ -104,10 +114,10 @@ def create_subagent_router(db: Any,
     async def subagent_message(body: dict,
                                x_session_token: str = Header(alias="X-Session-Token", default="")):
         _check_token(x_session_token)
-        parent = body.get("conversation_id")
+        parent = _as_id(body.get("conversation_id"))
         _caller(x_session_token, parent, live=True)
         try:
-            return subagents.message(parent, body.get("agent_id"), body.get("text"))
+            return subagents.message(parent, _as_id(body.get("agent_id")), body.get("text"))
         except subagents.SubagentError as exc:
             raise _refused(exc)
 
@@ -115,10 +125,12 @@ def create_subagent_router(db: Any,
     async def subagent_stop(body: dict,
                             x_session_token: str = Header(alias="X-Session-Token", default="")):
         _check_token(x_session_token)
-        parent = body.get("conversation_id")
-        _caller(x_session_token, parent, live=True)
+        parent = _as_id(body.get("conversation_id"))
+        # No running turn needed: the desktop's and the phone's Stop buttons call this
+        # with the same app token as the agent tool, and a stop is always safe.
+        _caller(x_session_token, parent)
         try:
-            return await subagents.stop(parent, body.get("agent_id"))
+            return await subagents.stop(parent, _as_id(body.get("agent_id")))
         except subagents.SubagentError as exc:
             raise _refused(exc)
 
@@ -145,10 +157,10 @@ def create_subagent_router(db: Any,
         """The fuse notice's Continue button (desktop UI): no turn of the chat
         needs to run; the user's click is the go-ahead."""
         _check_token(x_session_token)
-        parent = body.get("conversation_id") if isinstance(body, dict) else None
+        parent = _as_id(body.get("conversation_id")) if isinstance(body, dict) else None
         _caller(x_session_token, parent)
         try:
-            return subagents.continue_held(parent)
+            return subagents.continue_held(parent, in_flight=_turn_in_flight)
         except subagents.SubagentError as exc:
             # The UI tells the refusals apart by code.
             raise HTTPException(status_code=exc.status,

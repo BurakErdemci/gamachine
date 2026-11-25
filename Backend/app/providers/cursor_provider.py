@@ -4,7 +4,7 @@ import json
 import logging
 import subprocess
 from typing import Optional
-from .cli_base import BaseCLIProvider, build_spawn_env
+from .cli_base import BaseCLIProvider, build_spawn_env, script_tool_env
 from .oneshot_cli import resolve_cursor_cmd, split_model_id
 from .unityai_tool_text import mail_and_fallback, on_unityai_server
 from .workspace_config import ensure_gitignored, guvenli_config_yaz, read_user_json_config
@@ -186,7 +186,8 @@ class CursorProvider(BaseCLIProvider):
             cfg_dir = os.path.join(workspace, ".cursor")
             os.makedirs(cfg_dir, exist_ok=True)
 
-            unityai_env = {"UNITYAI_URL": backend_url, "WORKSPACE": workspace}
+            # Settings > Agent > Script tool off: the entry tells unityai (spawn_env.SCRIPT_TOOL_ENV).
+            unityai_env = {"UNITYAI_URL": backend_url, "WORKSPACE": workspace, **script_tool_env()}
             # Token config dosyasına yazılmıyor — 0600 dosyadan okunuyor
             # (bkz. local_token_file). Bu dosya model tarafından okunabilir.
 

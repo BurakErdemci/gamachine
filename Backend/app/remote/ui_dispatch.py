@@ -100,6 +100,12 @@ _ALLOW: List[Tuple[Tuple[str, ...], str]] = [
     (("POST", "DELETE"), rf"/conversations/{_ID}/side"),
     (("POST",), rf"/conversations/{_ID}/branch"),
     (("PUT",), rf"/conversations/{_ID}/hidden"),
+    # The chat's queued messages and its helpers (routes/SUBAGENTS_API.md); the routes check the
+    # chat's owner as every chat route does.
+    (("GET",), rf"/conversations/{_ID}/queue"),
+    (("DELETE",), rf"/conversations/{_ID}/queue/{_ID}"),
+    (("GET",), r"/subagents/(list|fuse)"),
+    (("POST",), r"/subagents/(continue|stop)"),
     # workspace and files
     (("POST",), r"/save-workspace"),
     (("POST",), r"/remove-workspace"),

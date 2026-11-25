@@ -119,6 +119,29 @@ def notes() -> dict:
     return _notes
 
 
+# Notes about a tool the user can switch off: not offered while it is off.
+SCRIPT_TOOL_NOTE = "script-tool"
+
+
+def _script_tool_on() -> bool:
+    """The backend reads the app setting; a server process (unityai, the Claude
+    harness server) reads the flag its spawner put in its env."""
+    try:
+        import agent_guide
+        from spawn_env import script_tool_allowed
+        return script_tool_allowed() and agent_guide.script_tool_enabled()
+    except Exception:
+        return True
+
+
+def offered() -> dict:
+    """The notes search and read may return now."""
+    every = notes()
+    if _script_tool_on():
+        return every
+    return {k: v for k, v in every.items() if k != SCRIPT_TOOL_NOTE}
+
+
 def _prefix_pair(a: str, b: str) -> bool:
     """One is a prefix of the other and the shorter has at least `_MIN_PREFIX` letters, so an inflected
     Turkish word meets its stem ("tarayicida" / "tarayici", "sohbetler" / "sohbet") both ways round."""
@@ -170,18 +193,19 @@ def search(query: str, limit: int = 5) -> list:
         limit = max(1, int(limit))
     except (TypeError, ValueError):
         limit = 5
-    scored = [(_score(note, words), note) for note in notes().values()]
+    scored = [(_score(note, words), note) for note in offered().values()]
     scored = [(score, note) for score, note in scored if score > 0]
     scored.sort(key=lambda pair: (-pair[0], pair[1].id))
     return [{"id": note.id, "title": note.title, "summary": note.summary} for _, note in scored[:limit]]
 
 
 def read(note_id: str) -> dict:
-    note = notes().get(str(note_id or "").strip())
+    shown = offered()
+    note = shown.get(str(note_id or "").strip())
     if note is None:
         return {"success": False,
                 "error": f"No note with id {note_id!r}. Use harness_search to find an id.",
-                "known_ids": sorted(notes())}
+                "known_ids": sorted(shown)}
     return {"success": True, "id": note.id, "title": note.title, "content": note.body}
 
 
@@ -270,7 +294,7 @@ def claude_server_entry(conversation_id) -> Optional[dict]:
     turns of a chat, because the session is rebuilt whenever its `mcp_servers` differ. No token: harness_status
     reads it from the 0600 token file, like the other bridges.
     """
-    from spawn_env import CONVERSATION_ENV
+    from spawn_env import CONVERSATION_ENV, script_tool_env
     if type(conversation_id) is not int or conversation_id <= 0:
         return None
     argv = harness_server_argv()
@@ -280,6 +304,9 @@ def claude_server_entry(conversation_id) -> Optional[dict]:
         "args": argv[1:],
         "env": {
             CONVERSATION_ENV: str(conversation_id),
+            # Script tool off: the server does not offer its note. A switch
+            # changes the entry, so the Claude session rebuilds at its next turn.
+            **script_tool_env(),
             "UNITYAI_URL": os.environ.get(
                 "UNITYAI_URL", os.environ.get("ANTIGRAVITY_URL", "http://localhost:8000")),
         },

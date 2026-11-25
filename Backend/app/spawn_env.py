@@ -231,6 +231,10 @@ def build_spawn_env(family: Optional[str] = None,
     """
     names = _BASE_ENV_ALLOWLIST + _PROVIDER_ENV_ALLOWLIST.get(family or "", ())
     env = {name: os.environ[name] for name in names if name in os.environ}
+    # Every child carries the Script tool switch when it is off: CLIs that hand
+    # their env to their MCP servers then start unityai without run_script
+    # whichever builder wrote its entry (opencode, kimi, agy, claude, one-shots).
+    env.update(script_tool_env())
     if overrides:
         env.update(overrides)
     return env
@@ -283,11 +287,11 @@ def conversation_env(conversation_id) -> Dict[str, str]:
     and side calls have none, and a card owned by the wrong chat is worse than
     an unowned one. Same guard as the Claude session's header (agent_runner).
 
-    It also carries the Script tool switch when it is off: every CLI path
+    It also carries the Script tool switch when it is off, for any id: every CLI path
     hands these names to its unityai child (Codex forwards exactly these as
     `env_vars`, Copilot puts them in the entry, agy and the one-shot CLIs pass
     their own env on).
     """
     if type(conversation_id) is int and conversation_id > 0:
         return {CONVERSATION_ENV: str(conversation_id), **script_tool_env()}
-    return {}
+    return script_tool_env()
