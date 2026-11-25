@@ -181,7 +181,7 @@ def test_poll_timeout_uses_wall_clock(approval, monkeypatch):
     assert now[0] <= 160
 
 
-@pytest.mark.parametrize("mode", ["closed", "side", "auto", "step"])
+@pytest.mark.parametrize("mode", ["closed", "side", "step"])
 def test_mode_changed_before_allow(approval, mode):
     # "step" is the removed mode's state an older backend may have left: it
     # must not approve a write either.
@@ -191,6 +191,35 @@ def test_mode_changed_before_allow(approval, mode):
         return {"status": "resolved", "approved": True}
     answers[:] = [flip]
     assert not write(approval)[0]
+
+
+def test_flip_to_auto_during_card_allows_approved_write(approval):
+    workspace, state, _, answers = approval
+    def flip():
+        gate.write_state(str(state), "auto", "unityai", workspace=str(workspace))
+        return {"status": "resolved", "approved": True}
+    answers[:] = [flip]
+    allowed, _ = write(approval)
+    assert allowed is True
+
+
+def test_flip_to_auto_during_card_still_denies_when_rejected(approval):
+    workspace, state, _, answers = approval
+    def flip():
+        gate.write_state(str(state), "auto", "unityai", workspace=str(workspace))
+        return {"status": "resolved", "approved": False}
+    answers[:] = [flip]
+    allowed, _ = write(approval)
+    assert allowed is False
+
+
+@pytest.mark.parametrize("initial_mode", ["auto", "closed", "side", "step"])
+def test_non_balanced_initial_state_refuses_before_asking(approval, initial_mode):
+    workspace, state, calls, _ = approval
+    gate.write_state(str(state), initial_mode, "unityai", workspace=str(workspace))
+    allowed, _ = write(approval)
+    assert allowed is False
+    assert calls == []
 
 
 def test_file_changed_before_allow(approval):

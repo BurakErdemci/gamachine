@@ -36,12 +36,28 @@ def _read_file(path):
         return False, b""
 
 
-def _state_matches(path):
+def _read_json_with_retry(path, budget_s=0.5):
+    """Read and decode JSON from path, retrying transient sharing/half-visible errors."""
+    deadline = time.monotonic() + budget_s
+    while True:
+        try:
+            with open(path, encoding="utf-8") as stream:
+                return json.load(stream)
+        except FileNotFoundError:
+            raise
+        except (PermissionError, json.JSONDecodeError):
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.01)
+
+
+def _state_matches(path, allowed_modes=("balanced",)):
     # Only Safe Auto asks for a card; auto never reaches here, and any other
-    # state (closed, side, unknown) must not be approved into a write.
-    with open(path, encoding="utf-8") as stream:
-        state = json.load(stream)
-    return state.get("mode") == "balanced"
+    # state (closed, side, unknown) must not be approved into a write. After a
+    # card is approved, "auto" is also accepted because switching to auto
+    # approves every open card.
+    state = _read_json_with_retry(path)
+    return isinstance(state, dict) and state.get("mode") in allowed_modes
 
 
 _ARG_NAMES = {name.replace("_", "").lower(): name for name in (
@@ -252,7 +268,7 @@ def request_native_write(tool_name, args, workspace, base=None):
         result = _approval({"path": path, "content": content, "original": original}, workspace, deadline)
         if result.get("approved") is not True:
             return False, "Native file write was not explicitly approved."
-        if not _state_matches(saved_state_path):
+        if not _state_matches(saved_state_path, ("balanced", "auto")):
             return False, "Gate mode changed while awaiting approval."
         current_exists, current = _read_file(path)
         if (os.path.realpath(target) != path or exists != current_exists
