@@ -22,6 +22,16 @@ the project history.
 
 ## Bundled runtime components
 
+### quickjs-emscripten 0.32.0 and QuickJS — **[bundled]** — `Backend/script_runner/vendor/`
+**MIT License** — https://github.com/justjake/quickjs-emscripten
+quickjs-emscripten copyright (c) 2019-2024 Jake Teton-Landis; the QuickJS
+JavaScript engine compiled into its WebAssembly file copyright (c) 2017-2021
+Fabrice Bellard and Charlie Gordon (MIT). The packages `quickjs-emscripten-core`,
+`@jitl/quickjs-wasmfile-release-sync` and `@jitl/quickjs-ffi-types` are vendored with
+their license files; the only change is that two package-name imports were rewritten
+to relative paths (see `Backend/script_runner/README.md`). They run the sandbox of
+the `run_script` tool and ship at `Backend/script_runner/` in the app resources.
+
 ### cua-driver 0.35.4 — **[bundled] [fetched]** (macOS)
 **MIT License** — https://github.com/trycua/cua
 

@@ -6,7 +6,7 @@ import os
 import subprocess
 from mcp.server.mcpserver import MCPServer
 
-from unity_ai_mcp.approval_bridge import request_approval
+from unity_ai_mcp.approval_bridge import note_decision, request_approval
 from agentic import shell_exec
 from agentic.shell_exec import _parse_file_write  # noqa: F401  (eski içe aktarmalar için)
 
@@ -39,6 +39,7 @@ def register_bash_tool(mcp: MCPServer, get_workspace: callable):
                 params={"path": path, "content": new_content, "original": file_write.original},
                 workspace_path=workspace,
             )
+            note_decision(result)
             if result.get("approved") is not True:
                 return f"❌ Reddedildi: {path}"
             os.makedirs(os.path.dirname(abs_path), exist_ok=True)
@@ -53,6 +54,7 @@ def register_bash_tool(mcp: MCPServer, get_workspace: callable):
                 params={"command": command},
                 workspace_path=workspace,
             )
+            note_decision(result)
             if result.get("approved") is not True:
                 return f"❌ Komut reddedildi: {command}"
 

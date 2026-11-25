@@ -317,6 +317,10 @@ _AUTO_ALLOW_TOOLS = {
 from agentic.mailbox import CLAUDE_TOOL_NAMES as _MAIL_TOOLS  # noqa: E402
 # The harness-notes server's tools, allowed without a card, read-only sessions included.
 from harness_notes import CLAUDE_TOOL_NAMES as _HARNESS_TOOLS  # noqa: E402
+# The in-process run_script server's tool (see `_can_use_tool`).
+from unity_ai_mcp.script_server import CLAUDE_TOOL_NAME as _SCRIPT_TOOL  # noqa: E402
+# A user's "no" on an approval card; run_script ends a script on exactly this refusal.
+USER_DENIED_MESSAGE = "Kullanıcı işlemi reddetti."
 from computer_use import registration  # noqa: E402
 from browser_use import registration as browser_registration  # noqa: E402
 from connectors import registration as connectors_registration  # noqa: E402
@@ -1149,7 +1153,17 @@ class ClaudeSDKSession:
         if self.effort:
             opts_kwargs["effort"] = self.effort  # ClaudeAgentOptions.effort → --effort
         if self.mcp_servers:
-            opts_kwargs["mcp_servers"] = self.mcp_servers
+            opts_kwargs["mcp_servers"] = dict(self.mcp_servers)
+            # run_script is added here, not by the runner: it is bound to this session's
+            # _can_use_tool, and it stays out of the mcp_servers that decide a rebuild.
+            from unity_ai_mcp import script_server
+            script_entry = script_server.session_entry(self)
+            if script_entry is not None:
+                opts_kwargs["mcp_servers"][script_server.SERVER_NAME] = script_entry
+                if self.agent_guide:
+                    import agent_guide as _guides
+                    opts_kwargs["system_prompt"]["append"] = (
+                        _APP_SYSTEM_APPEND + "\n\n" + _guides.with_script_tool(self.agent_guide))
         if self.disallowed_tools:
             opts_kwargs["disallowed_tools"] = self.disallowed_tools
 
@@ -1298,6 +1312,10 @@ class ClaudeSDKSession:
         # state, so they pass in every mode and before the read-only branch.
         if tool_name in _HARNESS_TOOLS:
             return PermissionResultAllow(updated_input=input_data)
+        # run_script itself does nothing outside its sandbox: every tool call inside it comes
+        # back through this method (unity_ai_mcp/script_server.py), read-only branch included.
+        if tool_name == _SCRIPT_TOOL:
+            return PermissionResultAllow(updated_input=input_data)
 
         # Read-only (side chat): every other tool is denied here, BEFORE the
         # question card and the auto branch, so auto mode cannot let a write
@@ -1387,7 +1405,7 @@ class ClaudeSDKSession:
         res = await self._wait_gate(ev, APPROVAL_GATES, APPROVAL_RESULTS, gate_id, "onay")
         if bool(res):
             return PermissionResultAllow(updated_input=input_data)
-        return PermissionResultDeny(message="Kullanıcı işlemi reddetti.")
+        return PermissionResultDeny(message=USER_DENIED_MESSAGE)
 
     async def _wait_gate(self, ev: asyncio.Event, gates: dict, results: dict,
                          gate_id: str, label: str):

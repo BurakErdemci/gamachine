@@ -40,6 +40,7 @@ from unity_ai_mcp.tools.file_tools import register_file_tools
 from unity_ai_mcp.tools.bash_tool import register_bash_tool
 from unity_ai_mcp.tools.mailbox_tools import register_mailbox_tools
 from unity_ai_mcp.tools.show_tools import register_show_tools
+from unity_ai_mcp.tools.script_tools import register_script_tool
 
 _workspace_path: str = ""
 
@@ -106,9 +107,12 @@ def create_server(workspace: str = "") -> MCPServer:
 
     register_file_tools(mcp, get_workspace)
     register_bash_tool(mcp, get_workspace)
+    # Scripts reach the file and shell tools registered above (whatever their names are today).
+    script_tool_names = [tool.name for tool in mcp._tool_manager.list_tools()]
     register_mailbox_tools(mcp)
     register_show_tools(mcp)
     register_harness_tools(mcp)
+    register_script_tool(mcp, get_workspace, script_tool_names)
 
     return mcp
 

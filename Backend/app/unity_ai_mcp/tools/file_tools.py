@@ -5,7 +5,7 @@ import logging
 import os
 from mcp.server.mcpserver import MCPServer
 
-from unity_ai_mcp.approval_bridge import request_approval
+from unity_ai_mcp.approval_bridge import note_decision, request_approval
 import action_risk
 import unity_file_guard
 from path_containment import resolve_within
@@ -94,6 +94,7 @@ def register_file_tools(mcp: MCPServer, get_workspace: callable):
             params={"path": path, "content": content, "original": original},
             workspace_path=workspace,
         )
+        note_decision(result)
 
         if result.get("approved") is not True:
             return f"❌ Yazma reddedildi: {path}"
@@ -129,6 +130,7 @@ def register_file_tools(mcp: MCPServer, get_workspace: callable):
             params={"path": path, "original": original},
             workspace_path=workspace,
         )
+        note_decision(result)
 
         if result.get("approved") is not True:
             return f"❌ Silme reddedildi: {path}"

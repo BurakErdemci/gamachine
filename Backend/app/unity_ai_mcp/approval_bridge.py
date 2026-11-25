@@ -8,6 +8,7 @@ Akış:
 """
 import uuid
 import asyncio
+import contextvars
 import logging
 import time
 import httpx
@@ -16,6 +17,17 @@ from typing import Any
 import os
 logger = logging.getLogger(__name__)
 BACKEND_URL = os.environ.get("UNITYAI_URL", os.environ.get("ANTIGRAVITY_URL", "http://localhost:8000"))
+
+# run_script sets a list here around each relayed tool call; the tools append every approval
+# decision they got (note_decision), so the relay can tell a plain refusal, which ends the script,
+# from a refusal that carries the user's comment, which the script may handle.
+DECISIONS: contextvars.ContextVar = contextvars.ContextVar("approval_decisions", default=None)
+
+
+def note_decision(result: Any) -> None:
+    decisions = DECISIONS.get()
+    if decisions is not None:
+        decisions.append(result if isinstance(result, dict) else {"approved": False})
 
 
 def _get_headers() -> dict:

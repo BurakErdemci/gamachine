@@ -1477,7 +1477,9 @@ async function startPythonBackend() {
     // started (measured 29 Oct 2026: with false a descendant outlived the quit). Windows uses
     // taskkill /T instead, and detached there would open a console window.
     detached: process.platform !== 'win32',
-    env: { ...process.env, PYTHONUNBUFFERED: '1', PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8', PORT: String(selectedPort), LOCAL_APP_TOKEN: localAppToken, GAMACHINE_UI_SECRET_STDIN: '1' },
+    // GAMACHINE_NODE_PATH: run_script's sandbox runner runs on this Electron binary with
+    // ELECTRON_RUN_AS_NODE=1 (Backend/app/script_tool.py), so the app needs no Node of its own.
+    env: { ...process.env, PYTHONUNBUFFERED: '1', PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8', PORT: String(selectedPort), LOCAL_APP_TOKEN: localAppToken, GAMACHINE_UI_SECRET_STDIN: '1', GAMACHINE_NODE_PATH: process.execPath },
   });
   pyBackendProcess.stdin?.on('error', (err) => console.error('[approval-mode] UI secret not delivered:', err))
   pyBackendProcess.stdin?.end(`${uiSecret}\n`)

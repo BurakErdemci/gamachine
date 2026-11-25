@@ -172,6 +172,26 @@ def with_connectors(guide: str) -> str:
     return _add_block(guide, CONNECTORS_GUIDE_EN, CONNECTORS_GUIDE_TR)
 
 
+SCRIPT_TOOL_LINE_EN = (
+    "- run_script runs a short JavaScript program that calls your tools as async functions and hands back only "
+    "its result: use it for several dependent, repeated or parallel calls or to filter big results; make one or "
+    "two calls, and steps that need your judgment in between, directly; C# in the Unity Editor stays execute_code."
+)
+SCRIPT_TOOL_LINE_TR = (
+    "- run_script araçlarını async fonksiyon olarak çağıran kısa bir JavaScript programı çalıştırır ve yalnız "
+    "sonucunu döndürür: birbirine bağlı, tekrarlı ya da paralel çağrılar veya büyük sonuçları süzmek için kullan; "
+    "bir iki çağrıyı ve aralarında senin yargın gereken adımları doğrudan yap; Unity Editor'de C# yine execute_code."
+)
+
+
+def with_script_tool(guide: str) -> str:
+    """Only for a chat whose agent has the run_script tool; ClaudeSDKSession.start adds it with its server.
+
+    A separate block, not a line in ALWAYS: the section bodies are pinned, and the API loop has no run_script.
+    """
+    return _add_block(guide, SCRIPT_TOOL_LINE_EN, SCRIPT_TOOL_LINE_TR)
+
+
 def bind_settings_store(store) -> None:
     """Use the app database supplied when the config router is created."""
     global _settings_store

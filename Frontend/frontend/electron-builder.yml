@@ -55,6 +55,12 @@ extraResources:
   # paketlenmiş app'te MCP/agy köprüsü bunlar üzerinden binary'yi çağırır.
   # macOS/Linux: .sh + unityai (bash); Windows: .cmd. Hepsi paketlenir, OS'e göre
   # Python tarafı (cli_base._launcher_path) doğru olanı seçer.
+  # run_script's sandbox: runner.mjs plus the vendored QuickJS wasm (MIT, licences inside).
+  # The frozen backend looks for it next to its binary (script_tool.runner_path).
+  - from: ../../Backend/script_runner
+    to: Backend/script_runner
+    filter:
+      - "**/*"
   - from: ../../Backend/run_mcp_server.sh
     to: Backend/run_mcp_server.sh
   - from: ../../Backend/unityai
