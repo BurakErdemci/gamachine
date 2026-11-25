@@ -2,7 +2,9 @@ from secret_redaction import redact_secrets
 import os
 import json
 import logging
-from .cli_base import BaseCLIProvider
+import subprocess
+from typing import Optional
+from .cli_base import BaseCLIProvider, build_spawn_env
 from .oneshot_cli import resolve_cursor_cmd, split_model_id
 from .unityai_tool_text import mail_and_fallback, on_unityai_server
 from .workspace_config import ensure_gitignored, guvenli_config_yaz, read_user_json_config
@@ -10,6 +12,8 @@ from .workspace_config import ensure_gitignored, guvenli_config_yaz, read_user_j
 logger = logging.getLogger(__name__)
 
 
+def cursor_home_dir() -> str:
+    return os.path.join(os.path.expanduser("~"), ".unity_architect_ai", "cursor-home")
 
 
 class CursorProvider(BaseCLIProvider):
@@ -27,6 +31,7 @@ class CursorProvider(BaseCLIProvider):
 
     # agent_runner her tur spawn öncesi doldurur:
     resume_session_id = None   # önceki turun chatId'si (--resume)
+    _cursor_home: Optional[str] = None
 
     def _build_cmd(self, prompt: str, thinking_level: str = "medium", workspace: str = None) -> list:
         base = resolve_cursor_cmd()
@@ -71,10 +76,12 @@ class CursorProvider(BaseCLIProvider):
             "--stream-partial-output",
             "--trust",
             "--approve-mcps",
-            # --force ŞART: headless modda MCP tool çağrıları onay bekleyip
-            # reddediliyor (canlı doğrulandı). Native Write/Shell ise
-            # .cursor/cli.json deny-list'i ile kapalı ("unless explicitly
-            # denied") → tüm yazma/shell unityai MCP onayından geçer.
+            # --force is REQUIRED: in headless mode MCP tool calls wait for
+            # approval and are rejected (verified live). Native Write/Shell are
+            # blocked by the .cursor/cli.json deny-list ("unless explicitly
+            # denied"), so all writes/shell go through unityai MCP approval.
+            # Approval now covers only the project file's servers, because
+            # the home is Gamachine's own.
             "--force",
         ]
         # 'auto' da AÇIKÇA geçirilir: bayraksız çağrıda CLI kayıtlı varsayılan
@@ -124,10 +131,57 @@ class CursorProvider(BaseCLIProvider):
         ensure_gitignored(workspace, [".cursor/cli.json"])
         return True
 
+    def _prepare_cursor_home(self) -> Optional[str]:
+        """Prepare Gamachine's isolated Cursor home and link existing chats."""
+        home = cursor_home_dir()
+        cursor_dir = os.path.join(home, ".cursor")
+        try:
+            os.makedirs(cursor_dir, exist_ok=True)
+        except OSError as e:
+            logger.warning("[CursorProvider] Cannot create cursor home %s: %s",
+                           cursor_dir, redact_secrets(str(e)))
+            return None
+
+        target = os.path.join(os.path.expanduser("~"), ".cursor", "chats")
+        link = os.path.join(cursor_dir, "chats")
+        if os.path.isdir(target) and not os.path.lexists(link):
+            try:
+                if os.name == "nt":
+                    res = subprocess.run(
+                        ["cmd", "/c", "mklink", "/J", link, target],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                        env=build_spawn_env(),
+                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                    )
+                    if res.returncode != 0 or not os.path.isdir(link):
+                        logger.warning(
+                            "[CursorProvider] Failed to link cursor chats %s -> %s: %s",
+                            link, target, redact_secrets((res.stderr or res.stdout or "").strip()),
+                        )
+                else:
+                    os.symlink(target, link, target_is_directory=True)
+            except (OSError, subprocess.SubprocessError) as e:
+                logger.warning(
+                    "[CursorProvider] Failed to link cursor chats %s -> %s: %s",
+                    link, target, redact_secrets(str(e)),
+                )
+        return home
+
+    def _turn_spawn_env(self) -> dict:
+        # Keep the isolated home on the Cursor process only; Gamachine's own
+        # MCP servers get the real home in their entry env so they can read
+        # their secrets from ~/.unity_architect_ai and ~/.unity-mcp.
+        if self._cursor_home:
+            return {"HOME": self._cursor_home, "USERPROFILE": self._cursor_home}
+        return {}
+
     def _register_mcp(self, launcher: str, workspace: str, backend_url: str):
         """Cursor, workspace'teki .cursor/mcp.json'ı otomatik yükler."""
         from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
 
+        self._cursor_home = None
         try:
             cfg_dir = os.path.join(workspace, ".cursor")
             os.makedirs(cfg_dir, exist_ok=True)
@@ -167,6 +221,13 @@ class CursorProvider(BaseCLIProvider):
 
             # Kullanıcının kendi .cursor/mcp.json'ı varsa bizim server'ları üstüne
             # ekle, diğer kayıtlarına dokunma.
+            cursor_home = self._prepare_cursor_home()
+            if cursor_home is None:
+                logger.error("[CursorProvider] Cannot prepare Cursor home; "
+                             "the turn is refused.")
+                return False
+            self._cursor_home = cursor_home
+
             # The deny policy goes first: whatever happens to the MCP entry, the CLI
             # must never start with native Write/Shell open.
             if not self._write_cli_policy(workspace):
@@ -185,7 +246,24 @@ class CursorProvider(BaseCLIProvider):
             # durumda eski URL artık 404 alır, CLI bağlanamayan MCP'de takılır.
             if not unity_mcp_url:
                 merged["mcpServers"].pop("unityMCP", None)
-            self._apply_computer_servers(merged["mcpServers"], lambda e: e, chat_id=False)
+            computer_names = self._apply_computer_servers(
+                merged["mcpServers"], lambda e: e, chat_id=False)
+            # Gamachine's own servers read their secrets from the real home
+            # (~/.unity_architect_ai, ~/.unity-mcp), not the isolated cursor-home.
+            real_home = os.path.expanduser("~")
+            gamachine_names = ["unityai"]
+            if "unityMCP" in config["mcpServers"] and "unityMCP" in merged["mcpServers"]:
+                gamachine_names.append("unityMCP")
+            gamachine_names.extend(computer_names)
+            for name in gamachine_names:
+                entry = merged["mcpServers"].get(name)
+                if isinstance(entry, dict):
+                    env = entry.get("env")
+                    if not isinstance(env, dict):
+                        env = {}
+                        entry["env"] = env
+                    env["HOME"] = real_home
+                    env["USERPROFILE"] = real_home
 
             # ⚠️ Düz `open` DEĞİL: bu dosya kullanıcının projesinde ve yolu
             # yönlendirilmiş olabilir (K4, iki vektör de ayrıcalıksız ölçüldü).
