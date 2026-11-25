@@ -112,7 +112,9 @@ calls `quitAndInstall` or electron's `autoUpdater`, and replaces MacUpdater's
    into the staging folder) waits up to 60 s for the app's pid to exit, renames the old
    bundle to `.<App>.app.backup-<pid>` in the same folder (and stops, changing nothing, if
    that path already exists), moves the new one in, removes `com.apple.quarantine`, and
-   deletes the backup only after the new app was opened. It takes a `relaunch` argument:
+   deletes the backup once the swap succeeded (with `relaunch=1` only after the new app was
+   opened). If both the install rename and the restoring rename fail, the old app stays at
+   the backup path and the normal path is empty (logged; not recoverable by the helper). It takes a `relaunch` argument:
    "Restart now" passes `1` (open the new app; on failure restore the old bundle and open
    it); "Later" (a normal quit) passes `0` (the swap happens but no app is opened, also not
    the old one after a failed swap). It logs to `~/Library/Logs/Gamachine/update-swap.log`
