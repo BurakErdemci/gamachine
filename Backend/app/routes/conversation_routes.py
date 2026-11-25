@@ -3795,19 +3795,6 @@ Max 300 kelime. Türkçe yaz.
         wake_queue.enqueue(to_conv, mailbox.notice(from_conv))
         return {"status": mailbox.STATUS_QUEUED, "mail_id": mail_id, "to": to_conv}
 
-    def _own_mail(mail_id: Any, from_conv: Any) -> Optional[dict]:
-        """The row of `mail_id` if `from_conv` sent it; None for any other chat's."""
-        row = db.get_mail(mail_id) if type(mail_id) is int else None
-        if not isinstance(row, dict) or type(from_conv) is not int or row.get("from_conv") != from_conv:
-            return None
-        return row
-
-    def _mail_status(mail_id: Any, from_conv: Any) -> dict:
-        row = _own_mail(mail_id, from_conv)
-        if row is None:
-            return {"status": "gone", "error": "Not bulunamadı; sohbet silinmiş olabilir."}
-        return {"status": row["status"], "mail_id": mail_id, "to": row["to_conv"]}
-
     def _require_mail_chat(token: str, conv_id: Any) -> int:
         """The caller's user id if `conv_id` is one of their chats; 404 otherwise.
 
@@ -3822,11 +3809,6 @@ Max 300 kelime. Türkçe yaz.
         if type(owner) is not int or owner != user_id:
             raise HTTPException(status_code=404, detail="Sohbet bulunamadı.")
         return user_id
-
-    def _require_own_mail(token: str, mail_id: int, conv_id: Any) -> None:
-        _require_mail_chat(token, conv_id)
-        if _own_mail(mail_id, conv_id) is None:
-            raise HTTPException(status_code=404, detail="Not bulunamadı.")
 
     def _local_token() -> str:
         return os.environ.get("LOCAL_APP_TOKEN", "")
