@@ -319,6 +319,19 @@ def _restricting_permissions(perm) -> dict:
     return kept
 
 
+def _user_denies(perm):
+    """An agent's or mode's own permission block, keeping every deny the user
+    wrote, under any key: Gamachine owns none of those keys there, so a user's
+    per-agent read/edit/server deny must survive (audit 25 Nov 2026). Allow
+    and ask entries are dropped; a string "deny" stays, other strings go."""
+    if perm == "deny":
+        return "deny"
+    if not isinstance(perm, dict):
+        return {}
+    return {k: (dict(v) if isinstance(v, dict) else v)
+            for k, v in perm.items() if isinstance(k, str) and _is_restricting_value(v)}
+
+
 _READ_PROTECTED_PATTERNS = frozenset({"*", "*.env", "*.env.*", "*.env.example"})
 
 
@@ -540,7 +553,7 @@ class OpenCodeProvider(BaseCLIProvider):
                 entries = merged.get(section)
                 if isinstance(entries, dict):
                     merged[section] = {
-                        name: ({**entry, "permission": _restricting_permissions(entry["permission"])}
+                        name: ({**entry, "permission": _user_denies(entry["permission"])}
                                if isinstance(entry, dict) and "permission" in entry else entry)
                         for name, entry in entries.items()
                     }

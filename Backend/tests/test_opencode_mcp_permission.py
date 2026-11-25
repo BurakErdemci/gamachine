@@ -226,7 +226,14 @@ def test_agent_and_mode_permissions_keep_only_restricting_entries(tmp_path):
         },
     }
     cfg = _register(tmp_path / "ws", existing=existing)
+    # Every deny the user wrote for this agent survives, read tools included.
     assert cfg["agent"]["build"]["permission"] == {
+        "edit": "deny",
+        "read": "deny",
+        "glob": "deny",
+        "grep": "deny",
+        "probeother_*": "deny",
+        "unityai_read_file": "deny",
         "webfetch2": "deny",
         "task": {"*": "deny", "sub": "deny"},
     }
