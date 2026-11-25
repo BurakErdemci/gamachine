@@ -1,5 +1,7 @@
 import { generateKeyPairSync, sign } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
+import { createPublicKey } from 'node:crypto'
+import { MAC_UPDATE_PUBLIC_KEYS, UPDATE_PUBLIC_KEYS, keysWithBody } from '../main/helpers/update-keys'
 import { checkAvailable, parseManifest, verifyManifest } from '../main/helpers/update-signature'
 
 function keyPair() {
@@ -113,5 +115,29 @@ describe('checkAvailable', () => {
 
   it('refuses an ambiguous version line', () => {
     expect(checkAvailable({ version: '4.1.0', files: [exe] }, 'version: 4.1.0\nversion: 4.1.0\nsha512: AAAA+/bb==\npath: Gamachine-Setup-4.1.0.exe\n').ok).toBe(false)
+  })
+})
+
+describe('embedded update keys', () => {
+  const real = (pem: string) => `-----BEGIN PUBLIC KEY-----\n${pem}\n-----END PUBLIC KEY-----`
+
+  it('the Windows set is the two real keys, trimmed, unchanged by the empty-template rule', () => {
+    expect(UPDATE_PUBLIC_KEYS).toEqual([
+      real('MCowBQYDK2VwAyEAkqHWZ7dZ6RTVrhrlkuc0fLyigNM6PP6Xc96cwlSOtm0='),
+      real('MCowBQYDK2VwAyEAzEr6x50dQ2M9SKIfd/0ycq/u7UBlqjmxveXB8d3wFt0='),
+    ])
+  })
+
+  it('an empty PEM template is not a key, a key with a body is kept and trimmed', () => {
+    const empty = '\n-----BEGIN PUBLIC KEY-----\n-----END PUBLIC KEY-----\n'
+    expect(keysWithBody([empty, '', '  \n'])).toEqual([])
+    expect(keysWithBody([empty, `\n${real('AAAA')}\n`])).toEqual([real('AAAA')])
+  })
+
+  it('every embedded key is an Ed25519 public key, and no key is in both sets', () => {
+    for (const pem of [...UPDATE_PUBLIC_KEYS, ...MAC_UPDATE_PUBLIC_KEYS]) {
+      expect(createPublicKey(pem).asymmetricKeyType).toBe('ed25519')
+    }
+    expect(MAC_UPDATE_PUBLIC_KEYS.filter((k) => UPDATE_PUBLIC_KEYS.includes(k))).toEqual([])
   })
 })
