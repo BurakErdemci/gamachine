@@ -128,6 +128,15 @@ describe('embedded update keys', () => {
     ])
   })
 
+  // Pinned like the Windows set: a changed or emptied Mac key would silently refuse (or worse,
+  // accept a foreign) Mac update, and the 4.0.4 blind audit measured that no test caught it.
+  it('the Mac set is the owner-generated primary and backup key (26 Nov 2026), in that order', () => {
+    expect(MAC_UPDATE_PUBLIC_KEYS).toEqual([
+      real('MCowBQYDK2VwAyEAPLOwSV7BWNt/Gu3lYxCGZEfMATfCyOX5NHj/OzuDjL0='),
+      real('MCowBQYDK2VwAyEAXMdntnWR+1xoKNETLWXYXO8qgIdZBFG+UMWYHeCaUkY='),
+    ])
+  })
+
   it('an empty PEM template is not a key, a key with a body is kept and trimmed', () => {
     const empty = '\n-----BEGIN PUBLIC KEY-----\n-----END PUBLIC KEY-----\n'
     expect(keysWithBody([empty, '', '  \n'])).toEqual([])
