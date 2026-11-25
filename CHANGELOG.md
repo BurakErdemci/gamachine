@@ -16,8 +16,8 @@ A macOS update fix on top of v4.0.3.
   `Gamachine-4.0.4-arm64.dmg` and drag Gamachine to Applications. In those versions
   "Restart now" crashes the app instead of installing the update (Squirrel.Mac reads the
   whole 1.37 GB update into memory). Mac updates are signed with a separate key, so
-  those versions cannot verify 4.0.4: they show "the signature of the new version could
-  not be verified" with a button to the release page instead of crashing. That dialog is
+  those versions cannot verify 4.0.4: they show "The new version’s signature could not
+  be verified, so the update was not downloaded or installed." with a button to the release page instead of crashing. That dialog is
   expected; install from the dmg as described. 4.0.4 is the first version with the new
   Mac updater, so the first update that goes through it is 4.0.4 to 4.0.5.
 - **The Mac app installs updates itself, without Squirrel.Mac.** After the signed
