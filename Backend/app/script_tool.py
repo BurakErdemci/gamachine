@@ -987,12 +987,24 @@ KEEP_RUN_FILES = 50
 
 
 def runs_folder(workspace: str) -> Path:
-    """<workspace>/.gamachine/script-runs, or Gamachine's temp folder without a workspace (never the
-    server's cwd, audit AD-01)."""
+    """<workspace>/.gamachine/script-runs, or without a workspace the app's per-user data folder
+    beside its database (never the server's cwd, audit AD-01; never a shared temp folder another
+    local account could create or link first)."""
     if workspace and workspace.strip():
         return Path(workspace).joinpath(*RUNS_DIR)
-    import tempfile
-    return Path(tempfile.gettempdir()) / "Gamachine" / "script-runs"
+    db_path = os.environ.get("DB_PATH")
+    base = Path(db_path).parent if db_path else Path.home() / ".unity_architect_ai"
+    return base / "script-runs"
+
+
+def _own_private_folder(folder: Path) -> None:
+    """Create the no-workspace folder owner-only, and refuse one that is a link or someone else's."""
+    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if folder.is_symlink() or folder.is_junction() or not folder.is_dir():
+        raise OSError(f"{folder} is not a plain folder")
+    getuid = getattr(os, "getuid", None)
+    if getuid is not None and folder.stat().st_uid != getuid():
+        raise OSError(f"{folder} belongs to another user")
 
 
 def _prune(folder: Path) -> None:
@@ -1007,9 +1019,15 @@ def _prune(folder: Path) -> None:
 def _save_full(text: str, workspace: str) -> tuple[Optional[str], Optional[str]]:
     try:
         folder = runs_folder(workspace)
-        folder.mkdir(parents=True, exist_ok=True)
+        if workspace and workspace.strip():
+            folder.mkdir(parents=True, exist_ok=True)
+        else:
+            _own_private_folder(folder)
         path = folder / f"run-{time.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(3)}.txt"
-        path.write_text(text, encoding="utf-8")
+        # O_EXCL + O_NOFOLLOW: a name planted ahead of time is never written through.
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        with os.fdopen(os.open(path, flags, 0o600), "w", encoding="utf-8") as fh:
+            fh.write(text)
         _prune(folder)
         return str(path), None
     except OSError as exc:

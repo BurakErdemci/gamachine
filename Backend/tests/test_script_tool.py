@@ -38,6 +38,12 @@ _ALLOWED_PORTS: set = set()
 
 
 @pytest.fixture(autouse=True)
+def runs_off_real_home(monkeypatch, tmp_path_factory):
+    """A reply saved without a workspace goes beside DB_PATH; never the owner's real data folder."""
+    monkeypatch.setenv("DB_PATH", str(tmp_path_factory.mktemp("appdata") / "app.db"))
+
+
+@pytest.fixture(autouse=True)
 def port_guard(monkeypatch):
     """No HTTP call of this process may leave for an unstubbed target. localhost:8000 is the owner's
     live app, and a turn-2 fixture once reached it through an unstubbed group. Covers httpx (backend,
@@ -1190,9 +1196,25 @@ def test_saved_runs_keep_the_newest_50_and_never_use_the_cwd(tmp_path, monkeypat
     for _ in range(55):
         script_tool.format_reply(big, str(ws))
     assert len(list((ws / ".gamachine" / "script-runs").glob("run-*.txt"))) == script_tool.KEEP_RUN_FILES
-    import tempfile
-    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path / "temp"))
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "appdata" / "app.db"))
     monkeypatch.chdir(tmp_path)
     reply = script_tool.format_reply(big, "")
-    assert str(tmp_path / "temp" / "Gamachine" / "script-runs") in reply
+    assert str(tmp_path / "appdata" / "script-runs") in reply
     assert not (tmp_path / ".gamachine").exists()
+
+
+def test_saved_runs_without_a_workspace_refuse_a_linked_folder(tmp_path, monkeypatch):
+    big = script_tool.ScriptResult("ok", value="v" * 9000, has_value=True)
+    target = tmp_path / "elsewhere"
+    target.mkdir()
+    (tmp_path / "appdata").mkdir()
+    link = tmp_path / "appdata" / "script-runs"
+    if sys.platform == "win32":
+        import _winapi
+        _winapi.CreateJunction(str(target), str(link))  # needs no privilege, unlike a symlink
+    else:
+        os.symlink(target, link, target_is_directory=True)
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "appdata" / "app.db"))
+    reply = script_tool.format_reply(big, "")
+    assert "not a plain folder" in reply
+    assert not list(target.iterdir())

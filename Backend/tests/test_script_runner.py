@@ -25,6 +25,12 @@ _ELECTRON = {
 }.get(sys.platform, _ROOT / "Frontend/frontend/node_modules/electron/dist/electron")
 
 
+@pytest.fixture(autouse=True)
+def runs_off_real_home(monkeypatch, tmp_path_factory):
+    """A reply saved without a workspace goes beside DB_PATH; never the owner's real data folder."""
+    monkeypatch.setenv("DB_PATH", str(tmp_path_factory.mktemp("appdata") / "app.db"))
+
+
 def _runtime_or_skip(monkeypatch):
     if shutil.which("node"):
         monkeypatch.delenv(script_tool.NODE_ENV, raising=False)
