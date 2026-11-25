@@ -231,6 +231,26 @@ def test_plain_refusal_ends_the_script(runtime, procs):
     assert procs[0].poll() is not None
 
 
+
+def test_refusal_cancels_a_sibling_call_already_running(runtime, procs):
+    landed = []
+
+    async def refused(args):
+        await asyncio.sleep(0.3)
+        return Outcome.stop("save_file was refused by the user")
+
+    async def slow(args):
+        await asyncio.sleep(2.0)
+        landed.append(True)
+        return Outcome.ok(None)
+
+    code = "return await Promise.all([tools.refused({}), tools.slow({})]);"
+    result = run(script_tool.execute(code, [FakeGroup(refused=refused, slow=slow)], runtime=runtime))
+    assert result.kind == "refused"
+    assert result.seconds < 1.5
+    run(asyncio.sleep(2.2))
+    assert landed == []
+
 def test_cancel_kills_the_runner(runtime, procs):
     gate = asyncio.Event()
 

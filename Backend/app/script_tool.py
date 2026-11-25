@@ -666,7 +666,9 @@ async def execute(code: str, groups: Sequence[ToolGroup], *, timeout_s: Optional
         if proc.poll() is None:
             _kill(proc)  # no call can start any more while the last ones are waited for
         _drop_unstarted(tasks)
-        if result.kind not in ("timeout", "call_timeout") and tasks:
+        # Only a script that ended by itself waits for its started calls; after a refusal (the user's
+        # "no" or Stop), a crash or a memory limit they are cancelled, as before b07c9c95.
+        if result.kind in SETTLE_KINDS and tasks:
             await _settle(tasks, result, wall_end)
         else:
             _note_unawaited(result)
@@ -836,6 +838,9 @@ def _drop_unstarted(tasks: dict) -> None:
             record.status = "not run"
             record.reason = ("the script returned without awaiting it" if record.unawaited
                              else "the script ended before it started")
+
+
+SETTLE_KINDS = ("", "thrown")  # "" is a normal return (status ok)
 
 
 async def _settle(tasks: dict, result: ScriptResult, wall_end: float) -> None:
