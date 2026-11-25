@@ -38,6 +38,7 @@ through `configure`.
 from __future__ import annotations
 
 import json
+import re
 import logging
 import os
 import sys
@@ -515,6 +516,25 @@ def _first_line(text: str) -> str:
     return next((ln for ln in text.splitlines() if ln.strip()), "")
 
 
+# A shell wrapper around the real command (measured live on Codex 25 Nov 2026: the 80 chars went to
+# `"C:\Windows\...\powershell.exe" -Command "Set-…`, so the strip showed nothing useful).
+_SHELL_WRAPPER = re.compile(
+    r"""^\s*(?:"[^"]*?(?:powershell|pwsh|cmd|bash|sh|zsh)(?:\.exe)?"|'[^']*?(?:powershell|pwsh|cmd|bash|sh|zsh)(?:\.exe)?'|\S*?(?:powershell|pwsh|cmd|bash|sh|zsh)(?:\.exe)?)"""
+    r"""(?:\s+(?:-NoProfile|-NonInteractive|-NoLogo|-ExecutionPolicy\s+\S+|-l|/d|/s|/q))*"""
+    r"""\s+(?:-Command|-c|-lc|/c)\s+(.*)$""",
+    re.IGNORECASE | re.DOTALL)
+
+
+def _unwrap_shell(command: str) -> str:
+    match = _SHELL_WRAPPER.match(command)
+    if not match:
+        return command
+    inner = match.group(1).strip()
+    if len(inner) >= 2 and inner[0] == inner[-1] and inner[0] in "\"'":
+        inner = inner[1:-1]
+    return inner.strip() or command
+
+
 def _target_of(value: Any, depth: int = 0) -> str:
     """The path, command, script, pattern or url a tool call works on."""
     if depth > 3:
@@ -540,7 +560,7 @@ def _target_of(value: Any, depth: int = 0) -> str:
         if isinstance(v, list) and v and all(isinstance(x, str) for x in v):
             v = " ".join(v)  # an argv
         if isinstance(v, str) and v.strip():
-            return _first_line(v)
+            return _first_line(_unwrap_shell(v) if key in ("command", "cmd") else v)
     for key in _NESTED_KEYS:
         found = _target_of(value.get(key), depth + 1)
         if found:

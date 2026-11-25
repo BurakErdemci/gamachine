@@ -375,3 +375,17 @@ async def _start_unchecked(env, parent):
         return (await _start(env, parent, name="meşgul"))["chat_id"]
     finally:
         env.in_flight.discard(parent)
+
+
+@pytest.mark.parametrize("command, shown", [
+    ('"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" -Command "Set-Content hello.txt hi"',
+     "Set-Content hello.txt hi"),
+    ('pwsh -NoProfile -c "npm test"', "npm test"),
+    ("cmd /c dir /b", "dir /b"),
+    ("bash -lc 'pytest -q tests/x.py'", "pytest -q tests/x.py"),
+    (["bash", "-lc", "ls -la"], "ls -la"),
+    ("git status", "git status"),
+])
+def test_progress_target_shows_the_command_inside_a_shell_wrapper(command, shown):
+    # Measured live on Codex (25 Nov 2026): the wrapper used up the whole 80-char target.
+    assert subagents._target_of({"command": command}) == shown
