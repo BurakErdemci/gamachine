@@ -134,7 +134,7 @@ logs in to Unity for you.
 </tr>
 <tr>
 <td><b>7 subscription CLIs</b> run with your own login (Claude Code, Codex, Antigravity, Copilot, Cursor, OpenCode, Kimi Code), plus <b>9 API providers</b> and local Ollama. Keys stay on your computer.</td>
-<td>One work mode for every agent: <b>Safe Auto</b> (the default) lets routine work through and asks before critical, irreversible actions; <b>Step by Step</b> and <b>Auto</b> sit either side.</td>
+<td>One work mode for every agent: <b>Safe Auto</b> (the default) lets routine work through and asks before critical, irreversible actions; <b>Auto</b> asks for nothing.</td>
 </tr>
 </table>
 

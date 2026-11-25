@@ -36,8 +36,8 @@ The flow above applies to the **CLI agents** (Claude Code, Codex, Copilot, Curso
 
 The gate does not cover everything. The remaining deliberate trade-off is **file writes on the cloud API path**.
 
-The table describes **step mode**. The app has one global approval mode: in **auto
-mode** (the default on a fresh install) no card appears on any path, for Gamachine's
+The table describes **Safe Auto mode** (`balanced`, the default on a fresh install). The app has one global approval mode, `auto` or `balanced`; a legacy `step` is accepted and treated as `balanced`. In **auto
+mode** no card appears on any path, for Gamachine's
 own agents and for external MCP clients alike; a saved choice survives restarts.
 The fixed Unity file rule ([§5](#5-fixed-unity-file-rule-every-approval-mode)) holds
 in both modes.
@@ -61,7 +61,7 @@ in both modes.
 can import assets, compile scripts and reload the domain. That happens before the tool's own
 work, so every action of these tools counts as a write, pure queries such as
 `manage_scene action=get_hierarchy` included (`tool_actions.json`, `_preflight_refresh_note`).
-The read itself works as before; in step mode it just comes with a card.
+The read itself works as before; in Safe Auto mode it just comes with a card.
 
 **Why is `write_file` unapproved on the cloud API path?** Writing code into the workspace is what this product is for. Asking on every write trains reflex-approval, which does not strengthen the gate — it destroys it, and then the delete card that actually matters gets approved by the same reflex. Writes are instead **confined to the workspace** by `_validate_path` (`Path.resolve()` + prefix check). Deletes are rare and irreversible, so they always show a card.
 
@@ -79,7 +79,7 @@ Codex and agy are still handed unityMCP with `default_tools_approval_mode = "app
 - Safe (read-only) commands run directly; any command outside the whitelist shows an approval card
 - Attempts to write files via the terminal (`python3 -c "open().write()"`, `printf > path`, `echo > path`) are caught and routed to the DiffViewer
 - CLI built-in write tools (`Write`/`Edit`, etc.) are disabled via `disallowedTools` → the model is forced onto the approved channel (`save_file` / `unityai`)
-- agy ignores `disabledTools` (measured with agy 1.2.8) and runs with `--dangerously-skip-permissions`, so its gate is a PreToolUse hook that sees **every** built-in tool call (`.agents/hooks.json` matcher `.*`, since 4.0.3). In step and Safe Auto mode the hook is an allow-list: reads pass, the native writers (`write_file`/`edit_file` on agy 1.5.x, `write_to_file`/`replace_file_content` on 1.2.x) get an approval card, `run_command` passes only as a `unityai` bridge call (Safe Auto also lets routine commands through), `call_mcp_tool` is left to the Unity MCP server's own gate, and any other tool name is denied. v4.0.2 listed only the 1.2.x names, so agy 1.5.15's `write_file` wrote files with no card in step mode
+- agy ignores `disabledTools` (measured with agy 1.2.8) and runs with `--dangerously-skip-permissions`, so its gate is a PreToolUse hook that sees **every** built-in tool call (`.agents/hooks.json` matcher `.*`, since 4.0.3). In Safe Auto mode the hook is an allow-list: reads pass, the native writers (`write_file`/`edit_file` on agy 1.5.x, `write_to_file`/`replace_file_content` on 1.2.x) get an approval card, `run_command` passes only as a `unityai` bridge call (Safe Auto also lets routine commands through), `call_mcp_tool` is left to the Unity MCP server's own gate, and any other tool name is denied. v4.0.2 listed only the 1.2.x names, so agy 1.5.15's `write_file` wrote files with no card in Safe Auto mode
 
 ### 4. Local token architecture (ephemeral)
 
@@ -111,7 +111,7 @@ files under either of them) an agent may not:
   which orphans its `.meta`.
 
 This is a rule, not an approval card: it is checked before the approval mode, so it
-holds in **step and auto mode alike** and no card is shown for a call that would be
+holds in **Safe Auto and auto mode alike** and no card is shown for a call that would be
 refused anyway. The refusal goes back to the model with what to use instead: the
 Unity MCP tools (`manage_asset` move/rename/delete, `manage_scene`, `manage_prefabs`,
 `manage_material`, ...), which make Unity write the file and move the `.meta` with
