@@ -28,9 +28,6 @@ MAX_DEPTH = 2
 PAIR_LIMIT = 5
 PAIR_WINDOW_S = 10 * 60
 
-# Same budget as approval_bridge: agy cuts every MCP call at 180 s.
-CARD_WAIT_S = 150.0
-
 MAIL_MARKER = "📨"
 NOTICE_REASON = "mail"
 

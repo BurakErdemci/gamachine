@@ -1078,20 +1078,11 @@ def test_a_branch_copies_no_mail(env, auto):
 
 # ── ownership of the mailbox routes ──────────────────────────────────────────
 
-def test_status_and_cancel_answer_only_the_sending_chat(env):
-    a, b, c = _chat(env.db, "A"), _chat(env.db, "B"), _chat(env.db, "C")
-    foreign = _chat(env.db, "x", user_id=2)
-    data = _send(env.client, a, b).json()
-    mid = data["mail_id"]
-    get = lambda conv: env.client.get(f"/mailbox/status/{mid}", params={"conversation_id": conv}, headers=H)
-    assert get(a).status_code == 200 and get(a).json()["status"] == "queued"
-    assert get(c).status_code == 404          # another chat of the same user
-    assert get(b).status_code == 404          # even the recipient
-    assert get(foreign).status_code == 404    # another user's chat
-    for conv in (c, foreign):
-        r = env.client.post(f"/mailbox/cancel/{mid}", json={"conversation_id": conv}, headers=H)
-        assert r.status_code == 404
-    assert _rows(env.db, "SELECT status FROM mailbox") == [("queued",)]
+def test_removed_mail_card_routes_return_404(env):
+    a, b = _chat(env.db, "A"), _chat(env.db, "B")
+    mid = _send(env.client, a, b).json()["mail_id"]
+    assert env.client.get(f"/mailbox/status/{mid}", params={"conversation_id": a}, headers=H).status_code == 404
+    assert env.client.post(f"/mailbox/cancel/{mid}", json={"conversation_id": a}, headers=H).status_code == 404
 
 
 def test_chat_list_excludes_the_caller_and_side_rows_and_refuses_foreign_ids(env):

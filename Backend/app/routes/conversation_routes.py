@@ -1261,14 +1261,6 @@ def create_conversation_router(db, progress_store=None):  # Kept only for call c
             return None
         return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
 
-    def _deny_mail_card(gate_id: str, error: str, outcome: str = "cancelled") -> None:
-        _cards.close_card(gate_id, outcome)
-        if gate_id in _mcp_pending:
-            _mcp_results[gate_id] = {"status": "resolved", "approved": False, "error": error}
-            _mcp_result_ts[gate_id] = time()
-            _mcp_pending.pop(gate_id, None)
-            _release_gate(gate_id)
-
     def _mail_target_ok(conv_id: Any, user_id: int) -> bool:
         """A chat that may be woken for this user: exists, theirs, not a side chat."""
         if type(conv_id) is not int or conv_id <= 0:
@@ -3816,13 +3808,6 @@ Max 300 kelime. Türkçe yaz.
             return {"status": "gone", "error": "Not bulunamadı; sohbet silinmiş olabilir."}
         return {"status": row["status"], "mail_id": mail_id, "to": row["to_conv"]}
 
-    def _mail_cancel(mail_id: Any, from_conv: Any, error: str) -> dict:
-        """Both callers are a sender that stopped waiting: a timeout."""
-        row = _own_mail(mail_id, from_conv)
-        if row is not None and row.get("status") == mailbox.STATUS_PENDING and row.get("gate_id"):
-            _deny_mail_card(row["gate_id"], error, outcome="timed_out")
-        return _mail_status(mail_id, from_conv)
-
     def _require_mail_chat(token: str, conv_id: Any) -> int:
         """The caller's user id if `conv_id` is one of their chats; 404 otherwise.
 
@@ -3884,23 +3869,6 @@ Max 300 kelime. Türkçe yaz.
                                       body.get("body"), x_session_token))
         except _MailRefused as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.message)
-
-    @router.get("/mailbox/status/{mail_id}")
-    async def mailbox_status(mail_id: int, conversation_id: Optional[int] = None,
-                             x_session_token: str = Header(alias="X-Session-Token", default="")):
-        # Optional so a request without it reaches the token gate (401/503),
-        # not a 422 from validation; `_require_own_mail` then 404s it.
-        # Only the sending chat may read a note's status (404 for any other).
-        _require_own_mail(x_session_token, mail_id, conversation_id)
-        return _worded(_mail_status(mail_id, conversation_id))
-
-    @router.post("/mailbox/cancel/{mail_id}")
-    async def mailbox_cancel(mail_id: int, body: dict,
-                             x_session_token: str = Header(alias="X-Session-Token", default="")):
-        """The sending tool gave up waiting: its card must not be approvable later."""
-        conversation_id = body.get("conversation_id")
-        _require_own_mail(x_session_token, mail_id, conversation_id)
-        return _worded(_mail_cancel(mail_id, conversation_id, "Onay süresi doldu."))
 
     # Once per process per DB: on a router rebuild the pending rows are this
     # process's live cards, not the previous run's. The flag is set only after
