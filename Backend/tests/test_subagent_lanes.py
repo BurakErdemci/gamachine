@@ -52,16 +52,16 @@ def lanes_env(env, tmp_path, monkeypatch):
         state.created.append(rec)
         return rec
 
-    def fake_start_editor(record, *, free_bytes=None, running=0, **kw):
+    def fake_start_editor(record, *, free_bytes=None, running=0, starting=0, **kw):
         if state.start_exc is not None:
             raise state.start_exc
         record.pid = 4242
         record.state = "starting"
-        state.started.append((record, free_bytes, running))
+        state.started.append((record, free_bytes, running, starting))
         return record
 
     def fake_wait_ready(record, list_instances, **kw):
-        state.waited.append((record, list_instances))
+        state.waited.append((record, list_instances, kw))
         gate = state.wait_gate
         if gate is not None:
             assert gate.wait(timeout=5.0), "wait_gate never opened"
@@ -366,3 +366,81 @@ def test_list_instances_helper_reads_mcp_instances_and_handles_errors(monkeypatc
 
     monkeypatch.setattr(subagents.httpx, "get", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("down")))
     assert subagents._list_instances() == []
+
+
+async def test_lane_passes_starting_running_counts_and_probe_to_unity_lanes(lanes_env):
+    env, state = lanes_env
+    parent = _main(env)
+
+    gate_a = threading.Event()
+    state.wait_gate = gate_a
+    first = await _start_lane(env, parent, lane="lane-a")
+    await _until(lambda: len(state.waited) == 1)
+
+    # Start second lane while lane-a is still in state "starting".
+    gate_b = threading.Event()
+    state.wait_gate = gate_b
+    second = await _start_lane(env, parent, lane="lane-b")
+    await _until(lambda: len(state.waited) == 2)
+
+    # Release lane-a so it transitions to "ready", holding its turn open.
+    c_a = first["chat_id"]
+    _Runner.scripts[c_a] = ["hold", ("response", {"content": "a done"}), DONE]
+    gate_a.set()
+    await _until(lambda: len(_Runner.of(c_a)) == 1)
+
+    # Start third lane while lane-a is "ready" and lane-b is "starting".
+    state.wait_gate = None
+    await _start_lane(env, parent, lane="lane-c")
+    await _until(lambda: len(state.waited) == 3)
+
+    # started tuples: (record, free_bytes, running, starting)
+    assert (state.started[0][2], state.started[0][3]) == (0, 0)
+    assert (state.started[1][2], state.started[1][3]) == (0, 1)
+    assert (state.started[2][2], state.started[2][3]) == (1, 1)
+
+    for _, _, kw in state.waited:
+        assert kw.get("timeout_s") == 900
+        assert kw.get("probe") is subagents._probe_instance
+
+    gate_b.set()
+    _Runner.holds[c_a].set()
+    await _lanes_idle()
+
+
+def test_probe_instance_posts_read_console_and_handles_responses(monkeypatch):
+    seen = []
+
+    def make_post(status_code, payload):
+        def fake_post(url, *, headers, json, timeout):
+            seen.append((url, headers, json, timeout))
+            return types.SimpleNamespace(status_code=status_code, json=lambda: payload)
+
+        return fake_post
+
+    from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
+    monkeypatch.setattr(unity_mcp_manager, "mcp_port", 19002)
+    monkeypatch.setattr(unity_mcp_manager, "api_headers", lambda: {"X-Probe": "yes"})
+
+    inst = {"project": "BenchClone", "hash": "1234567890abcdef"}
+    monkeypatch.setattr(subagents.httpx, "post", make_post(200, {"status": "success", "result": {}}))
+    assert subagents._probe_instance(inst) is True
+    assert seen == [(
+        "http://localhost:19002/api/command",
+        {"X-Probe": "yes"},
+        {
+            "type": "read_console",
+            "params": {"action": "get", "count": 1},
+            "unity_instance": "BenchClone@1234567890abcdef",
+        },
+        10.0,
+    )]
+
+    monkeypatch.setattr(subagents.httpx, "post", make_post(500, {"status": "error"}))
+    assert subagents._probe_instance(inst) is False
+
+    monkeypatch.setattr(subagents.httpx, "post", make_post(200, {"status": "error"}))
+    assert subagents._probe_instance(inst) is False
+
+    monkeypatch.setattr(subagents.httpx, "post", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")))
+    assert subagents._probe_instance(inst) is False

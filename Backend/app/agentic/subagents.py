@@ -336,8 +336,15 @@ def _running_lane_count(exclude_key: Optional[tuple] = None) -> int:
     with _LOCK:
         return sum(
             1 for k, r in _LANES.items()
-            if k != exclude_key and r.state in ("starting", "ready")
+            if k != exclude_key and r.state == "ready"
         )
+
+
+def _lane_counts(exclude_key: Optional[tuple] = None) -> tuple:
+    with _LOCK:
+        ready = sum(1 for k, r in _LANES.items() if k != exclude_key and r.state == "ready")
+        starting = sum(1 for k, r in _LANES.items() if k != exclude_key and r.state == "starting")
+    return ready, starting
 
 
 def _list_instances() -> list:
@@ -357,11 +364,33 @@ def _list_instances() -> list:
     return []
 
 
-def _start_editor_sync(record: unity_lanes.LaneRecord, running: int) -> None:
+def _probe_instance(instance: dict) -> bool:
+    from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
+    try:
+        resp = httpx.post(
+            f"http://localhost:{unity_mcp_manager.mcp_port}/api/command",
+            headers=unity_mcp_manager.api_headers(),
+            json={
+                "type": "read_console",
+                "params": {"action": "get", "count": 1},
+                "unity_instance": f"{instance['project']}@{instance['hash']}",
+            },
+            timeout=10.0,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            return isinstance(data, dict) and data.get("status") == "success"
+    except Exception:
+        pass
+    return False
+
+
+def _start_editor_sync(record: unity_lanes.LaneRecord, running: int, starting: int = 0) -> None:
     unity_lanes.start_editor(
         record,
         free_bytes=unity_lanes.free_memory_bytes(),
         running=running,
+        starting=starting,
     )
 
 
@@ -439,10 +468,16 @@ async def _run_lane_and_turn(row: dict, lane_key: tuple, main_project: Optional[
                     created.state = "starting"
                     _LANES[lane_key] = created
                 record = created
-        running_count = _running_lane_count(exclude_key=lane_key)
-        await asyncio.to_thread(_start_editor_sync, record, running_count)
+        running_count, starting_count = _lane_counts(exclude_key=lane_key)
+        await asyncio.to_thread(_start_editor_sync, record, running_count, starting_count)
         started_editor = True
-        await asyncio.to_thread(unity_lanes.wait_ready, record, _list_instances)
+        await asyncio.to_thread(
+            unity_lanes.wait_ready,
+            record,
+            _list_instances,
+            timeout_s=900,
+            probe=_probe_instance,
+        )
         with _LOCK:
             if record.state in ("created", "starting"):
                 record.state = "ready"
