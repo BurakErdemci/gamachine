@@ -1,24 +1,24 @@
-"""Pick the workspace a Unity MCP call is scoped to: the lane folder for a lane sub-agent chat."""
+"""Pick the workspace a Unity MCP call is scoped to: a valid lane folder for a lane sub-agent chat across project switches."""
 
 import os
 from typing import Optional
 
-
-def _real(path: str) -> str:
-    return os.path.normcase(os.path.realpath(path))
+import unity_lanes
 
 
 def scope_workspace(db, conversation_id: int, user_id: int) -> Optional[str]:
     main = db.get_last_workspace(user_id)
     try:
-        if not main or db.get_agent_of(conversation_id) is None:
+        if db.get_agent_of(conversation_id) is None:
             return main
         own = db.get_conversation_workspace(conversation_id)
-        if not own:
+        if not own or not os.path.isdir(own):
             return main
-        lanes = _real(os.path.join(main, ".gamachine", "lanes"))
-        # realpath on both sides: a link inside the lanes folder must not escape it
-        if os.path.dirname(_real(own)) == lanes and os.path.isdir(own):
+        real_own = os.path.realpath(own)
+        unity_lanes.validate_name(os.path.basename(real_own))
+        lanes_dir = os.path.dirname(real_own)
+        gamachine_dir = os.path.dirname(lanes_dir)
+        if os.path.basename(lanes_dir) == "lanes" and os.path.basename(gamachine_dir) == ".gamachine":
             return own
     except Exception:
         pass

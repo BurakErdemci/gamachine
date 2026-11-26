@@ -132,3 +132,36 @@ def test_routes_use_scoped_workspace(env):
     assert check(agent, str(lane))["ok"] is True
     assert check(agent, str(main))["ok"] is False
     assert check(normal, str(main))["ok"] is True
+
+
+def test_lane_chat_keeps_lane_after_project_switch(env):
+    db, main, tmp = env
+    lane = main / ".gamachine" / "lanes" / "x"
+    lane.mkdir()
+    chat = _agent_chat(db, lane)
+    other = tmp / "OtherProject"
+    other.mkdir()
+    db.save_workspace(1, str(other))
+    assert scope_workspace(db, chat, 1) == str(lane)
+
+
+def test_agent_chat_invalid_lane_shapes_get_main(env):
+    db, main, tmp = env
+    notlanes = tmp / "proj" / "notlanes" / "x"
+    notlanes.mkdir(parents=True)
+    nested = tmp / "proj" / ".gamachine" / "lanes" / "x" / "sub"
+    nested.mkdir(parents=True)
+    missing = tmp / "proj" / ".gamachine" / "lanes" / "missing"
+    bad_name = tmp / "proj" / ".gamachine" / "lanes" / "BadName"
+    bad_name.mkdir(parents=True)
+    for ws in (notlanes, nested, missing, bad_name):
+        assert scope_workspace(db, _agent_chat(db, ws), 1) == str(main)
+
+
+def test_normal_chat_with_lane_shaped_workspace_gets_main(env):
+    db, main, tmp = env
+    other = tmp / "OtherProject"
+    lane = other / ".gamachine" / "lanes" / "alpha"
+    lane.mkdir(parents=True)
+    chat = db.create_conversation(1, "t", workspace=str(lane))
+    assert scope_workspace(db, chat, 1) == str(main)
