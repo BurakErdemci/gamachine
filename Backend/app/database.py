@@ -986,7 +986,8 @@ class DatabaseManager:
                 "created_at": r[8], "updated_at": r[9], "last_result": r[10]}
 
     def create_subagent(self, parent_conv: int, user_id: int, name: str, provider_type: str,
-                        model_name: str, effort: str, status: str) -> Optional[Dict[str, Any]]:
+                        model_name: str, effort: str, status: str,
+                        workspace: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """A hidden child chat of `parent_conv` (same user, the folder its turns run in now, its
         model stamped) and its sub-agent row, in one transaction. None if the
         parent is gone, another user's, a side chat or itself a sub-agent's."""
@@ -1007,7 +1008,7 @@ class DatabaseManager:
                 'INSERT INTO conversations (user_id, title, created_at, updated_at, hidden, '
                 'agent_of, workspace, provider_type, model_name, title_source) '
                 "VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, 'user')",
-                (user_id, name, now_s, now_s, parent_conv, current or row[3], provider_type, model_name)
+                (user_id, name, now_s, now_s, parent_conv, workspace or current or row[3], provider_type, model_name)
             ).lastrowid
             agent_id = conn.execute(
                 'INSERT INTO subagents (parent_conv, child_conv, name, provider_type, model_name, '

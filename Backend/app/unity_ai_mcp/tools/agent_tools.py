@@ -77,12 +77,15 @@ async def agent_models() -> str:
     return await _call("GET", "/subagents/models")
 
 
-async def agent_start(model: str, brief: str, effort: str = "auto", name: str = "") -> str:
+async def agent_start(model: str, brief: str, effort: str = "auto", name: str = "",
+                      lane: str = "") -> str:
     # A helper runs as an ordinary turn, so a read-only turn must not start or steer one.
     if (refusal := read_only_refusal()) is not None:
         return refusal
-    return await _call("POST", "/subagents/start",
-                       body={"model": model, "brief": brief, "effort": effort, "name": name})
+    body = {"model": model, "brief": brief, "effort": effort, "name": name}
+    if lane:
+        body["lane"] = lane
+    return await _call("POST", "/subagents/start", body=body)
 
 
 async def agent_message(agent_id: int, text: str) -> str:
@@ -115,9 +118,15 @@ def register_agent_tools(mcp: MCPServer) -> None:
         "`effort` (one of that model's levels, default auto), working on `brief`. Write the "
         "brief so it stands alone (goal, files, limits, what to report); the sub-agent ends "
         "with a self-contained report, which comes back here as its result (long results are "
-        "cut; agent_result gives the full text). `name` is an optional short label. " + _RULES))
-    async def agent_start_tool(model: str, brief: str, effort: str = "auto", name: str = "") -> str:
-        return await agent_start(model, brief, effort, name)
+        "cut; agent_result gives the full text). `name` is an optional short label. "
+        "`lane`: optional Unity lane name (lowercase letters, digits, hyphen). The helper then "
+        "works in its own git worktree with its own batch-mode Unity editor, so it can change "
+        "scenes/prefabs and run play tests in parallel with other helpers. Use it only when "
+        "helpers would touch the same scene or prefab or need play tests at the same time, and "
+        "ask the user first. Give each lane helper its own scenes/prefabs in the brief. " + _RULES))
+    async def agent_start_tool(model: str, brief: str, effort: str = "auto", name: str = "",
+                               lane: str = "") -> str:
+        return await agent_start(model, brief, effort, name, lane)
 
     @mcp.tool(name=TOOL_MESSAGE, description=(
         "Sends `text` to sub-agent `agent_id`. A running sub-agent gets it at its next turn "

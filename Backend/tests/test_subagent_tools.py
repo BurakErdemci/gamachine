@@ -79,7 +79,7 @@ def test_tool_descriptions_carry_the_rules():
     assert "next turn" in tools["agent_message"].description
     assert "do not call this in a loop" in tools["agent_list"].description
     params = tools["agent_start"].input_schema["properties"]
-    assert set(params) == {"model", "brief", "effort", "name"}
+    assert set(params) == {"model", "brief", "effort", "name", "lane"}
 
 
 def test_tools_carry_the_call_with_the_spawned_chat(backend):

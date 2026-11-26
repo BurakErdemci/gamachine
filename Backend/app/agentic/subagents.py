@@ -37,6 +37,7 @@ through `configure`.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import logging
@@ -47,7 +48,10 @@ import time
 from collections import deque
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
+import httpx
+
 from agentic import turn_runner
+import unity_lanes
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +97,12 @@ RESULT_CONTRACT = (
     "found, what you did not check): your last message is sent to the main agent as "
     "your result.")
 
+LANE_NOTE = (
+    "You work in a Unity lane: this folder is a git worktree on branch gamachine/{name} with "
+    "its own Unity editor (batch mode, no window). Change only the scenes and prefabs the brief "
+    "gives you. Save every scene and prefab you change, then commit your work on this branch "
+    "before your final report.")
+
 _DB: Any = None
 _STOP_CHILD: Optional[Callable[[int], Awaitable[None]]] = None
 _RESUME_CHILD: Optional[Callable[[int], None]] = None
@@ -105,6 +115,11 @@ _FUSE_NOTED: set = set()
 _PAUSED: set = set()
 # Child chats whose turns failed to open, in a row (the gate retries them).
 _OPEN_FAILS: Dict[int, int] = {}
+# Unity lanes: (user_id, main_project_realpath, lane_name) -> LaneRecord.
+_LANES: Dict[tuple, unity_lanes.LaneRecord] = {}
+_CHILD_LANE: Dict[int, tuple] = {}
+_LANE_TASKS: Dict[int, asyncio.Task] = {}
+_STOP_TASKS: Dict[tuple, asyncio.Task] = {}
 
 # ── live progress (in memory) ────────────────────────────────────────────────
 THINKING, WRITING, RUNNING_TOOL, WAITING_APPROVAL, QUEUED = (
@@ -140,6 +155,18 @@ class SubagentError(Exception):
         self.extra = extra
 
 
+def _clear_state_locked() -> None:
+    _FUSE.clear()
+    _FUSE_NOTED.clear()
+    _PAUSED.clear()
+    _OPEN_FAILS.clear()
+    _PROGRESS.clear()
+    _LANES.clear()
+    _CHILD_LANE.clear()
+    _LANE_TASKS.clear()
+    _STOP_TASKS.clear()
+
+
 def configure(db: Any, *, stop_child: Optional[Callable[[int], Awaitable[None]]] = None,
               resume_child: Optional[Callable[[int], None]] = None) -> None:
     """Bind the database and the router's hooks (at router creation, once per
@@ -148,11 +175,7 @@ def configure(db: Any, *, stop_child: Optional[Callable[[int], Awaitable[None]]]
     global _DB, _STOP_CHILD, _RESUME_CHILD
     _DB, _STOP_CHILD, _RESUME_CHILD = db, stop_child, resume_child
     with _LOCK:
-        _FUSE.clear()
-        _FUSE_NOTED.clear()
-        _PAUSED.clear()
-        _OPEN_FAILS.clear()
-        _PROGRESS.clear()
+        _clear_state_locked()
     from agentic import cards
     cards.set_tagger(card_tag)
     try:
@@ -301,17 +324,192 @@ def _clean_name(name: Any, fallback: str) -> str:
     return text or fallback
 
 
+def _real_path(path: str) -> str:
+    return os.path.normcase(os.path.realpath(path))
+
+
+def _is_git_worktree(directory: str) -> bool:
+    return os.path.isdir(directory) and os.path.exists(os.path.join(directory, ".git"))
+
+
+def _running_lane_count(exclude_key: Optional[tuple] = None) -> int:
+    with _LOCK:
+        return sum(
+            1 for k, r in _LANES.items()
+            if k != exclude_key and r.state in ("starting", "ready")
+        )
+
+
+def _list_instances() -> list:
+    from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
+    try:
+        resp = httpx.get(
+            f"http://localhost:{unity_mcp_manager.mcp_port}/api/instances",
+            headers=unity_mcp_manager.api_headers(),
+            timeout=3.0,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            instances = data.get("instances")
+            return instances if isinstance(instances, list) else []
+    except Exception:
+        pass
+    return []
+
+
+def _start_editor_sync(record: unity_lanes.LaneRecord, running: int) -> None:
+    unity_lanes.start_editor(
+        record,
+        free_bytes=unity_lanes.free_memory_bytes(),
+        running=running,
+    )
+
+
+async def _stop_lane_editor(lane_key: tuple, record: unity_lanes.LaneRecord) -> None:
+    with _LOCK:
+        if record.state == "stopped" and record.proc is None and record.job is None:
+            return
+    try:
+        await asyncio.to_thread(unity_lanes.stop_editor, record)
+    except Exception:
+        logger.exception("[subagents] lane %s editor not stopped", record.name)
+    with _LOCK:
+        record.state = "stopped"
+        cur = asyncio.current_task()
+        if _STOP_TASKS.get(lane_key) is cur:
+            _STOP_TASKS.pop(lane_key, None)
+
+
+def _schedule_stop_lane(child: int) -> None:
+    with _LOCK:
+        lane_key = _CHILD_LANE.get(child)
+        record = _LANES.get(lane_key) if lane_key is not None else None
+    if lane_key is None or record is None:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        try:
+            unity_lanes.stop_editor(record)
+        except Exception:
+            logger.exception("[subagents] lane %s editor not stopped", record.name)
+        with _LOCK:
+            record.state = "stopped"
+        return
+    with _LOCK:
+        existing = _STOP_TASKS.get(lane_key)
+        if existing is not None and not existing.done():
+            return
+        task = loop.create_task(_stop_lane_editor(lane_key, record))
+        _STOP_TASKS[lane_key] = task
+
+
+async def _run_lane_and_turn(row: dict, lane_key: tuple, main_project: Optional[str],
+                             lane_name: str, lane_ws: str, prompt: str,
+                             create_if_missing: bool) -> None:
+    child = row["child_conv"]
+    with _LOCK:
+        record = _LANES.get(lane_key)
+        stop_task = _STOP_TASKS.get(lane_key)
+    if record is None:
+        return
+    started_editor = False
+    try:
+        if stop_task is not None and not stop_task.done():
+            try:
+                await stop_task
+            except Exception:
+                pass
+            with _LOCK:
+                record.state = "starting"
+        if create_if_missing:
+            if _is_git_worktree(lane_ws):
+                reused = unity_lanes.LaneRecord(
+                    name=lane_name, dir=lane_ws,
+                    branch=f"gamachine/{lane_name}", state="starting",
+                )
+                with _LOCK:
+                    _LANES[lane_key] = reused
+                record = reused
+            else:
+                created = await asyncio.to_thread(
+                    unity_lanes.create_lane, main_project, lane_name,
+                )
+                with _LOCK:
+                    created.state = "starting"
+                    _LANES[lane_key] = created
+                record = created
+        running_count = _running_lane_count(exclude_key=lane_key)
+        await asyncio.to_thread(_start_editor_sync, record, running_count)
+        started_editor = True
+        await asyncio.to_thread(unity_lanes.wait_ready, record, _list_instances)
+        with _LOCK:
+            if record.state in ("created", "starting"):
+                record.state = "ready"
+        cur_row = _DB.get_subagent(row["id"]) if _DB is not None else None
+        if cur_row is None or cur_row["status"] == STOPPED:
+            await _stop_lane_editor(lane_key, record)
+            return
+        turn_runner.start_background_turn(child, prompt, "user")
+    except asyncio.CancelledError:
+        if started_editor or record.proc is not None or record.job is not None:
+            await _stop_lane_editor(lane_key, record)
+        else:
+            with _LOCK:
+                record.state = "stopped"
+        raise
+    except Exception as exc:
+        logger.exception("[subagents] lane %s startup failed for agent %s", lane_name, row["id"])
+        if started_editor or record.proc is not None or record.job is not None:
+            try:
+                await asyncio.to_thread(unity_lanes.stop_editor, record)
+            except Exception:
+                logger.exception("[subagents] lane %s editor stop after failure failed", lane_name)
+        with _LOCK:
+            if record.state in ("created", "starting", "ready"):
+                record.state = "failed"
+        cur_row = _DB.get_subagent(row["id"]) if _DB is not None else None
+        if cur_row is not None and cur_row["status"] != STOPPED:
+            reason = str(exc).strip() or type(exc).__name__
+            body = f"error: lane not started ({reason})"
+            _DB.set_subagent_status(row["id"], ERROR, last_result=body)
+            _deliver({**row, "status": ERROR}, body)
+    finally:
+        with _LOCK:
+            if _LANE_TASKS.get(child) is asyncio.current_task():
+                _LANE_TASKS.pop(child, None)
+
+
 def start(parent: int, user_id: int, *, model: Any, effort: Any, brief: Any,
-          name: Any = None, catalog: Any = None) -> dict:
+          name: Any = None, catalog: Any = None, lane: Any = None) -> dict:
     """Create the child chat and run its first turn in the background.
     Must be called on the backend's event loop."""
     if not isinstance(brief, str) or not brief.strip():
         raise SubagentError(400, "brief is required.", "bad_brief")
     if len(brief) > BRIEF_MAX_CHARS:
         raise SubagentError(400, f"brief is longer than {BRIEF_MAX_CHARS} characters.", "bad_brief")
+    lane_name: Optional[str] = None
+    main_project: Optional[str] = None
+    lane_key: Optional[tuple] = None
+    lane_ws: Optional[str] = None
+    if lane is not None and lane != "":
+        try:
+            lane_name = unity_lanes.validate_name(lane)
+        except ValueError as exc:
+            raise SubagentError(400, str(exc), "bad_lane")
+        main_project = _DB.get_last_workspace(user_id)
+        if not main_project:
+            raise SubagentError(400, "Bir Unity projesi açık değil; şerit açılamaz.", "no_project")
+        lane_key = (user_id, _real_path(main_project), lane_name)
+        with _LOCK:
+            existing = _LANES.get(lane_key)
+            if existing is not None and existing.state in ("starting", "ready"):
+                raise SubagentError(409, "Bu şerit başka bir yardımcıda çalışıyor.", "lane_busy")
+        lane_ws = unity_lanes.lane_dir(main_project, lane_name)
     model, family, effort = check_pick(user_id, model, effort, catalog)
     name = _clean_name(name, f"{family}-{len(_DB.list_subagents(parent)) + 1}")
-    row = _DB.create_subagent(parent, user_id, name, "subscription", model, effort, RUNNING)
+    row = _DB.create_subagent(parent, user_id, name, "subscription", model, effort, RUNNING,
+                              workspace=lane_ws)
     if row is None:
         raise SubagentError(404, "This chat cannot start sub-agents.", "unknown_chat")
     child = row["child_conv"]
@@ -320,6 +518,31 @@ def start(parent: int, user_id: int, *, model: Any, effort: Any, brief: Any,
     _DB.save_turn_settings(child, user_id, saved.get("language") or "tr",
                            saved.get("ui_language"), saved.get("thinking_level") or "medium",
                            effort, bool(saved.get("ultracode")))
+    if lane_name is not None and lane_key is not None and lane_ws is not None:
+        loop = asyncio.get_running_loop()
+        placeholder = unity_lanes.LaneRecord(
+            name=lane_name, dir=lane_ws, branch=f"gamachine/{lane_name}", state="starting",
+        )
+        with _LOCK:
+            _LANES[lane_key] = placeholder
+            _CHILD_LANE[child] = lane_key
+        prompt = f"{brief.strip()}\n\n{LANE_NOTE.format(name=lane_name)}\n\n{RESULT_CONTRACT}"
+        task = loop.create_task(
+            _run_lane_and_turn(
+                row, lane_key, main_project, lane_name, lane_ws, prompt,
+                create_if_missing=True,
+            )
+        )
+        with _LOCK:
+            _LANE_TASKS[child] = task
+        return {
+            "status": RUNNING, "agent_id": row["id"], "chat_id": child, "name": name,
+            "model": model, "effort": effort, "lane": lane_name,
+            "text": (f"Sub-agent #{row['id']} \"{name}\" ({model}, effort {effort}) started "
+                     f"in lane \"{lane_name}\". The lane is starting (a new lane needs a few "
+                     "minutes for its first Unity import); its result arrives in this chat by "
+                     "itself when it finishes; do not poll agent_list."),
+        }
     try:
         # "user": the brief is this chat's instruction, and a CLI handoff
         # transcript keeps user rows (it drops system ones).
@@ -353,6 +576,12 @@ def message(parent: int, agent_id: Any, text: Any) -> dict:
     if len(text) > MESSAGE_MAX_CHARS:
         raise SubagentError(400, f"text is longer than {MESSAGE_MAX_CHARS} characters.", "bad_text")
     child = row["child_conv"]
+    with _LOCK:
+        lane_key = _CHILD_LANE.get(child)
+        record = _LANES.get(lane_key) if lane_key is not None else None
+        restart_lane = record is not None and record.state in ("stopped", "failed")
+        if restart_lane:
+            record.state = "starting"
     if _RESUME_CHILD is not None:
         try:
             _RESUME_CHILD(child)
@@ -361,6 +590,21 @@ def message(parent: int, agent_id: Any, text: Any) -> dict:
     _DB.set_subagent_status(row["id"], RUNNING)
     with _LOCK:
         _OPEN_FAILS.pop(child, None)  # the gate also starts its retries over
+    if restart_lane and lane_key is not None and record is not None:
+        loop = asyncio.get_running_loop()
+        task = loop.create_task(
+            _run_lane_and_turn(
+                row, lane_key, None, record.name, record.dir,
+                text.strip(), create_if_missing=False,
+            )
+        )
+        with _LOCK:
+            _LANE_TASKS[child] = task
+        return {
+            "status": "started", "agent_id": row["id"],
+            "text": (f"Sub-agent #{row['id']} \"{row['name']}\" lane \"{record.name}\" is "
+                     "starting; it continues with the message once ready. Its result arrives by itself."),
+        }
     status = turn_runner.start_background_turn(child, text.strip(), "user")
     if status == "queued":
         said = "is running; the message reaches it at its next turn boundary"
@@ -377,6 +621,16 @@ async def _stop_row(row: dict) -> None:
         _DB.claim_turn_inputs(child)  # queued messages are dropped, not run later
     except Exception:
         logger.exception("[subagents] child %s queued inputs not dropped", child)
+    with _LOCK:
+        lane_task = _LANE_TASKS.pop(child, None)
+        lane_key = _CHILD_LANE.get(child)
+        record = _LANES.get(lane_key) if lane_key is not None else None
+    if lane_task is not None and not lane_task.done():
+        lane_task.cancel()
+        try:
+            await lane_task
+        except BaseException:
+            pass
     if _STOP_CHILD is not None:
         try:
             await _STOP_CHILD(child)
@@ -384,6 +638,8 @@ async def _stop_row(row: dict) -> None:
             logger.exception("[subagents] child %s not stopped", child)
     else:
         turn_runner.cancel_background_turns(child)
+    if lane_key is not None and record is not None:
+        await _stop_lane_editor(lane_key, record)
 
 
 async def stop(parent: int, agent_id: Any) -> dict:
@@ -817,6 +1073,7 @@ def _child_turn_ended(child: int, reply: str, error: Optional[str], cancelled: b
         # The gate gave up: its inputs wait for the next agent_message.
         body = f"error: the sub-agent's turn could not start ({(error or 'error').strip()})"
         _DB.set_subagent_status(row["id"], ERROR, last_result=body)
+        _schedule_stop_lane(child)
         _deliver({**row, "status": ERROR}, body)
         return
     text = (reply or "").strip() or _last_assistant_after(child, floor)
@@ -831,6 +1088,8 @@ def _child_turn_ended(child: int, reply: str, error: Optional[str], cancelled: b
     if _DB.count_turn_inputs(child) > 0:
         status = RUNNING  # a queued message starts its next turn now
     _DB.set_subagent_status(row["id"], status, last_result=body)
+    if status != RUNNING:
+        _schedule_stop_lane(child)
     _deliver({**row, "status": status}, body)
 
 
@@ -943,8 +1202,4 @@ def reset() -> None:
     global _DB, _STOP_CHILD, _RESUME_CHILD
     _DB, _STOP_CHILD, _RESUME_CHILD = None, None, None
     with _LOCK:
-        _FUSE.clear()
-        _FUSE_NOTED.clear()
-        _PAUSED.clear()
-        _OPEN_FAILS.clear()
-        _PROGRESS.clear()
+        _clear_state_locked()

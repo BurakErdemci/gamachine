@@ -106,7 +106,8 @@ def create_subagent_router(db: Any,
         try:
             return subagents.start(parent, user_id, model=body.get("model"),
                                    effort=body.get("effort"), brief=body.get("brief"),
-                                   name=body.get("name"), catalog=catalog)
+                                   name=body.get("name"), catalog=catalog,
+                                   lane=body.get("lane"))
         except subagents.SubagentError as exc:
             raise _refused(exc)
 

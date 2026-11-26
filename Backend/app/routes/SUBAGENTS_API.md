@@ -81,6 +81,15 @@ are done).
   click: results are released once).
 - 409 `{"detail": {"message": "...", "code": "turn_running"}}`: the chat or a helper is running a turn.
 
+## POST /subagents/start
+
+Body `{"conversation_id": N, "model": "...", "brief": "...", "effort": "auto", "name": "...", "lane": "..."}` (`effort`, `name`, and `lane` are optional). When `lane` is non-empty, the sub-agent's hidden chat runs in a Unity lane (a git worktree plus its own batch-mode Unity editor at `<project>/.gamachine/lanes/<lane>`) and its first turn starts once that editor connects to Unity MCP.
+
+- 200 `{"status": "running", "agent_id": A, "chat_id": C, "name": "...", "model": "...", "effort": "...", "text": "..."}` (includes `"lane": "<name>"` when started in a lane).
+- 400 (`bad_lane`): invalid `lane` name (must be 1–32 chars of lowercase letters, digits and hyphens, starting with a letter or digit).
+- 400 (`no_project`): no workspace/Unity project is open for the user.
+- 409 (`lane_busy`): another sub-agent is currently starting or running in that lane.
+
 ## POST /subagents/stop
 
 Body `{"conversation_id": N, "agent_id": A}` (the row's `id`). Stops the helper's running turn, drops its
