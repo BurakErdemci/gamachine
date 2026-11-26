@@ -86,12 +86,14 @@ describe('mac installer: where the app runs from', () => {
     expect(run).not.toHaveBeenCalled()
   })
 
-  it('accepts an app in a writable folder', async () => {
+  // The installer only accepts POSIX bundle paths (/….app/Contents/MacOS/…), and these
+  // cases put the bundle in a real temp folder, which is C:\… on Windows. CI runs on Linux.
+  it.skipIf(process.platform === 'win32')('accepts an app in a writable folder', async () => {
     await expect(installer().inst.refusal()).resolves.toBeUndefined()
   })
 })
 
-describe('mac installer: staging', () => {
+describe.skipIf(process.platform === 'win32')('mac installer: staging', () => {
   it('unpacks the zip next to the bundle with ditto and checks the unpacked app', async () => {
     const { inst, run } = installer()
     const staged = await inst.stage('/cache/update.zip', '4.0.4')
