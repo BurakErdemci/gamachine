@@ -451,6 +451,13 @@ namespace MCPForUnity.Editor.Services
 
         private bool StopLocalHttpServerInternal(bool quiet, int? portOverride = null, bool allowNonLocalUrl = false)
         {
+            // The server belongs to the user's editor or to Gamachine; a lane closing (its quit
+            // cleanup lands here) must not take it down for everyone else.
+            if (McpPrefs.IsLane)
+            {
+                return false;
+            }
+
             string httpUrl = HttpEndpointUtility.GetLocalBaseUrl();
             if (!allowNonLocalUrl && !IsLocalUrl(httpUrl))
             {
