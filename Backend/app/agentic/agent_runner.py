@@ -71,6 +71,7 @@ Do not guess, assume or recall the Unity Editor's state (scene contents, hierarc
 Short, direct and technical. Do not repeat greetings or recaps of the project in follow-up replies."""
 import agent_guide
 import harness_notes
+import scene_mode
 from agent_guide import compose as compose_agent_guide, get_addendum
 from providers.unity_script_tools import DISALLOWED_UNITY_TOOLS
 
@@ -1967,9 +1968,17 @@ class AgentRunner:
             except Exception:
                 mode = "balanced"
         self._mode_note = agent_guide.mode_note(language, mode, toggle_on)
+        workspace_path = getattr(self, "workspace_path", None)
+        current_scene_mode = None
+        if workspace_path:
+            try:
+                current_scene_mode = scene_mode.get(workspace_path)
+            except Exception:
+                current_scene_mode = None
         self._agent_guide = compose_agent_guide(
-            language, project_open=bool(getattr(self, "workspace_path", None)),
-            unity_state="connected" if toggle_on else "off", addendum=addendum)
+            language, project_open=bool(workspace_path),
+            unity_state="connected" if toggle_on else "off", addendum=addendum,
+            scene_mode=current_scene_mode)
 
     def _with_subagents(self, guide: str) -> str:
         """The sub-agent line for a CLI main agent's guide; never for a

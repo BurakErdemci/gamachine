@@ -1,10 +1,11 @@
 import logging
 import os
 
-from fastapi import APIRouter, BackgroundTasks, Header, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Body, Header, HTTPException
 
 from auth_utils import get_current_user, require_user
 from schemas import WorkspaceRequest
+import scene_mode
 
 logger = logging.getLogger(__name__)
 
@@ -99,5 +100,27 @@ def create_workspace_router(db):
     async def remove_workspace(req: WorkspaceRequest, x_session_token: str = Header(alias="X-Session-Token")):
         user_id, _ = require_user(db, x_session_token, req.user_id)
         return {"removed": db.remove_workspace(user_id, req.path)}
+
+    @router.get("/workspace/scene-mode")
+    async def get_scene_mode(x_session_token: str = Header(alias="X-Session-Token", default="")):
+        user_id, _ = require_user(db, x_session_token)
+        workspace = db.get_last_workspace(user_id) or None
+        mode = scene_mode.get(workspace) if workspace else scene_mode.DEFAULT
+        return {"mode": mode, "modes": list(scene_mode.MODES), "workspace": workspace}
+
+    @router.post("/workspace/scene-mode")
+    async def set_scene_mode(body: object = Body(...),
+                             x_session_token: str = Header(alias="X-Session-Token", default="")):
+        user_id, _ = require_user(db, x_session_token)
+        workspace = db.get_last_workspace(user_id) or None
+        if not workspace:
+            raise HTTPException(status_code=409, detail="no workspace is open")
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="mode must be a string")
+        try:
+            saved = scene_mode.set(workspace, body.get("mode"))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return {"mode": saved, "modes": list(scene_mode.MODES), "workspace": workspace}
 
     return router
