@@ -168,13 +168,25 @@ def project_editor_version(project: str) -> Optional[str]:
     return None
 
 
+_UNITY_VERSION = re.compile(r"\d+\.\d+\.\d+[abfpx]\d+")
+
+
 def resolve_unity_exe(project: str) -> str:
     version = project_editor_version(project)
     if not version:
         raise LaneError("Projenin Unity sürümü okunamadı (ProjectSettings/ProjectVersion.txt).")
+    # ProjectVersion.txt comes with the project, so it is untrusted: a version like
+    # "..\\..\\x" or an absolute path would make os.path.join pick another program to run.
+    if not _UNITY_VERSION.fullmatch(version):
+        raise LaneError(f"Projenin Unity sürümü geçersiz: {version!r}")
     for root in _hub_roots():
         exe = _exe_under(root, version)
-        if os.path.isfile(exe):
+        real_root = os.path.realpath(root)
+        try:
+            inside = os.path.commonpath([real_root, os.path.realpath(exe)]) == real_root
+        except ValueError:
+            inside = False
+        if inside and os.path.isfile(exe):
             return exe
     raise LaneError(f"Unity {version} bu bilgisayarda kurulu değil; Unity Hub'dan bu sürümü kurun.")
 

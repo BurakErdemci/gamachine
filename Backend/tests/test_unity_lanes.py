@@ -156,6 +156,21 @@ def test_resolve_unity_exe(tmp_path, monkeypatch):
     assert ul.resolve_unity_exe(str(proj)) == exe
 
 
+@pytest.mark.parametrize("version", [
+    "..\\..\\evil", "../../evil", "C:\\Windows\\System32", "/usr/bin", "\\\\host\\share\\x", "6000.1.2f1/../../x",
+])
+def test_resolve_unity_exe_refuses_a_version_that_is_a_path(tmp_path, monkeypatch, version):
+    proj = tmp_path / "p"
+    (proj / "ProjectSettings").mkdir(parents=True)
+    (proj / "ProjectSettings" / "ProjectVersion.txt").write_text(f"m_EditorVersion: {version}\n")
+    hub = tmp_path / "hub" / "Editor"
+    hub.mkdir(parents=True)
+    monkeypatch.setattr(ul, "_hub_roots", lambda: [str(hub)])
+    monkeypatch.setattr(ul.os.path, "isfile", lambda _p: True)  # any joined path would "exist"
+    with pytest.raises(ul.LaneError, match="geçersiz"):
+        ul.resolve_unity_exe(str(proj))
+
+
 def test_expected_instance_hash_vector():
     # sha1("C:/proj/.gamachine/lanes/a/Assets")[:16]; Unity's dataPath uses forward slashes
     if sys.platform == "win32":
