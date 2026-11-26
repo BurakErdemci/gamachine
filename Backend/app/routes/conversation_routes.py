@@ -17,6 +17,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 import chat_files
+from unity_lane_paths import scope_workspace
 from ai_providers import AIProviderManager
 from auth_utils import require_conversation_owner, require_user, get_current_user, _check_token
 from error_i18n import localize_sse, translate_detail
@@ -3473,7 +3474,7 @@ Max 300 kelime. Türkçe yaz.
                 user_id = None
         if user_id is None:
             return {"ok": False, "detail": "Bu sohbet bulunamadı; Unity'ye istek gönderilmedi."}
-        workspace = db.get_last_workspace(user_id)
+        workspace = scope_workspace(db, conversation_id, user_id)
         detail = await asyncio.to_thread(
             unity_project_presence.project_scope_detail, workspace or "",
             project_path if isinstance(project_path, str) else "")
@@ -3492,7 +3493,7 @@ Max 300 kelime. Türkçe yaz.
                 user_id = None
         if user_id is None:
             return {"workspace": None}
-        return {"workspace": db.get_last_workspace(user_id) or None}
+        return {"workspace": scope_workspace(db, conversation_id, user_id) or None}
 
     @router.post("/mcp-approval-request")
     async def mcp_approval_request(body: dict, x_session_token: str = Header(alias="X-Session-Token", default="")):
