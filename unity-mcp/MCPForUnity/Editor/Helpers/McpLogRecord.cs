@@ -21,7 +21,7 @@ namespace MCPForUnity.Editor.Helpers
         [InitializeOnLoadMethod]
         private static void RefreshFromPrefs()
         {
-            _isEnabledCached = EditorPrefs.GetBool(EditorPrefKeys.LogRecordEnabled, false);
+            _isEnabledCached = McpPrefs.GetBool(EditorPrefKeys.LogRecordEnabled, false);
         }
 
         internal static bool IsEnabled
@@ -29,7 +29,7 @@ namespace MCPForUnity.Editor.Helpers
             get => _isEnabledCached;
             set
             {
-                EditorPrefs.SetBool(EditorPrefKeys.LogRecordEnabled, value);
+                McpPrefs.SetBool(EditorPrefKeys.LogRecordEnabled, value);
                 _isEnabledCached = value;
             }
         }

@@ -17,18 +17,18 @@ namespace MCPForUnity.Editor.Services
 
         public string GetStoredSourcePath()
         {
-            return EditorPrefs.GetString(EditorPrefKeys.PackageDeploySourcePath, string.Empty);
+            return McpPrefs.GetString(EditorPrefKeys.PackageDeploySourcePath, string.Empty);
         }
 
         public void SetStoredSourcePath(string path)
         {
             ValidateSource(path);
-            EditorPrefs.SetString(EditorPrefKeys.PackageDeploySourcePath, Path.GetFullPath(path));
+            McpPrefs.SetString(EditorPrefKeys.PackageDeploySourcePath, Path.GetFullPath(path));
         }
 
         public void ClearStoredSourcePath()
         {
-            EditorPrefs.DeleteKey(EditorPrefKeys.PackageDeploySourcePath);
+            McpPrefs.DeleteKey(EditorPrefKeys.PackageDeploySourcePath);
         }
 
         public string GetTargetPath()
@@ -77,7 +77,7 @@ namespace MCPForUnity.Editor.Services
 
         public string GetLastBackupPath()
         {
-            return EditorPrefs.GetString(EditorPrefKeys.PackageDeployLastBackupPath, string.Empty);
+            return McpPrefs.GetString(EditorPrefKeys.PackageDeployLastBackupPath, string.Empty);
         }
 
         public bool HasBackup()
@@ -119,9 +119,9 @@ namespace MCPForUnity.Editor.Services
                 EditorUtility.DisplayProgressBar("Deploy MCP for Unity", "Replacing package contents...", 0.7f);
                 CopyCoreFolders(sourcePath, targetPath);
 
-                EditorPrefs.SetString(EditorPrefKeys.PackageDeployLastBackupPath, backupPath);
-                EditorPrefs.SetString(EditorPrefKeys.PackageDeployLastTargetPath, targetPath);
-                EditorPrefs.SetString(EditorPrefKeys.PackageDeployLastSourcePath, sourcePath);
+                McpPrefs.SetString(EditorPrefKeys.PackageDeployLastBackupPath, backupPath);
+                McpPrefs.SetString(EditorPrefKeys.PackageDeployLastTargetPath, targetPath);
+                McpPrefs.SetString(EditorPrefKeys.PackageDeployLastSourcePath, sourcePath);
 
                 AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
                 return Success("Deployment completed.", sourcePath, targetPath, backupPath);
@@ -140,7 +140,7 @@ namespace MCPForUnity.Editor.Services
         public PackageDeploymentResult RestoreLastBackup()
         {
             string backupPath = GetLastBackupPath();
-            string targetPath = EditorPrefs.GetString(EditorPrefKeys.PackageDeployLastTargetPath, string.Empty);
+            string targetPath = McpPrefs.GetString(EditorPrefKeys.PackageDeployLastTargetPath, string.Empty);
 
             if (string.IsNullOrEmpty(backupPath) || !Directory.Exists(backupPath))
             {

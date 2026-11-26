@@ -142,7 +142,7 @@ namespace MCPForUnity.Editor.Helpers
                 {
                     string projectHash = GetProjectHash();
                     string projectSpecificKey = $"{SessionPrefKey}_{projectHash}";
-                    EditorPrefs.SetString(projectSpecificKey, sessionId);
+                    McpPrefs.SetString(projectSpecificKey, sessionId);
                 }
                 catch (Exception ex)
                 {
@@ -163,11 +163,11 @@ namespace MCPForUnity.Editor.Helpers
                 string projectHash = GetProjectHash();
                 string projectSpecificKey = $"{SessionPrefKey}_{projectHash}";
 
-                string sessionId = EditorPrefs.GetString(projectSpecificKey, string.Empty);
+                string sessionId = McpPrefs.GetString(projectSpecificKey, string.Empty);
                 if (string.IsNullOrEmpty(sessionId))
                 {
                     sessionId = Guid.NewGuid().ToString();
-                    EditorPrefs.SetString(projectSpecificKey, sessionId);
+                    McpPrefs.SetString(projectSpecificKey, sessionId);
                 }
                 return sessionId;
             }
@@ -194,14 +194,14 @@ namespace MCPForUnity.Editor.Helpers
                 string projectHash = GetProjectHash();
                 string projectSpecificKey = $"{SessionPrefKey}_{projectHash}";
 
-                if (EditorPrefs.HasKey(projectSpecificKey))
+                if (McpPrefs.HasKey(projectSpecificKey))
                 {
-                    EditorPrefs.DeleteKey(projectSpecificKey);
+                    McpPrefs.DeleteKey(projectSpecificKey);
                 }
 
-                if (!_legacyKeyCleared && EditorPrefs.HasKey(SessionPrefKey))
+                if (!_legacyKeyCleared && McpPrefs.HasKey(SessionPrefKey))
                 {
-                    EditorPrefs.DeleteKey(SessionPrefKey);
+                    McpPrefs.DeleteKey(SessionPrefKey);
                     _legacyKeyCleared = true;
                 }
 

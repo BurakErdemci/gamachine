@@ -174,26 +174,26 @@ namespace MCPForUnity.Editor.Windows.Components.Advanced
                 var autoStartLabel = autoStartOnLoadToggle.parent?.Q<Label>();
                 if (autoStartLabel != null)
                     autoStartLabel.tooltip = autoStartOnLoadToggle.tooltip;
-                autoStartOnLoadToggle.SetValueWithoutNotify(EditorPrefs.GetBool(EditorPrefKeys.AutoStartOnLoad, false));
+                autoStartOnLoadToggle.SetValueWithoutNotify(McpPrefs.GetBool(EditorPrefKeys.AutoStartOnLoad, false));
             }
 
-            gitUrlOverride.value = EditorPrefs.GetString(EditorPrefKeys.GitUrlOverride, "");
+            gitUrlOverride.value = McpPrefs.GetString(EditorPrefKeys.GitUrlOverride, "");
 
-            bool debugEnabled = EditorPrefs.GetBool(EditorPrefKeys.DebugLogs, false);
+            bool debugEnabled = McpPrefs.GetBool(EditorPrefKeys.DebugLogs, false);
             debugLogsToggle.value = debugEnabled;
             McpLog.SetDebugLoggingEnabled(debugEnabled);
 
             if (logRecordToggle != null)
                 logRecordToggle.value = McpLogRecord.IsEnabled;
 
-            devModeForceRefreshToggle.value = EditorPrefs.GetBool(EditorPrefKeys.DevModeForceServerRefresh, false);
+            devModeForceRefreshToggle.value = McpPrefs.GetBool(EditorPrefKeys.DevModeForceServerRefresh, false);
             if (allowLanHttpBindToggle != null)
             {
-                allowLanHttpBindToggle.SetValueWithoutNotify(EditorPrefs.GetBool(EditorPrefKeys.AllowLanHttpBind, false));
+                allowLanHttpBindToggle.SetValueWithoutNotify(McpPrefs.GetBool(EditorPrefKeys.AllowLanHttpBind, false));
             }
             if (allowInsecureRemoteHttpToggle != null)
             {
-                allowInsecureRemoteHttpToggle.SetValueWithoutNotify(EditorPrefs.GetBool(EditorPrefKeys.AllowInsecureRemoteHttp, false));
+                allowInsecureRemoteHttpToggle.SetValueWithoutNotify(McpPrefs.GetBool(EditorPrefKeys.AllowInsecureRemoteHttp, false));
             }
             UpdatePathOverrides();
             UpdateDeploymentSection();
@@ -210,7 +210,7 @@ namespace MCPForUnity.Editor.Windows.Components.Advanced
                 string url = evt.newValue?.Trim();
                 if (string.IsNullOrEmpty(url))
                 {
-                    EditorPrefs.DeleteKey(EditorPrefKeys.GitUrlOverride);
+                    McpPrefs.DeleteKey(EditorPrefKeys.GitUrlOverride);
                 }
                 else
                 {
@@ -220,7 +220,7 @@ namespace MCPForUnity.Editor.Windows.Components.Advanced
                     {
                         gitUrlOverride.SetValueWithoutNotify(url);
                     }
-                    EditorPrefs.SetString(EditorPrefKeys.GitUrlOverride, url);
+                    McpPrefs.SetString(EditorPrefKeys.GitUrlOverride, url);
                 }
                 OnGitUrlChanged?.Invoke();
                 OnHttpServerCommandUpdateRequested?.Invoke();
@@ -229,7 +229,7 @@ namespace MCPForUnity.Editor.Windows.Components.Advanced
             clearGitUrlButton.clicked += () =>
             {
                 gitUrlOverride.value = string.Empty;
-                EditorPrefs.DeleteKey(EditorPrefKeys.GitUrlOverride);
+                McpPrefs.DeleteKey(EditorPrefKeys.GitUrlOverride);
                 OnGitUrlChanged?.Invoke();
                 OnHttpServerCommandUpdateRequested?.Invoke();
             };
@@ -251,13 +251,13 @@ namespace MCPForUnity.Editor.Windows.Components.Advanced
             {
                 autoStartOnLoadToggle.RegisterValueChangedCallback(evt =>
                 {
-                    EditorPrefs.SetBool(EditorPrefKeys.AutoStartOnLoad, evt.newValue);
+                    McpPrefs.SetBool(EditorPrefKeys.AutoStartOnLoad, evt.newValue);
                 });
             }
 
             devModeForceRefreshToggle.RegisterValueChangedCallback(evt =>
             {
-                EditorPrefs.SetBool(EditorPrefKeys.DevModeForceServerRefresh, evt.newValue);
+                McpPrefs.SetBool(EditorPrefKeys.DevModeForceServerRefresh, evt.newValue);
                 OnHttpServerCommandUpdateRequested?.Invoke();
             });
 
@@ -265,7 +265,7 @@ namespace MCPForUnity.Editor.Windows.Components.Advanced
             {
                 allowLanHttpBindToggle.RegisterValueChangedCallback(evt =>
                 {
-                    EditorPrefs.SetBool(EditorPrefKeys.AllowLanHttpBind, evt.newValue);
+                    McpPrefs.SetBool(EditorPrefKeys.AllowLanHttpBind, evt.newValue);
                     OnHttpServerCommandUpdateRequested?.Invoke();
                 });
             }
@@ -274,7 +274,7 @@ namespace MCPForUnity.Editor.Windows.Components.Advanced
             {
                 allowInsecureRemoteHttpToggle.RegisterValueChangedCallback(evt =>
                 {
-                    EditorPrefs.SetBool(EditorPrefKeys.AllowInsecureRemoteHttp, evt.newValue);
+                    McpPrefs.SetBool(EditorPrefKeys.AllowInsecureRemoteHttp, evt.newValue);
                     OnHttpServerCommandUpdateRequested?.Invoke();
                 });
             }
@@ -339,7 +339,7 @@ namespace MCPForUnity.Editor.Windows.Components.Advanced
                 if (hasFallback)
                 {
                     // Override path invalid, using system fallback
-                    string overridePath = EditorPrefs.GetString(EditorPrefKeys.UvxPathOverride, string.Empty);
+                    string overridePath = McpPrefs.GetString(EditorPrefKeys.UvxPathOverride, string.Empty);
                     uvxPathOverride.value = $"Invalid override path: {overridePath} (fallback to uvx path) {uvxPath}";
                 }
                 else if (!string.IsNullOrEmpty(uvxPath))
@@ -350,7 +350,7 @@ namespace MCPForUnity.Editor.Windows.Components.Advanced
                 else
                 {
                     // Override set but invalid, no fallback available
-                    string overridePath = EditorPrefs.GetString(EditorPrefKeys.UvxPathOverride, string.Empty);
+                    string overridePath = McpPrefs.GetString(EditorPrefKeys.UvxPathOverride, string.Empty);
                     uvxPathOverride.value = $"Invalid override path: {overridePath}, no uv found";
                 }
             }
@@ -373,7 +373,7 @@ namespace MCPForUnity.Editor.Windows.Components.Advanced
                 else
                 {
                     // Override mode: validate the override path
-                    string overridePath = EditorPrefs.GetString(EditorPrefKeys.UvxPathOverride, string.Empty);
+                    string overridePath = McpPrefs.GetString(EditorPrefKeys.UvxPathOverride, string.Empty);
                     if (pathService.TryValidateUvxExecutable(overridePath, out _))
                     {
                         uvxPathStatus.AddToClassList("valid");
@@ -398,20 +398,20 @@ namespace MCPForUnity.Editor.Windows.Components.Advanced
                 }
             }
 
-            gitUrlOverride.value = EditorPrefs.GetString(EditorPrefKeys.GitUrlOverride, "");
+            gitUrlOverride.value = McpPrefs.GetString(EditorPrefKeys.GitUrlOverride, "");
             if (autoStartOnLoadToggle != null)
-                autoStartOnLoadToggle.value = EditorPrefs.GetBool(EditorPrefKeys.AutoStartOnLoad, false);
-            debugLogsToggle.value = EditorPrefs.GetBool(EditorPrefKeys.DebugLogs, false);
+                autoStartOnLoadToggle.value = McpPrefs.GetBool(EditorPrefKeys.AutoStartOnLoad, false);
+            debugLogsToggle.value = McpPrefs.GetBool(EditorPrefKeys.DebugLogs, false);
             if (logRecordToggle != null)
                 logRecordToggle.value = McpLogRecord.IsEnabled;
-            devModeForceRefreshToggle.value = EditorPrefs.GetBool(EditorPrefKeys.DevModeForceServerRefresh, false);
+            devModeForceRefreshToggle.value = McpPrefs.GetBool(EditorPrefKeys.DevModeForceServerRefresh, false);
             if (allowLanHttpBindToggle != null)
             {
-                allowLanHttpBindToggle.value = EditorPrefs.GetBool(EditorPrefKeys.AllowLanHttpBind, false);
+                allowLanHttpBindToggle.value = McpPrefs.GetBool(EditorPrefKeys.AllowLanHttpBind, false);
             }
             if (allowInsecureRemoteHttpToggle != null)
             {
-                allowInsecureRemoteHttpToggle.value = EditorPrefs.GetBool(EditorPrefKeys.AllowInsecureRemoteHttp, false);
+                allowInsecureRemoteHttpToggle.value = McpPrefs.GetBool(EditorPrefKeys.AllowInsecureRemoteHttp, false);
             }
             UpdateDeploymentSection();
         }
@@ -451,7 +451,7 @@ namespace MCPForUnity.Editor.Windows.Components.Advanced
             {
                 picked = ResolveServerPath(picked);
                 gitUrlOverride.value = picked;
-                EditorPrefs.SetString(EditorPrefKeys.GitUrlOverride, picked);
+                McpPrefs.SetString(EditorPrefKeys.GitUrlOverride, picked);
                 OnGitUrlChanged?.Invoke();
                 OnHttpServerCommandUpdateRequested?.Invoke();
                 McpLog.Info($"Server source override set to: {picked}");

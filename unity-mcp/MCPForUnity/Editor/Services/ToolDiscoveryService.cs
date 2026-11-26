@@ -83,9 +83,9 @@ namespace MCPForUnity.Editor.Services
             }
 
             string key = GetToolPreferenceKey(toolName);
-            if (EditorPrefs.HasKey(key))
+            if (McpPrefs.HasKey(key))
             {
-                return EditorPrefs.GetBool(key, true);
+                return McpPrefs.GetBool(key, true);
             }
 
             var metadata = GetToolMetadata(toolName);
@@ -100,7 +100,7 @@ namespace MCPForUnity.Editor.Services
             }
 
             string key = GetToolPreferenceKey(toolName);
-            EditorPrefs.SetBool(key, enabled);
+            McpPrefs.SetBool(key, enabled);
         }
 
         private ToolMetadata ExtractToolMetadata(Type type, McpForUnityToolAttribute toolAttr)
@@ -224,10 +224,10 @@ namespace MCPForUnity.Editor.Services
             }
 
             string key = GetToolPreferenceKey(metadata.Name);
-            if (!EditorPrefs.HasKey(key))
+            if (!McpPrefs.HasKey(key))
             {
                 bool defaultValue = metadata.AutoRegister || metadata.IsBuiltIn;
-                EditorPrefs.SetBool(key, defaultValue);
+                McpPrefs.SetBool(key, defaultValue);
             }
         }
 

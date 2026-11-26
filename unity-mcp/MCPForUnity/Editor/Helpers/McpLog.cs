@@ -17,14 +17,14 @@ namespace MCPForUnity.Editor.Helpers
 
         private static bool ReadDebugPreference()
         {
-            try { return EditorPrefs.GetBool(EditorPrefKeys.DebugLogs, false); }
+            try { return McpPrefs.GetBool(EditorPrefKeys.DebugLogs, false); }
             catch { return false; }
         }
 
         public static void SetDebugLoggingEnabled(bool enabled)
         {
             _debugEnabled = enabled;
-            try { EditorPrefs.SetBool(EditorPrefKeys.DebugLogs, enabled); }
+            try { McpPrefs.SetBool(EditorPrefKeys.DebugLogs, enabled); }
             catch { }
         }
 
@@ -52,7 +52,7 @@ namespace MCPForUnity.Editor.Helpers
 
         private static string GamachineConnectionFailedMessage()
         {
-            return EditorPrefs.GetString("Gamachine.UiLanguage", "en") == "tr"
+            return McpPrefs.GetString("Gamachine.UiLanguage", "en") == "tr"
                 ? "Unity MCP Gamachine'de açık ama Unity bağlanamadı. Yeniden denemek için Gamachine'de Unity MCP'yi kapatıp açın."
                 : "Unity MCP is on in Gamachine but Unity could not connect to it. Turn Unity MCP off and on in Gamachine to retry.";
         }

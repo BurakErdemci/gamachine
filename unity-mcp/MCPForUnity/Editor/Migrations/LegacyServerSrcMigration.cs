@@ -28,8 +28,8 @@ namespace MCPForUnity.Editor.Migrations
         {
             EditorApplication.delayCall -= RunMigrationIfNeeded;
 
-            bool hasServerSrc = EditorPrefs.HasKey(ServerSrcKey);
-            bool hasUseEmbedded = EditorPrefs.HasKey(UseEmbeddedKey);
+            bool hasServerSrc = McpPrefs.HasKey(ServerSrcKey);
+            bool hasUseEmbedded = McpPrefs.HasKey(UseEmbeddedKey);
 
             if (!hasServerSrc && !hasUseEmbedded)
             {
@@ -61,13 +61,13 @@ namespace MCPForUnity.Editor.Migrations
 
                 if (hasServerSrc)
                 {
-                    EditorPrefs.DeleteKey(ServerSrcKey);
+                    McpPrefs.DeleteKey(ServerSrcKey);
                     McpLog.Info("  ✓ Removed legacy key: MCPForUnity.ServerSrc");
                 }
 
                 if (hasUseEmbedded)
                 {
-                    EditorPrefs.DeleteKey(UseEmbeddedKey);
+                    McpPrefs.DeleteKey(UseEmbeddedKey);
                     McpLog.Info("  ✓ Removed legacy key: MCPForUnity.UseEmbeddedServer");
                 }
             }

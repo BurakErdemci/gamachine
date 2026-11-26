@@ -87,9 +87,9 @@ namespace MCPForUnity.Editor.Services
             }
 
             string key = GetResourcePreferenceKey(resourceName);
-            if (EditorPrefs.HasKey(key))
+            if (McpPrefs.HasKey(key))
             {
-                return EditorPrefs.GetBool(key, true);
+                return McpPrefs.GetBool(key, true);
             }
 
             // Default: all resources enabled
@@ -104,7 +104,7 @@ namespace MCPForUnity.Editor.Services
             }
 
             string key = GetResourcePreferenceKey(resourceName);
-            EditorPrefs.SetBool(key, enabled);
+            McpPrefs.SetBool(key, enabled);
         }
 
         public void InvalidateCache()
@@ -153,9 +153,9 @@ namespace MCPForUnity.Editor.Services
             }
 
             string key = GetResourcePreferenceKey(metadata.Name);
-            if (!EditorPrefs.HasKey(key))
+            if (!McpPrefs.HasKey(key))
             {
-                EditorPrefs.SetBool(key, true);
+                McpPrefs.SetBool(key, true);
             }
         }
 

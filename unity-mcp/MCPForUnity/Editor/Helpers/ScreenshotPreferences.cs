@@ -20,16 +20,16 @@ namespace MCPForUnity.Editor.Helpers
         /// </summary>
         public static string DefaultFolder
         {
-            get => EditorPrefs.GetString(EditorPrefsKey, string.Empty);
+            get => McpPrefs.GetString(EditorPrefsKey, string.Empty);
             set
             {
                 if (string.IsNullOrWhiteSpace(value))
                 {
-                    EditorPrefs.DeleteKey(EditorPrefsKey);
+                    McpPrefs.DeleteKey(EditorPrefsKey);
                 }
                 else
                 {
-                    EditorPrefs.SetString(EditorPrefsKey, value.Trim());
+                    McpPrefs.SetString(EditorPrefsKey, value.Trim());
                 }
             }
         }

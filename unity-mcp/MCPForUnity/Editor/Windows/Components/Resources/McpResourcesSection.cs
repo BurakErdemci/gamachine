@@ -127,12 +127,12 @@ namespace MCPForUnity.Editor.Windows.Components.Resources
             var foldout = new Foldout
             {
                 text = $"{title} ({resourceList.Count})",
-                value = EditorPrefs.GetBool(EditorPrefKeys.ResourceFoldoutStatePrefix + prefsSuffix, true)
+                value = McpPrefs.GetBool(EditorPrefKeys.ResourceFoldoutStatePrefix + prefsSuffix, true)
             };
 
             foldout.RegisterValueChangedCallback(evt =>
             {
-                EditorPrefs.SetBool(EditorPrefKeys.ResourceFoldoutStatePrefix + prefsSuffix, evt.newValue);
+                McpPrefs.SetBool(EditorPrefKeys.ResourceFoldoutStatePrefix + prefsSuffix, evt.newValue);
             });
 
             foreach (var resource in resourceList)

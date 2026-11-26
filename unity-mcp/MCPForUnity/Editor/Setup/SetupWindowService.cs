@@ -48,8 +48,8 @@ namespace MCPForUnity.Editor.Setup
             try
             {
                 // Check if setup was already completed or dismissed in previous sessions
-                bool setupCompleted = EditorPrefs.GetBool(SETUP_COMPLETED_KEY, false);
-                bool setupDismissed = EditorPrefs.GetBool(SETUP_DISMISSED_KEY, false);
+                bool setupCompleted = McpPrefs.GetBool(SETUP_COMPLETED_KEY, false);
+                bool setupDismissed = McpPrefs.GetBool(SETUP_DISMISSED_KEY, false);
 
                 // Only show Setup Window if it hasn't been completed or dismissed before
                 if (!(setupCompleted || setupDismissed))
@@ -94,7 +94,7 @@ namespace MCPForUnity.Editor.Setup
         /// </summary>
         public static void MarkSetupCompleted()
         {
-            EditorPrefs.SetBool(SETUP_COMPLETED_KEY, true);
+            McpPrefs.SetBool(SETUP_COMPLETED_KEY, true);
             McpLog.Info("Setup marked as completed");
         }
 
@@ -103,7 +103,7 @@ namespace MCPForUnity.Editor.Setup
         /// </summary>
         public static void MarkSetupDismissed()
         {
-            EditorPrefs.SetBool(SETUP_DISMISSED_KEY, true);
+            McpPrefs.SetBool(SETUP_DISMISSED_KEY, true);
             McpLog.Info("Setup marked as dismissed");
         }
     }

@@ -36,7 +36,7 @@ namespace MCPForUnity.Editor.Setup
         public static void SyncAsync(string repoUrl, string installDir, string branch, Action<string> log, Action<SyncResult> onComplete)
         {
             var lastSyncedCommitKey = GetLastSyncedCommitKey(repoUrl, branch);
-            var lastSyncedCommit = EditorPrefs.GetString(lastSyncedCommitKey, string.Empty);
+            var lastSyncedCommit = McpPrefs.GetString(lastSyncedCommitKey, string.Empty);
 
             Task.Run(() =>
             {
@@ -47,7 +47,7 @@ namespace MCPForUnity.Editor.Setup
                     {
                         if (result.Success && !string.IsNullOrEmpty(result.CommitSha))
                         {
-                            EditorPrefs.SetString(lastSyncedCommitKey, result.CommitSha);
+                            McpPrefs.SetString(lastSyncedCommitKey, result.CommitSha);
                         }
                         onComplete?.Invoke(result);
                     };

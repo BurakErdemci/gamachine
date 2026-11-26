@@ -75,7 +75,7 @@ namespace MCPForUnity.Editor.Helpers
                 // Only include API key header for remote-hosted mode
                 if (HttpEndpointUtility.IsRemoteScope())
                 {
-                    string apiKey = EditorPrefs.GetString(EditorPrefKeys.ApiKey, string.Empty);
+                    string apiKey = McpPrefs.GetString(EditorPrefKeys.ApiKey, string.Empty);
                     if (!string.IsNullOrEmpty(apiKey))
                     {
                         var headers = new JObject { [AuthConstants.ApiKeyHeader] = apiKey };

@@ -73,14 +73,14 @@ namespace MCPForUnity.Editor.Windows.Components.Tools
         {
             if (projectScopedToolsToggle != null)
             {
-                projectScopedToolsToggle.value = EditorPrefs.GetBool(
+                projectScopedToolsToggle.value = McpPrefs.GetBool(
                     EditorPrefKeys.ProjectScopedToolsLocalHttp,
                     false
                 );
                 projectScopedToolsToggle.tooltip = "When enabled, register project-scoped tools with HTTP Local transport. Allows per-project tool customization.";
                 projectScopedToolsToggle.RegisterValueChangedCallback(evt =>
                 {
-                    EditorPrefs.SetBool(EditorPrefKeys.ProjectScopedToolsLocalHttp, evt.newValue);
+                    McpPrefs.SetBool(EditorPrefKeys.ProjectScopedToolsLocalHttp, evt.newValue);
                 });
             }
 
@@ -214,13 +214,13 @@ namespace MCPForUnity.Editor.Windows.Components.Tools
             var foldout = new Foldout
             {
                 text = $"{title} ({enabledCount}/{toolList.Count})",
-                value = EditorPrefs.GetBool(EditorPrefKeys.ToolFoldoutStatePrefix + prefsSuffix, defaultOpen)
+                value = McpPrefs.GetBool(EditorPrefKeys.ToolFoldoutStatePrefix + prefsSuffix, defaultOpen)
             };
 
             foldout.RegisterValueChangedCallback(evt =>
             {
                 if (evt.target != foldout) return;
-                EditorPrefs.SetBool(EditorPrefKeys.ToolFoldoutStatePrefix + prefsSuffix, evt.newValue);
+                McpPrefs.SetBool(EditorPrefKeys.ToolFoldoutStatePrefix + prefsSuffix, evt.newValue);
             });
 
             // Add a checkbox into the foldout header to toggle all tools in this group
@@ -646,7 +646,7 @@ namespace MCPForUnity.Editor.Windows.Components.Tools
             label.style.unityFontStyleAndWeight = UnityEngine.FontStyle.Normal;
             container.Add(label);
 
-            int currentValue = EditorPrefs.GetInt(
+            int currentValue = McpPrefs.GetInt(
                 EditorPrefKeys.BatchExecuteMaxCommands,
                 BatchExecute.DefaultMaxCommandsPerBatch
             );
@@ -665,7 +665,7 @@ namespace MCPForUnity.Editor.Windows.Components.Tools
                 {
                     field.SetValueWithoutNotify(clamped);
                 }
-                EditorPrefs.SetInt(EditorPrefKeys.BatchExecuteMaxCommands, clamped);
+                McpPrefs.SetInt(EditorPrefKeys.BatchExecuteMaxCommands, clamped);
             });
 
             container.Add(field);

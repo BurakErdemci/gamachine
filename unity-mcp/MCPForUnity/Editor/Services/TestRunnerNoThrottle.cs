@@ -88,14 +88,14 @@ namespace MCPForUnity.Editor.Services
         {
             if (!AreSettingsCaptured())
             {
-                SetPrevIdleTime(EditorPrefs.GetInt(ApplicationIdleTimeKey, 4));
-                SetPrevInteractionMode(EditorPrefs.GetInt(InteractionModeKey, 0));
+                SetPrevIdleTime(McpPrefs.GetInt(ApplicationIdleTimeKey, 4));
+                SetPrevInteractionMode(McpPrefs.GetInt(InteractionModeKey, 0));
                 SetSettingsCaptured(true);
             }
 
             // 0ms idle + InteractionMode=1 (No Throttling)
-            EditorPrefs.SetInt(ApplicationIdleTimeKey, 0);
-            EditorPrefs.SetInt(InteractionModeKey, 1);
+            McpPrefs.SetInt(ApplicationIdleTimeKey, 0);
+            McpPrefs.SetInt(InteractionModeKey, 1);
 
             ForceEditorToApplyInteractionPrefs();
             McpLog.Info("[TestRunnerNoThrottle] Applied No Throttling for test run.");
@@ -105,8 +105,8 @@ namespace MCPForUnity.Editor.Services
         {
             if (!AreSettingsCaptured()) return;
 
-            EditorPrefs.SetInt(ApplicationIdleTimeKey, GetPrevIdleTime());
-            EditorPrefs.SetInt(InteractionModeKey, GetPrevInteractionMode());
+            McpPrefs.SetInt(ApplicationIdleTimeKey, GetPrevIdleTime());
+            McpPrefs.SetInt(InteractionModeKey, GetPrevInteractionMode());
             ForceEditorToApplyInteractionPrefs();
 
             SetSettingsCaptured(false);

@@ -48,7 +48,7 @@ namespace MCPForUnity.Editor.Helpers
                 }
 
                 // Check EditorPrefs
-                return !UnityEditor.EditorPrefs.GetBool(TELEMETRY_DISABLED_KEY, false);
+                return !McpPrefs.GetBool(TELEMETRY_DISABLED_KEY, false);
             }
         }
 
@@ -57,11 +57,11 @@ namespace MCPForUnity.Editor.Helpers
         /// </summary>
         public static string GetCustomerUUID()
         {
-            var uuid = UnityEditor.EditorPrefs.GetString(CUSTOMER_UUID_KEY, "");
+            var uuid = McpPrefs.GetString(CUSTOMER_UUID_KEY, "");
             if (string.IsNullOrEmpty(uuid))
             {
                 uuid = System.Guid.NewGuid().ToString();
-                UnityEditor.EditorPrefs.SetString(CUSTOMER_UUID_KEY, uuid);
+                McpPrefs.SetString(CUSTOMER_UUID_KEY, uuid);
             }
             return uuid;
         }
@@ -71,7 +71,7 @@ namespace MCPForUnity.Editor.Helpers
         /// </summary>
         public static void DisableTelemetry()
         {
-            UnityEditor.EditorPrefs.SetBool(TELEMETRY_DISABLED_KEY, true);
+            McpPrefs.SetBool(TELEMETRY_DISABLED_KEY, true);
         }
 
         /// <summary>
@@ -79,7 +79,7 @@ namespace MCPForUnity.Editor.Helpers
         /// </summary>
         public static void EnableTelemetry()
         {
-            UnityEditor.EditorPrefs.SetBool(TELEMETRY_DISABLED_KEY, false);
+            McpPrefs.SetBool(TELEMETRY_DISABLED_KEY, false);
         }
 
         /// <summary>
@@ -215,7 +215,7 @@ namespace MCPForUnity.Editor.Helpers
         {
             try
             {
-                return UnityEditor.EditorPrefs.GetBool(EditorPrefKeys.DebugLogs, false);
+                return McpPrefs.GetBool(EditorPrefKeys.DebugLogs, false);
             }
             catch
             {

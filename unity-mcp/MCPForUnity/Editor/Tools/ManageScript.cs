@@ -2267,7 +2267,7 @@ namespace MCPForUnity.Editor.Tools
         /// </summary>
         private static ValidationLevel GetValidationLevelFromGUI()
         {
-            int savedLevel = EditorPrefs.GetInt(EditorPrefKeys.ValidationLevel, (int)ValidationLevel.Standard);
+            int savedLevel = McpPrefs.GetInt(EditorPrefKeys.ValidationLevel, (int)ValidationLevel.Standard);
             return (ValidationLevel)Mathf.Clamp(savedLevel, 0, 3);
         }
 

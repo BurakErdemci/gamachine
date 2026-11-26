@@ -39,7 +39,7 @@ namespace MCPForUnity.Editor.Migrations
             }
 
             string lastUpgradeVersion = string.Empty;
-            try { lastUpgradeVersion = EditorPrefs.GetString(LastUpgradeKey, string.Empty); } catch { }
+            try { lastUpgradeVersion = McpPrefs.GetString(LastUpgradeKey, string.Empty); } catch { }
 
             if (string.Equals(lastUpgradeVersion, currentVersion, StringComparison.OrdinalIgnoreCase))
             {
@@ -93,7 +93,7 @@ namespace MCPForUnity.Editor.Migrations
             if (!touchedAny)
             {
                 // Nothing needed refreshing; still record version so we don't rerun every launch
-                try { EditorPrefs.SetString(LastUpgradeKey, currentVersion); } catch { }
+                try { McpPrefs.SetString(LastUpgradeKey, currentVersion); } catch { }
                 return;
             }
 
@@ -105,7 +105,7 @@ namespace MCPForUnity.Editor.Migrations
 
             try
             {
-                EditorPrefs.SetString(LastUpgradeKey, currentVersion);
+                McpPrefs.SetString(LastUpgradeKey, currentVersion);
             }
             catch { }
 

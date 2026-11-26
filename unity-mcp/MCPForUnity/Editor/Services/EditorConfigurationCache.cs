@@ -128,16 +128,16 @@ namespace MCPForUnity.Editor.Services
         /// </summary>
         public void Refresh()
         {
-            _useHttpTransport = EditorPrefs.GetBool(EditorPrefKeys.UseHttpTransport, true);
-            _debugLogs = EditorPrefs.GetBool(EditorPrefKeys.DebugLogs, false);
-            _devModeForceServerRefresh = EditorPrefs.GetBool(EditorPrefKeys.DevModeForceServerRefresh, false);
-            _uvxPathOverride = EditorPrefs.GetString(EditorPrefKeys.UvxPathOverride, string.Empty);
-            _gitUrlOverride = EditorPrefs.GetString(EditorPrefKeys.GitUrlOverride, string.Empty);
-            _httpBaseUrl = EditorPrefs.GetString(EditorPrefKeys.HttpBaseUrl, string.Empty);
-            _httpRemoteBaseUrl = EditorPrefs.GetString(EditorPrefKeys.HttpRemoteBaseUrl, string.Empty);
-            _claudeCliPathOverride = EditorPrefs.GetString(EditorPrefKeys.ClaudeCliPathOverride, string.Empty);
-            _httpTransportScope = EditorPrefs.GetString(EditorPrefKeys.HttpTransportScope, string.Empty);
-            _unitySocketPort = EditorPrefs.GetInt(EditorPrefKeys.UnitySocketPort, 0);
+            _useHttpTransport = McpPrefs.GetBool(EditorPrefKeys.UseHttpTransport, true);
+            _debugLogs = McpPrefs.GetBool(EditorPrefKeys.DebugLogs, false);
+            _devModeForceServerRefresh = McpPrefs.GetBool(EditorPrefKeys.DevModeForceServerRefresh, false);
+            _uvxPathOverride = McpPrefs.GetString(EditorPrefKeys.UvxPathOverride, string.Empty);
+            _gitUrlOverride = McpPrefs.GetString(EditorPrefKeys.GitUrlOverride, string.Empty);
+            _httpBaseUrl = McpPrefs.GetString(EditorPrefKeys.HttpBaseUrl, string.Empty);
+            _httpRemoteBaseUrl = McpPrefs.GetString(EditorPrefKeys.HttpRemoteBaseUrl, string.Empty);
+            _claudeCliPathOverride = McpPrefs.GetString(EditorPrefKeys.ClaudeCliPathOverride, string.Empty);
+            _httpTransportScope = McpPrefs.GetString(EditorPrefKeys.HttpTransportScope, string.Empty);
+            _unitySocketPort = McpPrefs.GetInt(EditorPrefKeys.UnitySocketPort, 0);
         }
 
         /// <summary>
@@ -148,7 +148,7 @@ namespace MCPForUnity.Editor.Services
             if (_useHttpTransport != value)
             {
                 _useHttpTransport = value;
-                EditorPrefs.SetBool(EditorPrefKeys.UseHttpTransport, value);
+                McpPrefs.SetBool(EditorPrefKeys.UseHttpTransport, value);
                 OnConfigurationChanged?.Invoke(nameof(UseHttpTransport));
             }
         }
@@ -161,7 +161,7 @@ namespace MCPForUnity.Editor.Services
             if (_debugLogs != value)
             {
                 _debugLogs = value;
-                EditorPrefs.SetBool(EditorPrefKeys.DebugLogs, value);
+                McpPrefs.SetBool(EditorPrefKeys.DebugLogs, value);
                 OnConfigurationChanged?.Invoke(nameof(DebugLogs));
             }
         }
@@ -174,7 +174,7 @@ namespace MCPForUnity.Editor.Services
             if (_devModeForceServerRefresh != value)
             {
                 _devModeForceServerRefresh = value;
-                EditorPrefs.SetBool(EditorPrefKeys.DevModeForceServerRefresh, value);
+                McpPrefs.SetBool(EditorPrefKeys.DevModeForceServerRefresh, value);
                 OnConfigurationChanged?.Invoke(nameof(DevModeForceServerRefresh));
             }
         }
@@ -188,7 +188,7 @@ namespace MCPForUnity.Editor.Services
             if (_uvxPathOverride != value)
             {
                 _uvxPathOverride = value;
-                EditorPrefs.SetString(EditorPrefKeys.UvxPathOverride, value);
+                McpPrefs.SetString(EditorPrefKeys.UvxPathOverride, value);
                 OnConfigurationChanged?.Invoke(nameof(UvxPathOverride));
             }
         }
@@ -202,7 +202,7 @@ namespace MCPForUnity.Editor.Services
             if (_gitUrlOverride != value)
             {
                 _gitUrlOverride = value;
-                EditorPrefs.SetString(EditorPrefKeys.GitUrlOverride, value);
+                McpPrefs.SetString(EditorPrefKeys.GitUrlOverride, value);
                 OnConfigurationChanged?.Invoke(nameof(GitUrlOverride));
             }
         }
@@ -216,7 +216,7 @@ namespace MCPForUnity.Editor.Services
             if (_httpBaseUrl != value)
             {
                 _httpBaseUrl = value;
-                EditorPrefs.SetString(EditorPrefKeys.HttpBaseUrl, value);
+                McpPrefs.SetString(EditorPrefKeys.HttpBaseUrl, value);
                 OnConfigurationChanged?.Invoke(nameof(HttpBaseUrl));
             }
         }
@@ -230,7 +230,7 @@ namespace MCPForUnity.Editor.Services
             if (_httpRemoteBaseUrl != value)
             {
                 _httpRemoteBaseUrl = value;
-                EditorPrefs.SetString(EditorPrefKeys.HttpRemoteBaseUrl, value);
+                McpPrefs.SetString(EditorPrefKeys.HttpRemoteBaseUrl, value);
                 OnConfigurationChanged?.Invoke(nameof(HttpRemoteBaseUrl));
             }
         }
@@ -244,7 +244,7 @@ namespace MCPForUnity.Editor.Services
             if (_claudeCliPathOverride != value)
             {
                 _claudeCliPathOverride = value;
-                EditorPrefs.SetString(EditorPrefKeys.ClaudeCliPathOverride, value);
+                McpPrefs.SetString(EditorPrefKeys.ClaudeCliPathOverride, value);
                 OnConfigurationChanged?.Invoke(nameof(ClaudeCliPathOverride));
             }
         }
@@ -258,7 +258,7 @@ namespace MCPForUnity.Editor.Services
             if (_httpTransportScope != value)
             {
                 _httpTransportScope = value;
-                EditorPrefs.SetString(EditorPrefKeys.HttpTransportScope, value);
+                McpPrefs.SetString(EditorPrefKeys.HttpTransportScope, value);
                 OnConfigurationChanged?.Invoke(nameof(HttpTransportScope));
             }
         }
@@ -271,7 +271,7 @@ namespace MCPForUnity.Editor.Services
             if (_unitySocketPort != value)
             {
                 _unitySocketPort = value;
-                EditorPrefs.SetInt(EditorPrefKeys.UnitySocketPort, value);
+                McpPrefs.SetInt(EditorPrefKeys.UnitySocketPort, value);
                 OnConfigurationChanged?.Invoke(nameof(UnitySocketPort));
             }
         }
@@ -285,34 +285,34 @@ namespace MCPForUnity.Editor.Services
             switch (keyName)
             {
                 case nameof(UseHttpTransport):
-                    _useHttpTransport = EditorPrefs.GetBool(EditorPrefKeys.UseHttpTransport, true);
+                    _useHttpTransport = McpPrefs.GetBool(EditorPrefKeys.UseHttpTransport, true);
                     break;
                 case nameof(DebugLogs):
-                    _debugLogs = EditorPrefs.GetBool(EditorPrefKeys.DebugLogs, false);
+                    _debugLogs = McpPrefs.GetBool(EditorPrefKeys.DebugLogs, false);
                     break;
                 case nameof(DevModeForceServerRefresh):
-                    _devModeForceServerRefresh = EditorPrefs.GetBool(EditorPrefKeys.DevModeForceServerRefresh, false);
+                    _devModeForceServerRefresh = McpPrefs.GetBool(EditorPrefKeys.DevModeForceServerRefresh, false);
                     break;
                 case nameof(UvxPathOverride):
-                    _uvxPathOverride = EditorPrefs.GetString(EditorPrefKeys.UvxPathOverride, string.Empty);
+                    _uvxPathOverride = McpPrefs.GetString(EditorPrefKeys.UvxPathOverride, string.Empty);
                     break;
                 case nameof(GitUrlOverride):
-                    _gitUrlOverride = EditorPrefs.GetString(EditorPrefKeys.GitUrlOverride, string.Empty);
+                    _gitUrlOverride = McpPrefs.GetString(EditorPrefKeys.GitUrlOverride, string.Empty);
                     break;
                 case nameof(HttpBaseUrl):
-                    _httpBaseUrl = EditorPrefs.GetString(EditorPrefKeys.HttpBaseUrl, string.Empty);
+                    _httpBaseUrl = McpPrefs.GetString(EditorPrefKeys.HttpBaseUrl, string.Empty);
                     break;
                 case nameof(HttpRemoteBaseUrl):
-                    _httpRemoteBaseUrl = EditorPrefs.GetString(EditorPrefKeys.HttpRemoteBaseUrl, string.Empty);
+                    _httpRemoteBaseUrl = McpPrefs.GetString(EditorPrefKeys.HttpRemoteBaseUrl, string.Empty);
                     break;
                 case nameof(ClaudeCliPathOverride):
-                    _claudeCliPathOverride = EditorPrefs.GetString(EditorPrefKeys.ClaudeCliPathOverride, string.Empty);
+                    _claudeCliPathOverride = McpPrefs.GetString(EditorPrefKeys.ClaudeCliPathOverride, string.Empty);
                     break;
                 case nameof(HttpTransportScope):
-                    _httpTransportScope = EditorPrefs.GetString(EditorPrefKeys.HttpTransportScope, string.Empty);
+                    _httpTransportScope = McpPrefs.GetString(EditorPrefKeys.HttpTransportScope, string.Empty);
                     break;
                 case nameof(UnitySocketPort):
-                    _unitySocketPort = EditorPrefs.GetInt(EditorPrefKeys.UnitySocketPort, 0);
+                    _unitySocketPort = McpPrefs.GetInt(EditorPrefKeys.UnitySocketPort, 0);
                     break;
             }
             OnConfigurationChanged?.Invoke(keyName);

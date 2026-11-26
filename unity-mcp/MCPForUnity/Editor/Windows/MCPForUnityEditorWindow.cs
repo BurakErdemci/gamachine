@@ -652,7 +652,7 @@ namespace MCPForUnity.Editor.Windows
                 });
             }
 
-            var savedPanel = EditorPrefs.GetString(EditorPrefKeys.EditorWindowActivePanel, ActivePanel.Clients.ToString());
+            var savedPanel = McpPrefs.GetString(EditorPrefKeys.EditorWindowActivePanel, ActivePanel.Clients.ToString());
             // Migrate old "Validation" saved value to "Deps"
             if (savedPanel == "Validation") savedPanel = "Deps";
             if (!Enum.TryParse(savedPanel, out ActivePanel initialPanel))
@@ -722,7 +722,7 @@ namespace MCPForUnity.Editor.Windows
             toolsTabToggle?.SetValueWithoutNotify(panel == ActivePanel.Tools);
             resourcesTabToggle?.SetValueWithoutNotify(panel == ActivePanel.Resources);
 
-            EditorPrefs.SetString(EditorPrefKeys.EditorWindowActivePanel, panel.ToString());
+            McpPrefs.SetString(EditorPrefKeys.EditorWindowActivePanel, panel.ToString());
         }
 
         internal static void RequestHealthVerification()

@@ -50,11 +50,11 @@ namespace MCPForUnity.Editor.Services
 
                 if (shouldResume)
                 {
-                    EditorPrefs.SetBool(EditorPrefKeys.ResumeHttpAfterReload, true);
+                    McpPrefs.SetBool(EditorPrefKeys.ResumeHttpAfterReload, true);
                 }
                 else
                 {
-                    EditorPrefs.DeleteKey(EditorPrefKeys.ResumeHttpAfterReload);
+                    McpPrefs.DeleteKey(EditorPrefKeys.ResumeHttpAfterReload);
                 }
 
                 if (shouldResume)
@@ -75,18 +75,18 @@ namespace MCPForUnity.Editor.Services
             bool resume = false;
             try
             {
-                if (!EditorPrefs.GetBool(EditorPrefKeys.AutoStartOnLoad, false))
+                if (!McpPrefs.GetBool(EditorPrefKeys.AutoStartOnLoad, false))
                 {
-                    EditorPrefs.DeleteKey(EditorPrefKeys.ResumeHttpAfterReload);
+                    McpPrefs.DeleteKey(EditorPrefKeys.ResumeHttpAfterReload);
                     return;
                 }
 
                 // Only resume HTTP if it is still the selected transport.
                 bool useHttp = EditorConfigurationCache.Instance.UseHttpTransport;
-                resume = useHttp && EditorPrefs.GetBool(EditorPrefKeys.ResumeHttpAfterReload, false);
+                resume = useHttp && McpPrefs.GetBool(EditorPrefKeys.ResumeHttpAfterReload, false);
                 if (resume)
                 {
-                    EditorPrefs.DeleteKey(EditorPrefKeys.ResumeHttpAfterReload);
+                    McpPrefs.DeleteKey(EditorPrefKeys.ResumeHttpAfterReload);
                 }
             }
             catch (Exception ex)
@@ -127,7 +127,7 @@ namespace MCPForUnity.Editor.Services
         {
             for (int i = 0; i < ResumeRetrySchedule.Length; i++)
             {
-                if (!EditorPrefs.GetBool(EditorPrefKeys.AutoStartOnLoad, false)) return;
+                if (!McpPrefs.GetBool(EditorPrefKeys.AutoStartOnLoad, false)) return;
 
                 int attempt = i + 1;
                 McpLog.Debug($"[HTTP Reload] Resume attempt {attempt}/{ResumeRetrySchedule.Length}");
@@ -141,7 +141,7 @@ namespace MCPForUnity.Editor.Services
                 }
 
                 // Abort retries if the user disabled MCP or switched transports while waiting.
-                if (!EditorPrefs.GetBool(EditorPrefKeys.AutoStartOnLoad, false)) return;
+                if (!McpPrefs.GetBool(EditorPrefKeys.AutoStartOnLoad, false)) return;
                 if (!EditorConfigurationCache.Instance.UseHttpTransport)
                 {
                     return;
@@ -167,7 +167,7 @@ namespace MCPForUnity.Editor.Services
                 }
             }
 
-            if (!EditorPrefs.GetBool(EditorPrefKeys.AutoStartOnLoad, false)) return;
+            if (!McpPrefs.GetBool(EditorPrefKeys.AutoStartOnLoad, false)) return;
             if (MCPServiceLocator.Server.IsLocalHttpServerReachable())
             {
                 McpLog.WarnGamachineConnectionFailed();
@@ -217,13 +217,13 @@ namespace MCPForUnity.Editor.Services
             {
                 while (true)
                 {
-                    if (!EditorPrefs.GetBool(EditorPrefKeys.AutoStartOnLoad, false)) return;
+                    if (!McpPrefs.GetBool(EditorPrefKeys.AutoStartOnLoad, false)) return;
 
                     try { await Task.Delay(ResumeTailInterval); }
                     catch { return; }
 
                     // The user may have disabled MCP or switched transports while waiting.
-                    if (!EditorPrefs.GetBool(EditorPrefKeys.AutoStartOnLoad, false)) return;
+                    if (!McpPrefs.GetBool(EditorPrefKeys.AutoStartOnLoad, false)) return;
                     if (!EditorConfigurationCache.Instance.UseHttpTransport)
                     {
                         return;

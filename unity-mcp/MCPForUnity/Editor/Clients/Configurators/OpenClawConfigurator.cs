@@ -101,7 +101,7 @@ namespace MCPForUnity.Editor.Clients.Configurators
 
         public override void Configure()
         {
-            if (EditorPrefs.GetBool(EditorPrefKeys.LockCursorConfig, false))
+            if (McpPrefs.GetBool(EditorPrefKeys.LockCursorConfig, false))
                 return;
 
             string path = GetConfigPath();

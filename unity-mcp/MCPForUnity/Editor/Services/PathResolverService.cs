@@ -18,8 +18,8 @@ namespace MCPForUnity.Editor.Services
     {
         private bool _hasUvxPathFallback;
 
-        public bool HasUvxPathOverride => !string.IsNullOrEmpty(EditorPrefs.GetString(EditorPrefKeys.UvxPathOverride, null));
-        public bool HasClaudeCliPathOverride => !string.IsNullOrEmpty(EditorPrefs.GetString(EditorPrefKeys.ClaudeCliPathOverride, null));
+        public bool HasUvxPathOverride => !string.IsNullOrEmpty(McpPrefs.GetString(EditorPrefKeys.UvxPathOverride, null));
+        public bool HasClaudeCliPathOverride => !string.IsNullOrEmpty(McpPrefs.GetString(EditorPrefKeys.ClaudeCliPathOverride, null));
         public bool HasUvxPathFallback => _hasUvxPathFallback;
 
         public string GetUvxPath()
@@ -30,7 +30,7 @@ namespace MCPForUnity.Editor.Services
             // Check override first - only validate if explicitly set
             if (HasUvxPathOverride)
             {
-                string overridePath = EditorPrefs.GetString(EditorPrefKeys.UvxPathOverride, string.Empty);
+                string overridePath = McpPrefs.GetString(EditorPrefKeys.UvxPathOverride, string.Empty);
                 // Validate the override - if invalid, fall back to system discovery
                 if (TryValidateUvxExecutable(overridePath, out string version))
                 {
@@ -97,7 +97,7 @@ namespace MCPForUnity.Editor.Services
             // Check override first - only validate if explicitly set
             if (HasClaudeCliPathOverride)
             {
-                string overridePath = EditorPrefs.GetString(EditorPrefKeys.ClaudeCliPathOverride, string.Empty);
+                string overridePath = McpPrefs.GetString(EditorPrefKeys.ClaudeCliPathOverride, string.Empty);
                 // Validate the override - if invalid, don't fall back to discovery
                 if (File.Exists(overridePath))
                 {
@@ -192,7 +192,7 @@ namespace MCPForUnity.Editor.Services
                 throw new ArgumentException("The selected uvx executable does not exist");
             }
 
-            EditorPrefs.SetString(EditorPrefKeys.UvxPathOverride, path);
+            McpPrefs.SetString(EditorPrefKeys.UvxPathOverride, path);
         }
 
         public void SetClaudeCliPathOverride(string path)
@@ -208,17 +208,17 @@ namespace MCPForUnity.Editor.Services
                 throw new ArgumentException("The selected Claude CLI executable does not exist");
             }
 
-            EditorPrefs.SetString(EditorPrefKeys.ClaudeCliPathOverride, path);
+            McpPrefs.SetString(EditorPrefKeys.ClaudeCliPathOverride, path);
         }
 
         public void ClearUvxPathOverride()
         {
-            EditorPrefs.DeleteKey(EditorPrefKeys.UvxPathOverride);
+            McpPrefs.DeleteKey(EditorPrefKeys.UvxPathOverride);
         }
 
         public void ClearClaudeCliPathOverride()
         {
-            EditorPrefs.DeleteKey(EditorPrefKeys.ClaudeCliPathOverride);
+            McpPrefs.DeleteKey(EditorPrefKeys.ClaudeCliPathOverride);
         }
 
         /// <summary>

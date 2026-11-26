@@ -51,7 +51,7 @@ namespace MCPForUnity.Editor.Helpers
         /// </summary>
         public static string GetLocalBaseUrl()
         {
-            string stored = EditorPrefs.GetString(LocalPrefKey, DefaultLocalBaseUrl);
+            string stored = McpPrefs.GetString(LocalPrefKey, DefaultLocalBaseUrl);
             return NormalizeBaseUrl(stored, DefaultLocalBaseUrl, remoteScope: false);
         }
 
@@ -61,7 +61,7 @@ namespace MCPForUnity.Editor.Helpers
         public static void SaveLocalBaseUrl(string userValue)
         {
             string normalized = NormalizeBaseUrl(userValue, DefaultLocalBaseUrl, remoteScope: false);
-            EditorPrefs.SetString(LocalPrefKey, normalized);
+            McpPrefs.SetString(LocalPrefKey, normalized);
         }
 
         /// <summary>
@@ -70,7 +70,7 @@ namespace MCPForUnity.Editor.Helpers
         /// </summary>
         public static string GetRemoteBaseUrl()
         {
-            string stored = EditorPrefs.GetString(RemotePrefKey, DefaultRemoteBaseUrl);
+            string stored = McpPrefs.GetString(RemotePrefKey, DefaultRemoteBaseUrl);
             if (string.IsNullOrWhiteSpace(stored))
             {
                 return DefaultRemoteBaseUrl;
@@ -85,11 +85,11 @@ namespace MCPForUnity.Editor.Helpers
         {
             if (string.IsNullOrWhiteSpace(userValue))
             {
-                EditorPrefs.SetString(RemotePrefKey, DefaultRemoteBaseUrl);
+                McpPrefs.SetString(RemotePrefKey, DefaultRemoteBaseUrl);
                 return;
             }
             string normalized = NormalizeBaseUrl(userValue, DefaultRemoteBaseUrl, remoteScope: true);
-            EditorPrefs.SetString(RemotePrefKey, normalized);
+            McpPrefs.SetString(RemotePrefKey, normalized);
         }
 
         /// <summary>
@@ -205,7 +205,7 @@ namespace MCPForUnity.Editor.Helpers
         /// </summary>
         public static bool AllowLanHttpBind()
         {
-            return EditorPrefs.GetBool(EditorPrefKeys.AllowLanHttpBind, false);
+            return McpPrefs.GetBool(EditorPrefKeys.AllowLanHttpBind, false);
         }
 
         /// <summary>
@@ -214,7 +214,7 @@ namespace MCPForUnity.Editor.Helpers
         /// </summary>
         public static bool AllowInsecureRemoteHttp()
         {
-            return EditorPrefs.GetBool(EditorPrefKeys.AllowInsecureRemoteHttp, false);
+            return McpPrefs.GetBool(EditorPrefKeys.AllowInsecureRemoteHttp, false);
         }
 
         /// <summary>

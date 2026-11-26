@@ -61,11 +61,11 @@ namespace MCPForUnity.Editor.Services
 
                 if (shouldResume)
                 {
-                    EditorPrefs.SetBool(EditorPrefKeys.ResumeStdioAfterReload, true);
+                    McpPrefs.SetBool(EditorPrefKeys.ResumeStdioAfterReload, true);
                 }
                 else
                 {
-                    EditorPrefs.DeleteKey(EditorPrefKeys.ResumeStdioAfterReload);
+                    McpPrefs.DeleteKey(EditorPrefKeys.ResumeStdioAfterReload);
                 }
 
                 if (isRunning)
@@ -96,14 +96,14 @@ namespace MCPForUnity.Editor.Services
             bool resume = false;
             try
             {
-                bool resumeFlag = EditorPrefs.GetBool(EditorPrefKeys.ResumeStdioAfterReload, false);
+                bool resumeFlag = McpPrefs.GetBool(EditorPrefKeys.ResumeStdioAfterReload, false);
                 bool useHttp = EditorConfigurationCache.Instance.UseHttpTransport;
                 resume = resumeFlag && !useHttp;
 
                 // If we're not going to resume, clear the flag immediately to avoid stuck "Resuming..." state
                 if (!resume)
                 {
-                    EditorPrefs.DeleteKey(EditorPrefKeys.ResumeStdioAfterReload);
+                    McpPrefs.DeleteKey(EditorPrefKeys.ResumeStdioAfterReload);
                 }
             }
             catch (Exception ex)
@@ -166,7 +166,7 @@ namespace MCPForUnity.Editor.Services
                 // Abort retries if the user switched transports while we were waiting.
                 if (EditorConfigurationCache.Instance.UseHttpTransport)
                 {
-                    try { EditorPrefs.DeleteKey(EditorPrefKeys.ResumeStdioAfterReload); } catch { }
+                    try { McpPrefs.DeleteKey(EditorPrefKeys.ResumeStdioAfterReload); } catch { }
                     return;
                 }
 
@@ -176,7 +176,7 @@ namespace MCPForUnity.Editor.Services
                     if (started)
                     {
                         McpLog.Debug($"[Stdio Reload] Resume succeeded on attempt {attempt}");
-                        try { EditorPrefs.DeleteKey(EditorPrefKeys.ResumeStdioAfterReload); } catch { }
+                        try { McpPrefs.DeleteKey(EditorPrefKeys.ResumeStdioAfterReload); } catch { }
                         MCPForUnityEditorWindow.RequestHealthVerification();
                         return;
                     }
@@ -192,7 +192,7 @@ namespace MCPForUnity.Editor.Services
                 }
             }
 
-            try { EditorPrefs.DeleteKey(EditorPrefKeys.ResumeStdioAfterReload); } catch { }
+            try { McpPrefs.DeleteKey(EditorPrefKeys.ResumeStdioAfterReload); } catch { }
 
             // Clear the stale "reloading" heartbeat so clients stop seeing reloading=true.
             // The bridge isn't running, so clients will get connection-refused (recoverable)

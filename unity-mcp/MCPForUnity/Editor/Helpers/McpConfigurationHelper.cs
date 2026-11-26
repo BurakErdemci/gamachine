@@ -32,7 +32,7 @@ namespace MCPForUnity.Editor.Helpers
             // 0) Respect explicit lock (hidden pref or UI toggle)
             try
             {
-                if (EditorPrefs.GetBool(LOCK_CONFIG_KEY, false))
+                if (McpPrefs.GetBool(LOCK_CONFIG_KEY, false))
                     return "Skipped (locked)";
             }
             catch { }
@@ -123,7 +123,7 @@ namespace MCPForUnity.Editor.Helpers
         {
             try
             {
-                if (EditorPrefs.GetBool(LOCK_CONFIG_KEY, false))
+                if (McpPrefs.GetBool(LOCK_CONFIG_KEY, false))
                     return "Skipped (locked)";
             }
             catch { }

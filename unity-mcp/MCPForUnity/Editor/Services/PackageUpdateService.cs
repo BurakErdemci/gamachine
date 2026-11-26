@@ -39,8 +39,8 @@ namespace MCPForUnity.Editor.Services
                 ? (useBetaChannel ? CachedBetaVersionKey : CachedVersionKey)
                 : CachedAssetStoreVersionKey;
 
-            string lastCheckDate = EditorPrefs.GetString(lastCheckKey, "");
-            string cachedLatestVersion = EditorPrefs.GetString(cachedVersionKey, "");
+            string lastCheckDate = McpPrefs.GetString(lastCheckKey, "");
+            string cachedLatestVersion = McpPrefs.GetString(cachedVersionKey, "");
 
             if (lastCheckDate == DateTime.Now.ToString("yyyy-MM-dd") && !string.IsNullOrEmpty(cachedLatestVersion))
             {
@@ -60,8 +60,8 @@ namespace MCPForUnity.Editor.Services
             if (!string.IsNullOrEmpty(latestVersion))
             {
                 // Cache the result
-                EditorPrefs.SetString(lastCheckKey, DateTime.Now.ToString("yyyy-MM-dd"));
-                EditorPrefs.SetString(cachedVersionKey, latestVersion);
+                McpPrefs.SetString(lastCheckKey, DateTime.Now.ToString("yyyy-MM-dd"));
+                McpPrefs.SetString(cachedVersionKey, latestVersion);
 
                 return new UpdateCheckResult
                 {
@@ -96,8 +96,8 @@ namespace MCPForUnity.Editor.Services
                 ? (useBetaChannel ? CachedBetaVersionKey : CachedVersionKey)
                 : CachedAssetStoreVersionKey;
 
-            string lastCheckDate = EditorPrefs.GetString(lastCheckKey, "");
-            string cachedLatestVersion = EditorPrefs.GetString(cachedVersionKey, "");
+            string lastCheckDate = McpPrefs.GetString(lastCheckKey, "");
+            string cachedLatestVersion = McpPrefs.GetString(cachedVersionKey, "");
 
             if (lastCheckDate == DateTime.Now.ToString("yyyy-MM-dd") && !string.IsNullOrEmpty(cachedLatestVersion))
             {
@@ -165,8 +165,8 @@ namespace MCPForUnity.Editor.Services
                 ? (useBetaChannel ? CachedBetaVersionKey : CachedVersionKey)
                 : CachedAssetStoreVersionKey;
 
-            EditorPrefs.SetString(lastCheckKey, DateTime.Now.ToString("yyyy-MM-dd"));
-            EditorPrefs.SetString(cachedVersionKey, fetchedVersion);
+            McpPrefs.SetString(lastCheckKey, DateTime.Now.ToString("yyyy-MM-dd"));
+            McpPrefs.SetString(cachedVersionKey, fetchedVersion);
         }
 
         /// <inheritdoc/>
@@ -330,12 +330,12 @@ namespace MCPForUnity.Editor.Services
         /// <inheritdoc/>
         public void ClearCache()
         {
-            EditorPrefs.DeleteKey(LastCheckDateKey);
-            EditorPrefs.DeleteKey(CachedVersionKey);
-            EditorPrefs.DeleteKey(LastBetaCheckDateKey);
-            EditorPrefs.DeleteKey(CachedBetaVersionKey);
-            EditorPrefs.DeleteKey(LastAssetStoreCheckDateKey);
-            EditorPrefs.DeleteKey(CachedAssetStoreVersionKey);
+            McpPrefs.DeleteKey(LastCheckDateKey);
+            McpPrefs.DeleteKey(CachedVersionKey);
+            McpPrefs.DeleteKey(LastBetaCheckDateKey);
+            McpPrefs.DeleteKey(CachedBetaVersionKey);
+            McpPrefs.DeleteKey(LastAssetStoreCheckDateKey);
+            McpPrefs.DeleteKey(CachedAssetStoreVersionKey);
         }
 
         /// <summary>

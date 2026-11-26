@@ -130,13 +130,13 @@ namespace MCPForUnity.Editor.Windows.Components.Connection
             else
             {
                 // Back-compat: if scope pref isn't set yet, infer from current URL.
-                string scope = EditorPrefs.GetString(EditorPrefKeys.HttpTransportScope, string.Empty);
+                string scope = McpPrefs.GetString(EditorPrefKeys.HttpTransportScope, string.Empty);
                 if (string.IsNullOrEmpty(scope))
                 {
                     scope = MCPServiceLocator.Server.IsLocalUrl() ? "local" : "remote";
                     try
                     {
-                        EditorPrefs.SetString(EditorPrefKeys.HttpTransportScope, scope);
+                        McpPrefs.SetString(EditorPrefKeys.HttpTransportScope, scope);
                     }
                     catch
                     {
@@ -160,13 +160,13 @@ namespace MCPForUnity.Editor.Windows.Components.Connection
             // Initialize API key field
             if (apiKeyField != null)
             {
-                apiKeyField.value = EditorPrefs.GetString(EditorPrefKeys.ApiKey, string.Empty);
+                apiKeyField.value = McpPrefs.GetString(EditorPrefKeys.ApiKey, string.Empty);
                 apiKeyField.tooltip = "API key for remote-hosted MCP server authentication";
                 apiKeyField.isPasswordField = true;
                 apiKeyField.maskChar = '*';
             }
 
-            int unityPort = EditorPrefs.GetInt(EditorPrefKeys.UnitySocketPort, 0);
+            int unityPort = McpPrefs.GetInt(EditorPrefKeys.UnitySocketPort, 0);
             if (unityPort == 0)
             {
                 unityPort = MCPServiceLocator.Bridge.CurrentPort;
@@ -188,8 +188,8 @@ namespace MCPForUnity.Editor.Windows.Components.Connection
                 EditorConfigurationCache.Instance.SetUseHttpTransport(useHttp);
 
                 // Clear any stale resume flags when user manually changes transport
-                try { EditorPrefs.DeleteKey(EditorPrefKeys.ResumeStdioAfterReload); } catch { }
-                try { EditorPrefs.DeleteKey(EditorPrefKeys.ResumeHttpAfterReload); } catch { }
+                try { McpPrefs.DeleteKey(EditorPrefKeys.ResumeStdioAfterReload); } catch { }
+                try { McpPrefs.DeleteKey(EditorPrefKeys.ResumeHttpAfterReload); } catch { }
 
                 if (useHttp)
                 {
@@ -323,7 +323,7 @@ namespace MCPForUnity.Editor.Windows.Components.Connection
             var bridgeService = MCPServiceLocator.Bridge;
             bool isRunning = bridgeService.IsRunning;
             bool showLocalServerControls = IsHttpLocalSelected();
-            bool debugMode = EditorPrefs.GetBool(EditorPrefKeys.DebugLogs, false);
+            bool debugMode = McpPrefs.GetBool(EditorPrefKeys.DebugLogs, false);
             // EditorConfigurationCache is the source of truth for transport selection after domain reload
             // (EditorPrefs is still used for debugMode and other UI-only state)
             bool stdioSelected = !EditorConfigurationCache.Instance.UseHttpTransport;
@@ -376,7 +376,7 @@ namespace MCPForUnity.Editor.Windows.Components.Connection
                 // Check if we're resuming the stdio bridge after a domain reload.
                 // During this brief window, show "Resuming..." instead of "No Session" to avoid UI flicker.
                 bool isStdioResuming = stdioSelected
-                    && EditorPrefs.GetBool(EditorPrefKeys.ResumeStdioAfterReload, false);
+                    && McpPrefs.GetBool(EditorPrefKeys.ResumeStdioAfterReload, false);
 
                 if (isStdioResuming)
                 {
@@ -397,7 +397,7 @@ namespace MCPForUnity.Editor.Windows.Components.Connection
                     bool httpRemoteSelected = transportDropdown != null
                         && (TransportProtocol)transportDropdown.value == TransportProtocol.HTTPRemote;
                     bool httpRemoteNeedsKey = httpRemoteSelected
-                        && string.IsNullOrEmpty(EditorPrefs.GetString(EditorPrefKeys.ApiKey, string.Empty));
+                        && string.IsNullOrEmpty(McpPrefs.GetString(EditorPrefKeys.ApiKey, string.Empty));
                     string remoteUrlError = null;
                     bool remoteUrlAllowed = !httpRemoteSelected
                         || HttpEndpointUtility.IsCurrentRemoteUrlAllowed(out remoteUrlError);
@@ -432,7 +432,7 @@ namespace MCPForUnity.Editor.Windows.Components.Connection
 
                 unityPortField.SetEnabled(!isStdioResuming);
 
-                int savedPort = EditorPrefs.GetInt(EditorPrefKeys.UnitySocketPort, 0);
+                int savedPort = McpPrefs.GetInt(EditorPrefKeys.UnitySocketPort, 0);
                 unityPortField.value = (savedPort == 0
                     ? bridgeService.CurrentPort
                     : savedPort).ToString();
@@ -751,7 +751,7 @@ namespace MCPForUnity.Editor.Windows.Components.Connection
             try
             {
                 int storedPort = PortManager.SetPreferredPort(requestedPort);
-                EditorPrefs.SetInt(EditorPrefKeys.UnitySocketPort, storedPort);
+                McpPrefs.SetInt(EditorPrefKeys.UnitySocketPort, storedPort);
                 unityPortField.value = storedPort.ToString();
             }
             catch (Exception ex)
@@ -783,8 +783,8 @@ namespace MCPForUnity.Editor.Windows.Components.Connection
                     // Clear any resume flags when user manually ends the session to prevent
                     // getting stuck in "Resuming..." state (the flag may have been set by a
                     // domain reload that started just before the user clicked End Session)
-                    try { EditorPrefs.DeleteKey(EditorPrefKeys.ResumeStdioAfterReload); } catch { }
-                    try { EditorPrefs.DeleteKey(EditorPrefKeys.ResumeHttpAfterReload); } catch { }
+                    try { McpPrefs.DeleteKey(EditorPrefKeys.ResumeStdioAfterReload); } catch { }
+                    try { McpPrefs.DeleteKey(EditorPrefKeys.ResumeHttpAfterReload); } catch { }
 
                     await bridgeService.StopAsync();
                 }
@@ -853,8 +853,8 @@ namespace MCPForUnity.Editor.Windows.Components.Connection
                 connectionToggleButton?.SetEnabled(false);
 
                 // Clear resume flags to prevent getting stuck in "Resuming..." state
-                try { EditorPrefs.DeleteKey(EditorPrefKeys.ResumeStdioAfterReload); } catch { }
-                try { EditorPrefs.DeleteKey(EditorPrefKeys.ResumeHttpAfterReload); } catch { }
+                try { McpPrefs.DeleteKey(EditorPrefKeys.ResumeStdioAfterReload); } catch { }
+                try { McpPrefs.DeleteKey(EditorPrefKeys.ResumeHttpAfterReload); } catch { }
 
                 await MCPServiceLocator.Bridge.StopAsync();
             }
@@ -878,11 +878,11 @@ namespace MCPForUnity.Editor.Windows.Components.Connection
             }
 
             string apiKey = apiKeyField.text?.Trim() ?? string.Empty;
-            string existingKey = EditorPrefs.GetString(EditorPrefKeys.ApiKey, string.Empty);
+            string existingKey = McpPrefs.GetString(EditorPrefKeys.ApiKey, string.Empty);
 
             if (apiKey != existingKey)
             {
-                EditorPrefs.SetString(EditorPrefKeys.ApiKey, apiKey);
+                McpPrefs.SetString(EditorPrefKeys.ApiKey, apiKey);
                 OnManualConfigUpdateRequested?.Invoke();
                 UpdateConnectionStatus();
                 McpLog.Info(string.IsNullOrEmpty(apiKey) ? "API key cleared" : "API key updated");
@@ -964,7 +964,7 @@ namespace MCPForUnity.Editor.Windows.Components.Connection
 
         private void OnClearApiKeyClicked()
         {
-            EditorPrefs.SetString(EditorPrefKeys.ApiKey, string.Empty);
+            McpPrefs.SetString(EditorPrefKeys.ApiKey, string.Empty);
             if (apiKeyField != null)
             {
                 apiKeyField.SetValueWithoutNotify(string.Empty);

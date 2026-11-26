@@ -19,7 +19,7 @@ namespace MCPForUnity.Editor.Helpers
     {
         private static bool IsDebugEnabled()
         {
-            try { return EditorPrefs.GetBool(EditorPrefKeys.DebugLogs, false); }
+            try { return McpPrefs.GetBool(EditorPrefKeys.DebugLogs, false); }
             catch { return false; }
         }
 

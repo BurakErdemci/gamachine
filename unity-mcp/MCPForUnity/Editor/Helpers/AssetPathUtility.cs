@@ -213,14 +213,14 @@ namespace MCPForUnity.Editor.Helpers
         public static string GetMcpServerPackageSource()
         {
             // Check for override first (supports git URLs, file:// paths, local paths)
-            string sourceOverride = EditorPrefs.GetString(EditorPrefKeys.GitUrlOverride, "");
+            string sourceOverride = McpPrefs.GetString(EditorPrefKeys.GitUrlOverride, "");
             if (!string.IsNullOrEmpty(sourceOverride))
             {
                 string resolved = ResolveLocalServerPath(sourceOverride);
                 // Persist the corrected path so future reads are consistent
                 if (resolved != sourceOverride)
                 {
-                    EditorPrefs.SetString(EditorPrefKeys.GitUrlOverride, resolved);
+                    McpPrefs.SetString(EditorPrefKeys.GitUrlOverride, resolved);
                     McpLog.Info($"Auto-corrected server source override from '{sourceOverride}' to '{resolved}'");
                 }
                 return resolved;
@@ -329,7 +329,7 @@ namespace MCPForUnity.Editor.Helpers
         /// <returns>The package source arguments (e.g., "--prerelease explicit --from mcpforunityserver>=0.0.0a0")</returns>
         public static string GetBetaServerFromArgs(bool quoteFromPath = false)
         {
-            string gitUrlOverride = EditorPrefs.GetString(EditorPrefKeys.GitUrlOverride, "");
+            string gitUrlOverride = McpPrefs.GetString(EditorPrefKeys.GitUrlOverride, "");
             string packageSource = GetMcpServerPackageSource();
             return GetBetaServerFromArgs(gitUrlOverride, packageSource, quoteFromPath);
         }
@@ -380,7 +380,7 @@ namespace MCPForUnity.Editor.Helpers
         /// <returns>List of arguments to add to uvx command</returns>
         public static System.Collections.Generic.IList<string> GetBetaServerFromArgsList()
         {
-            string gitUrlOverride = EditorPrefs.GetString(EditorPrefKeys.GitUrlOverride, "");
+            string gitUrlOverride = McpPrefs.GetString(EditorPrefKeys.GitUrlOverride, "");
             string packageSource = GetMcpServerPackageSource();
             return GetBetaServerFromArgsList(gitUrlOverride, packageSource);
         }
@@ -434,7 +434,7 @@ namespace MCPForUnity.Editor.Helpers
         public static bool ShouldForceUvxRefresh()
         {
             bool devForceRefresh = false;
-            try { devForceRefresh = EditorPrefs.GetBool(EditorPrefKeys.DevModeForceServerRefresh, false); } catch { }
+            try { devForceRefresh = McpPrefs.GetBool(EditorPrefKeys.DevModeForceServerRefresh, false); } catch { }
 
             if (devForceRefresh)
                 return true;

@@ -101,17 +101,17 @@ namespace MCPForUnity.Editor.Gamachine
             if (settings == null || settings.port <= 0 || settings.port > 65535 || string.IsNullOrEmpty(settings.revision))
                 return false;
 
-            EditorPrefs.SetBool(EditorPrefKeys.UseHttpTransport, true);
-            EditorPrefs.SetString(EditorPrefKeys.HttpBaseUrl, $"http://127.0.0.1:{settings.port}");
-            EditorPrefs.SetString(UiLanguageKey, settings.language == "tr" ? "tr" : "en");
+            McpPrefs.SetBool(EditorPrefKeys.UseHttpTransport, true);
+            McpPrefs.SetString(EditorPrefKeys.HttpBaseUrl, $"http://127.0.0.1:{settings.port}");
+            McpPrefs.SetString(UiLanguageKey, settings.language == "tr" ? "tr" : "en");
             if (!string.IsNullOrEmpty(settings.uvxPath))
-                EditorPrefs.SetString(EditorPrefKeys.UvxPathOverride, settings.uvxPath);
+                McpPrefs.SetString(EditorPrefKeys.UvxPathOverride, settings.uvxPath);
 
             // Connect on load only when our server already answers; otherwise the bridge logs
             // "Connection failed" on every reload.
             bool connect = settings.autoStart && ServerReachable(settings.port);
-            EditorPrefs.SetBool(EditorPrefKeys.AutoStartOnLoad, connect);
-            EditorPrefs.SetBool(EditorPrefKeys.ResumeHttpAfterReload, connect);
+            McpPrefs.SetBool(EditorPrefKeys.AutoStartOnLoad, connect);
+            McpPrefs.SetBool(EditorPrefKeys.ResumeHttpAfterReload, connect);
             return true;
         }
 

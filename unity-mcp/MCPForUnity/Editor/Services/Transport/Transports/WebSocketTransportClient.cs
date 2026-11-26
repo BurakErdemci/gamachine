@@ -97,7 +97,7 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
             _useLocalTokenFile = !HttpEndpointUtility.IsRemoteScope();
             _apiKey = _useLocalTokenFile
                 ? ReadLocalApiToken()
-                : EditorPrefs.GetString(EditorPrefKeys.ApiKey, string.Empty);
+                : McpPrefs.GetString(EditorPrefKeys.ApiKey, string.Empty);
 
             if (HttpEndpointUtility.IsRemoteScope()
                 && !HttpEndpointUtility.IsCurrentRemoteUrlAllowed(out string remoteUrlError))

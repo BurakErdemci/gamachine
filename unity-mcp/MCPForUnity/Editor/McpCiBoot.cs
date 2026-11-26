@@ -11,7 +11,7 @@ namespace MCPForUnity.Editor
         {
             try 
             { 
-                EditorPrefs.SetBool(EditorPrefKeys.UseHttpTransport, false); 
+                McpPrefs.SetBool(EditorPrefKeys.UseHttpTransport, false); 
             }
             catch { /* ignore */ }
 

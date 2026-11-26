@@ -45,7 +45,7 @@ namespace MCPForUnity.Editor.Services
             {
                 bool useHttp = EditorConfigurationCache.Instance.UseHttpTransport;
                 string scope = string.Empty;
-                try { scope = EditorPrefs.GetString(EditorPrefKeys.HttpTransportScope, string.Empty); } catch { }
+                try { scope = McpPrefs.GetString(EditorPrefKeys.HttpTransportScope, string.Empty); } catch { }
 
                 bool stopped = false;
                 bool httpLocalSelected =

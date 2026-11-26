@@ -36,28 +36,28 @@ namespace MCPForUnity.Editor.Setup
         private void OnEnable()
         {
             var userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            _repoUrl = EditorPrefs.GetString(RepoUrlKey, "https://github.com/CoplayDev/unity-mcp");
-            _targetBranch = EditorPrefs.GetString(BranchKey, "beta");
+            _repoUrl = McpPrefs.GetString(RepoUrlKey, "https://github.com/CoplayDev/unity-mcp");
+            _targetBranch = McpPrefs.GetString(BranchKey, "beta");
             if (!BranchOptions.Contains(_targetBranch))
             {
                 _targetBranch = "beta";
             }
-            _cliType = EditorPrefs.GetString(CliKey, CodexCli);
+            _cliType = McpPrefs.GetString(CliKey, CodexCli);
             if (!CliOptions.Contains(_cliType))
             {
                 _cliType = CodexCli;
             }
-            _installDir = EditorPrefs.GetString(InstallDirKey, GetDefaultInstallDir(userHome, _cliType));
+            _installDir = McpPrefs.GetString(InstallDirKey, GetDefaultInstallDir(userHome, _cliType));
             EditorApplication.update += OnEditorUpdate;
         }
 
         private void OnDisable()
         {
             EditorApplication.update -= OnEditorUpdate;
-            EditorPrefs.SetString(RepoUrlKey, _repoUrl);
-            EditorPrefs.SetString(BranchKey, _targetBranch);
-            EditorPrefs.SetString(CliKey, _cliType);
-            EditorPrefs.SetString(InstallDirKey, _installDir);
+            McpPrefs.SetString(RepoUrlKey, _repoUrl);
+            McpPrefs.SetString(BranchKey, _targetBranch);
+            McpPrefs.SetString(CliKey, _cliType);
+            McpPrefs.SetString(InstallDirKey, _installDir);
         }
 
         private void OnGUI()

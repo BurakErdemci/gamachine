@@ -48,7 +48,7 @@ namespace MCPForUnity.Editor.Windows.Components.Validation
         private void InitializeUI()
         {
             validationLevelField.Init(ValidationLevel.Standard);
-            int savedLevel = EditorPrefs.GetInt(EditorPrefKeys.ValidationLevel, 1);
+            int savedLevel = McpPrefs.GetInt(EditorPrefKeys.ValidationLevel, 1);
             currentValidationLevel = (ValidationLevel)Mathf.Clamp(savedLevel, 0, 3);
             validationLevelField.value = currentValidationLevel;
             UpdateValidationDescription();
@@ -59,7 +59,7 @@ namespace MCPForUnity.Editor.Windows.Components.Validation
             validationLevelField.RegisterValueChangedCallback(evt =>
             {
                 currentValidationLevel = (ValidationLevel)evt.newValue;
-                EditorPrefs.SetInt(EditorPrefKeys.ValidationLevel, (int)currentValidationLevel);
+                McpPrefs.SetInt(EditorPrefKeys.ValidationLevel, (int)currentValidationLevel);
                 UpdateValidationDescription();
             });
         }

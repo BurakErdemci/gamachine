@@ -33,7 +33,7 @@ namespace MCPForUnity.Editor.Tools
         /// </summary>
         internal static int GetMaxCommandsPerBatch()
         {
-            int configured = EditorPrefs.GetInt(EditorPrefKeys.BatchExecuteMaxCommands, DefaultMaxCommandsPerBatch);
+            int configured = McpPrefs.GetInt(EditorPrefKeys.BatchExecuteMaxCommands, DefaultMaxCommandsPerBatch);
             return Math.Clamp(configured, 1, AbsoluteMaxCommandsPerBatch);
         }
 

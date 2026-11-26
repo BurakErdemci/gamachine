@@ -47,7 +47,7 @@ namespace MCPForUnity.Editor.Services.Server
             }
 
             string devFlags = AssetPathUtility.GetUvxDevFlags();
-            bool projectScopedTools = EditorPrefs.GetBool(
+            bool projectScopedTools = McpPrefs.GetBool(
                 EditorPrefKeys.ProjectScopedToolsLocalHttp,
                 true
             );

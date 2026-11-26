@@ -114,7 +114,7 @@ namespace MCPForUnity.Editor.Windows.Components.ClientConfig
             if (clientNames.Count > 0)
             {
                 // Restore last selected client from EditorPrefs
-                string lastClientId = EditorPrefs.GetString(EditorPrefKeys.LastSelectedClientId, string.Empty);
+                string lastClientId = McpPrefs.GetString(EditorPrefKeys.LastSelectedClientId, string.Empty);
                 int restoredIndex = FindConfiguratorIndex(lastClientId);
                 if (restoredIndex < 0)
                     restoredIndex = 0;
@@ -152,7 +152,7 @@ namespace MCPForUnity.Editor.Windows.Components.ClientConfig
                 // Persist the selected client so it's restored on next window open
                 if (selectedClientIndex >= 0 && selectedClientIndex < configurators.Count)
                 {
-                    EditorPrefs.SetString(EditorPrefKeys.LastSelectedClientId, configurators[selectedClientIndex].Id);
+                    McpPrefs.SetString(EditorPrefKeys.LastSelectedClientId, configurators[selectedClientIndex].Id);
                 }
                 UpdateClientStatus();
                 UpdateManualConfiguration();
@@ -351,7 +351,7 @@ namespace MCPForUnity.Editor.Windows.Components.ClientConfig
             var (uvxPath, _, packageName) = AssetPathUtility.GetUvxCommandParts();
             string fromArgs = AssetPathUtility.GetBetaServerFromArgs(quoteFromPath: true);
             string uvxDevFlags = AssetPathUtility.GetUvxDevFlags();
-            string apiKey = EditorPrefs.GetString(EditorPrefKeys.ApiKey, string.Empty);
+            string apiKey = McpPrefs.GetString(EditorPrefKeys.ApiKey, string.Empty);
 
             // Compute pathPrepend on main thread
             string pathPrepend = null;
@@ -515,7 +515,7 @@ namespace MCPForUnity.Editor.Windows.Components.ClientConfig
                     EditorUtility.DisplayDialog("Invalid Path", "The selected directory does not exist.", "OK");
                     return;
                 }
-                EditorPrefs.SetString(EditorPrefKeys.ClientProjectDirOverride, picked);
+                McpPrefs.SetString(EditorPrefKeys.ClientProjectDirOverride, picked);
                 UpdateClientProjectDirVisibility();
                 UpdateClientStatus();
                 McpLog.Info($"Client project directory override set to: {picked}");
@@ -524,7 +524,7 @@ namespace MCPForUnity.Editor.Windows.Components.ClientConfig
 
         private void OnClearProjectDirClicked()
         {
-            EditorPrefs.DeleteKey(EditorPrefKeys.ClientProjectDirOverride);
+            McpPrefs.DeleteKey(EditorPrefKeys.ClientProjectDirOverride);
             UpdateClientProjectDirVisibility();
             UpdateClientStatus();
             McpLog.Info("Client project directory override cleared, using Unity project directory.");

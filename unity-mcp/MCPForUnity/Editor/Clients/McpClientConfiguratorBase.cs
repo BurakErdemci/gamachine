@@ -552,7 +552,7 @@ namespace MCPForUnity.Editor.Clients
         /// </summary>
         internal static string GetClientProjectDir()
         {
-            string overrideDir = EditorPrefs.GetString(EditorPrefKeys.ClientProjectDirOverride, string.Empty);
+            string overrideDir = McpPrefs.GetString(EditorPrefKeys.ClientProjectDirOverride, string.Empty);
             if (!string.IsNullOrEmpty(overrideDir) && Directory.Exists(overrideDir))
                 return overrideDir;
             return Path.GetDirectoryName(Application.dataPath);
@@ -565,7 +565,7 @@ namespace MCPForUnity.Editor.Clients
         {
             get
             {
-                string overrideDir = EditorPrefs.GetString(EditorPrefKeys.ClientProjectDirOverride, string.Empty);
+                string overrideDir = McpPrefs.GetString(EditorPrefKeys.ClientProjectDirOverride, string.Empty);
                 return !string.IsNullOrEmpty(overrideDir) && Directory.Exists(overrideDir);
             }
         }
@@ -878,7 +878,7 @@ namespace MCPForUnity.Editor.Clients
                 // Use --scope local to register in the project-local config, avoiding conflicts with user-level config (#664)
                 if (HttpEndpointUtility.IsRemoteScope())
                 {
-                    string apiKey = EditorPrefs.GetString(EditorPrefKeys.ApiKey, string.Empty);
+                    string apiKey = McpPrefs.GetString(EditorPrefKeys.ApiKey, string.Empty);
                     if (!string.IsNullOrEmpty(apiKey))
                     {
                         string safeKey = SanitizeShellHeaderValue(apiKey);
@@ -987,7 +987,7 @@ namespace MCPForUnity.Editor.Clients
                 string headerArg = "";
                 if (HttpEndpointUtility.IsRemoteScope())
                 {
-                    string apiKey = EditorPrefs.GetString(EditorPrefKeys.ApiKey, string.Empty);
+                    string apiKey = McpPrefs.GetString(EditorPrefKeys.ApiKey, string.Empty);
                     headerArg = !string.IsNullOrEmpty(apiKey) ? $" --header \"{AuthConstants.ApiKeyHeader}: {SanitizeShellHeaderValue(apiKey)}\"" : "";
                 }
                 return "# Register the MCP server with Claude Code:\n" +

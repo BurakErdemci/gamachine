@@ -18,7 +18,7 @@ namespace MCPForUnity.Editor.Helpers
         {
             try
             {
-                string pref = EditorPrefs.GetString(PrefClaude, string.Empty);
+                string pref = McpPrefs.GetString(PrefClaude, string.Empty);
                 if (!string.IsNullOrEmpty(pref) && File.Exists(pref)) return pref;
             }
             catch { }
@@ -144,7 +144,7 @@ namespace MCPForUnity.Editor.Helpers
             {
                 if (!string.IsNullOrEmpty(absolutePath) && File.Exists(absolutePath))
                 {
-                    EditorPrefs.SetString(PrefClaude, absolutePath);
+                    McpPrefs.SetString(PrefClaude, absolutePath);
                 }
             }
             catch { }
@@ -155,9 +155,9 @@ namespace MCPForUnity.Editor.Helpers
         {
             try
             {
-                if (EditorPrefs.HasKey(PrefClaude))
+                if (McpPrefs.HasKey(PrefClaude))
                 {
-                    EditorPrefs.DeleteKey(PrefClaude);
+                    McpPrefs.DeleteKey(PrefClaude);
                 }
             }
             catch { }

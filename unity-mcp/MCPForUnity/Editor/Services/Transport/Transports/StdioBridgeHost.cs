@@ -61,7 +61,7 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
 
         private static bool IsDebugEnabled()
         {
-            try { return EditorPrefs.GetBool(EditorPrefKeys.DebugLogs, false); } catch { return false; }
+            try { return McpPrefs.GetBool(EditorPrefKeys.DebugLogs, false); } catch { return false; }
         }
 
         private static void LogBreadcrumb(string stage)
@@ -294,7 +294,7 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
 
                         try
                         {
-                            EditorPrefs.SetInt(EditorPrefKeys.UnitySocketPort, currentUnityPort);
+                            McpPrefs.SetInt(EditorPrefKeys.UnitySocketPort, currentUnityPort);
                         }
                         catch { }
 
