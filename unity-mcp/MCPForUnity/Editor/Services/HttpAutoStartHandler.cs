@@ -37,6 +37,14 @@ namespace MCPForUnity.Editor.Services
                 return;
             }
 
+            // A lane has no prefs left over from an earlier run, so the autoconnect.json values
+            // must be in its store before AutoStartOnLoad is read; InitializeOnLoad order is not fixed.
+            if (McpPrefs.IsLane)
+            {
+                System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(
+                    typeof(MCPForUnity.Editor.Gamachine.GamachineAutoConnect).TypeHandle);
+            }
+
             // Only check lightweight EditorPrefs here — services like EditorConfigurationCache
             // and MCPServiceLocator may not be initialized yet on fresh editor launch.
             bool autoStartEnabled = McpPrefs.GetBool(EditorPrefKeys.AutoStartOnLoad, false);
