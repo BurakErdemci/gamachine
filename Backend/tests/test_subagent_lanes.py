@@ -524,3 +524,46 @@ async def test_lane_merge_busy_unknown_merged_and_conflict(lanes_env, monkeypatc
     empty_res = await _post(env, "/subagents/lane-merge", conversation_id=parent, lane="disk-only")
     assert empty_res["result"] == "empty"
     assert seen_records == [(state.proj, "disk-only", disk_dir, "gamachine/disk-only")]
+
+
+async def test_lane_merge_reports_cleanup_error_when_lane_dir_not_removed(lanes_env, monkeypatch):
+    env, state = lanes_env
+    parent = _main(env)
+
+    await _start_lane(env, parent, lane="cleanup-fail")
+    await _lanes_idle()
+
+    monkeypatch.setattr(
+        unity_lanes, "merge_lane",
+        lambda _p, _rec, **_kw: {
+            "result": "merged",
+            "files": ["Assets/Main.unity"],
+            "cleanup_error": "Şerit silinemedi: dosya kilitli",
+            "message": "merged with cleanup error",
+        },
+    )
+    res = await _post(env, "/subagents/lane-merge", conversation_id=parent, lane="cleanup-fail")
+    assert res["result"] == "merged"
+    assert res["files"] == ["Assets/Main.unity"]
+    assert "could not be removed" in res["text"]
+    assert "Şerit silinemedi: dosya kilitli" in res["text"]
+    assert res["text"].endswith("Run refresh_unity in the user's editor so it picks up the merged files.")
+
+    disk_dir = unity_lanes.lane_dir(state.proj, "empty-cleanup-fail")
+    os.makedirs(disk_dir, exist_ok=True)
+    with open(os.path.join(disk_dir, ".git"), "w", encoding="utf-8") as fh:
+        fh.write("gitdir: ../.git/worktrees/empty-cleanup-fail\n")
+    monkeypatch.setattr(
+        unity_lanes, "merge_lane",
+        lambda _p, _rec, **_kw: {
+            "result": "empty",
+            "files": [],
+            "cleanup_error": "Şerit silinemedi: klasör kilitli",
+            "message": "empty with cleanup error",
+        },
+    )
+    empty_res = await _post(env, "/subagents/lane-merge", conversation_id=parent, lane="empty-cleanup-fail")
+    assert empty_res["result"] == "empty"
+    assert "no new commits" in empty_res["text"]
+    assert "could not be removed" in empty_res["text"]
+    assert "Şerit silinemedi: klasör kilitli" in empty_res["text"]

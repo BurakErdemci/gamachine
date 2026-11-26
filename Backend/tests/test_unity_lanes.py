@@ -1,4 +1,5 @@
 import os
+import stat
 import subprocess
 import sys
 
@@ -971,3 +972,165 @@ def test_yaml_merge_exe_and_git_driver_options(project, tmp_path, monkeypatch):
         assert f"{ext} merge=unityyamlmerge" in seen_attrs["content"]
     # Temp attributes file is cleaned up in finally.
     assert not os.path.exists(seen_attrs["path"])
+
+
+def _lp(path):
+    p = os.path.abspath(path)
+    if sys.platform == "win32" and not p.startswith("\\\\?\\"):
+        return "\\\\?\\" + p
+    return p
+
+
+def test_remove_lane_falls_back_to_rmtree_and_prunes_on_worktree_remove_failure(project, monkeypatch):
+    rec = ul.create_lane(project, "fallback")
+    ro_file = os.path.join(rec.dir, "Assets", "readonly.txt")
+    with open(ro_file, "w", encoding="utf-8") as fh:
+        fh.write("locked attr\n")
+    os.chmod(ro_file, stat.S_IREAD)
+
+    orig_git = ul._git
+    calls = []
+    failed_once = [False]
+
+    def fake_git(cwd, *args, timeout=ul._GIT_TIMEOUT_S):
+        calls.append(args)
+        if not failed_once[0] and "worktree" in args and "remove" in args:
+            failed_once[0] = True
+            return subprocess.CompletedProcess(args, 1, "", "error: failed to delete: Filename too long")
+        return orig_git(cwd, *args, timeout=timeout)
+
+    monkeypatch.setattr(ul, "_git", fake_git)
+    ul.remove_lane(project, rec, delete_branch=True)
+
+    assert failed_once[0]
+    assert not os.path.exists(rec.dir)
+    assert rec.state == "removed"
+    assert _branches(project) == []
+    assert any("worktree" in a and "prune" in a for a in calls)
+
+
+def test_remove_lane_handles_real_deep_path_over_260_chars(project):
+    rec = ul.create_lane(project, "deep")
+    deep_dir = os.path.join(rec.dir, "Library", *[f"segment_padding_{i:02d}_long" for i in range(12)])
+    deep_file = os.path.join(deep_dir, "artifact.bin")
+    assert len(os.path.abspath(deep_file)) > 260
+    try:
+        os.makedirs(_lp(deep_dir), exist_ok=True)
+        with open(_lp(deep_file), "w", encoding="utf-8") as fh:
+            fh.write("x")
+    except OSError as exc:
+        pytest.skip(f"OS could not create >260-char path: {exc}")
+
+    ul.remove_lane(project, rec, delete_branch=True)
+
+    assert not os.path.exists(_lp(rec.dir))
+    assert rec.state == "removed"
+    assert _branches(project) == []
+
+
+def test_remove_lane_fallback_refuses_escape_on_recheck(project, tmp_path, monkeypatch):
+    rec = ul.create_lane(project, "escape")
+    outside = tmp_path / "outside_target"
+    outside.mkdir()
+    (outside / "keep.txt").write_text("k")
+
+    orig_git = ul._git
+    orig_realpath = ul.os.path.realpath
+    dir_checks = [0]
+    rmtree_calls = []
+
+    def fake_git(cwd, *args, timeout=ul._GIT_TIMEOUT_S):
+        if "worktree" in args and "remove" in args:
+            return subprocess.CompletedProcess(args, 1, "", "mock remove failure")
+        return orig_git(cwd, *args, timeout=timeout)
+
+    def fake_realpath(p):
+        if os.path.normcase(os.path.abspath(p)) == os.path.normcase(os.path.abspath(rec.dir)):
+            dir_checks[0] += 1
+            if dir_checks[0] >= 2:
+                return str(outside)
+        return orig_realpath(p)
+
+    monkeypatch.setattr(ul, "_git", fake_git)
+    monkeypatch.setattr(ul.os.path, "realpath", fake_realpath)
+    monkeypatch.setattr(ul.shutil, "rmtree", lambda *a, **kw: rmtree_calls.append(a))
+
+    with pytest.raises(ul.LaneError):
+        ul.remove_lane(project, rec)
+
+    assert dir_checks[0] >= 2
+    assert rmtree_calls == []
+    assert (outside / "keep.txt").exists()
+    assert os.path.isdir(rec.dir)
+
+
+def test_merge_lane_returns_merged_and_empty_with_cleanup_error_when_remove_fails(project, monkeypatch):
+    monkeypatch.setattr(ul, "_yaml_merge_exe", lambda _p: None)
+    rec = ul.create_lane(project, "keep")
+    with open(os.path.join(rec.dir, "Assets", "added.txt"), "w", encoding="utf-8") as fh:
+        fh.write("from lane\n")
+    _run(rec.dir, "add", "Assets/added.txt")
+    _run(rec.dir, "commit", "-q", "-m", "lane add")
+
+    monkeypatch.setattr(
+        ul, "remove_lane",
+        lambda *_a, **_kw: (_ for _ in ()).throw(ul.LaneError("Şerit silinemedi: dosya kilitli")),
+    )
+    res = ul.merge_lane(project, rec)
+    assert res["result"] == "merged"
+    assert res["files"] == ["Assets/added.txt"]
+    assert res["cleanup_error"] == "Şerit silinemedi: dosya kilitli"
+    assert os.path.isfile(os.path.join(project, "Assets", "added.txt"))
+    assert "Merge Unity lane keep" in _git_stdout(project, "log", "-1", "--pretty=%s")
+
+    rec_empty = ul.create_lane(project, "empty-keep")
+    res_empty = ul.merge_lane(project, rec_empty)
+    assert res_empty["result"] == "empty"
+    assert res_empty["files"] == []
+    assert res_empty["cleanup_error"] == "Şerit silinemedi: dosya kilitli"
+
+
+def test_merge_lane_discards_untracked_settings_and_non_asset_noise_but_refuses_assets(project, monkeypatch):
+    monkeypatch.setattr(ul, "_yaml_merge_exe", lambda _p: None)
+    old_rel = os.path.join("ProjectSettings", "Old.asset")
+    with open(os.path.join(project, old_rel), "w", encoding="utf-8") as fh:
+        fh.write("old: 1\n")
+    _run(project, "add", old_rel)
+    _run(project, "commit", "-q", "-m", "add old project settings")
+
+    rec = ul.create_lane(project, "noise")
+    with open(os.path.join(rec.dir, "Assets", "work.txt"), "w", encoding="utf-8") as fh:
+        fh.write("work\n")
+    _run(rec.dir, "add", "Assets/work.txt")
+    _run(rec.dir, "commit", "-q", "-m", "lane work")
+
+    with open(os.path.join(rec.dir, "ProjectSettings", "New.asset"), "w", encoding="utf-8") as fh:
+        fh.write("new: 1\n")
+    os.remove(os.path.join(rec.dir, old_rel))
+    os.makedirs(os.path.join(rec.dir, "Unity", "Caches"), exist_ok=True)
+    with open(os.path.join(rec.dir, "Unity", "Caches", "x"), "w", encoding="utf-8") as fh:
+        fh.write("cache\n")
+
+    res = ul.merge_lane(project, rec)
+    assert res["result"] == "merged"
+    assert res["files"] == ["Assets/work.txt"]
+    assert not os.path.exists(os.path.join(project, "ProjectSettings", "New.asset"))
+    assert os.path.isfile(os.path.join(project, old_rel))
+    assert not os.path.exists(os.path.join(project, "Unity"))
+    assert not os.path.exists(rec.dir)
+
+    rec2 = ul.create_lane(project, "asset-dirty")
+    with open(os.path.join(rec2.dir, "ProjectSettings", "New.asset"), "w", encoding="utf-8") as fh:
+        fh.write("new: 1\n")
+    os.makedirs(os.path.join(rec2.dir, "Unity", "Caches"), exist_ok=True)
+    with open(os.path.join(rec2.dir, "Unity", "Caches", "x"), "w", encoding="utf-8") as fh:
+        fh.write("cache\n")
+    with open(os.path.join(rec2.dir, "Assets", "Untitled.asset"), "w", encoding="utf-8") as fh:
+        fh.write("untracked asset\n")
+
+    res2 = ul.merge_lane(project, rec2)
+    assert res2["result"] == "refused"
+    assert res2["files"] == ["Assets/Untitled.asset"]
+    assert not os.path.exists(os.path.join(rec2.dir, "ProjectSettings", "New.asset"))
+    assert not os.path.exists(os.path.join(rec2.dir, "Unity", "Caches", "x"))
+    assert os.path.isfile(os.path.join(rec2.dir, "Assets", "Untitled.asset"))

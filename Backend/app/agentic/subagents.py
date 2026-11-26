@@ -745,6 +745,7 @@ async def merge_lane(parent: int, user_id: int, lane: Any) -> dict:
     res = await asyncio.to_thread(unity_lanes.merge_lane, main, record)
     result_kind = res.get("result")
     files = list(res.get("files") or [])
+    cleanup_error = res.get("cleanup_error")
     if result_kind in ("merged", "empty"):
         with _LOCK:
             _LANES.pop(lane_key, None)
@@ -752,12 +753,25 @@ async def merge_lane(parent: int, user_id: int, lane: Any) -> dict:
                 _CHILD_LANE.pop(cid, None)
     if result_kind == "merged":
         file_list = ", ".join(files) if files else "none"
-        text = (
-            f"Merged lane \"{lane_name}\" into the current branch ({len(files)} file(s): {file_list}) "
-            f"and removed the lane. Run refresh_unity in the user's editor so it picks up the merged files."
-        )
+        if cleanup_error:
+            text = (
+                f"Merged lane \"{lane_name}\" into the current branch ({len(files)} file(s): {file_list}), "
+                f"but the lane folder could not be removed ({cleanup_error}). "
+                f"Run refresh_unity in the user's editor so it picks up the merged files."
+            )
+        else:
+            text = (
+                f"Merged lane \"{lane_name}\" into the current branch ({len(files)} file(s): {file_list}) "
+                f"and removed the lane. Run refresh_unity in the user's editor so it picks up the merged files."
+            )
     elif result_kind == "empty":
-        text = f"Lane \"{lane_name}\" had no new commits to merge; the lane and its branch were removed."
+        if cleanup_error:
+            text = (
+                f"Lane \"{lane_name}\" had no new commits to merge, "
+                f"but the lane folder could not be removed ({cleanup_error})."
+            )
+        else:
+            text = f"Lane \"{lane_name}\" had no new commits to merge; the lane and its branch were removed."
     elif result_kind == "conflict":
         file_list = ", ".join(files)
         text = (

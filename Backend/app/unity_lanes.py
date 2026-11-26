@@ -10,6 +10,8 @@ import json
 import logging
 import os
 import re
+import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -554,22 +556,74 @@ def stop_editor(record: LaneRecord, *, sleep: Callable[[float], None] = time.sle
 
 # ---------------------------------------------------------------- remove
 
-def remove_lane(project: str, record: LaneRecord, delete_branch: bool = False) -> None:
-    validate_name(record.name)
+def _long_path(path: str) -> str:
+    if sys.platform != "win32":
+        return path
+    abs_path = os.path.abspath(path)
+    if abs_path.startswith("\\\\?\\"):
+        return abs_path
+    if abs_path.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + abs_path[2:]
+    return "\\\\?\\" + abs_path
+
+
+def _ensure_lane_dir_safe(project: str, record: LaneRecord, *, outside_msg: str, mismatch_msg: str) -> None:
     if not _lanes_root_inside(project):
-        raise LaneError("Şerit kök klasörü proje klasörünün dışına yönlendirilmiş; silme reddedildi.")
+        raise LaneError(outside_msg)
     root = os.path.normcase(os.path.realpath(lanes_root(project)))
     target = os.path.normcase(os.path.realpath(record.dir))
     if os.path.dirname(target) != root or os.path.basename(target) != record.name:
-        raise LaneError("Şerit klasörü beklenen konumda değil; silme reddedildi.")
+        raise LaneError(mismatch_msg)
+
+
+def _rmtree_long(path: str) -> None:
+    def _handle_readonly(func, p, _exc):
+        try:
+            os.chmod(p, stat.S_IWRITE)
+        except OSError:
+            pass
+        func(p)
+
+    target = _long_path(path)
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(target, onexc=_handle_readonly)
+    else:
+        shutil.rmtree(target, onerror=_handle_readonly)
+
+
+def remove_lane(project: str, record: LaneRecord, delete_branch: bool = False) -> None:
+    validate_name(record.name)
+    _ensure_lane_dir_safe(
+        project,
+        record,
+        outside_msg="Şerit kök klasörü proje klasörünün dışına yönlendirilmiş; silme reddedildi.",
+        mismatch_msg="Şerit klasörü beklenen konumda değil; silme reddedildi.",
+    )
     if record.proc is not None or record.job is not None or record.state in ("starting", "ready"):
         stop_editor(record)
-    if os.path.lexists(record.dir):
-        res = _git(project, "worktree", "remove", "--force", record.dir)
+    long_dir = _long_path(record.dir)
+    if os.path.lexists(long_dir):
+        res = _git(project, "-c", "core.longpaths=true", "worktree", "remove", "--force", record.dir)
         if res.returncode != 0:
-            raise LaneError(f"Şerit silinemedi: {(res.stderr or res.stdout).strip()}")
+            git_err = (res.stderr or res.stdout).strip()
+            rmtree_err = ""
+            if os.path.lexists(long_dir):
+                _ensure_lane_dir_safe(
+                    project,
+                    record,
+                    outside_msg="Şerit kök klasörü proje klasörünün dışına yönlendirilmiş; silme reddedildi.",
+                    mismatch_msg="Şerit klasörü beklenen konumda değil; silme reddedildi.",
+                )
+                try:
+                    _rmtree_long(record.dir)
+                except OSError as exc:
+                    rmtree_err = str(exc)
+            _git(project, "-c", "core.longpaths=true", "worktree", "prune")
+            if os.path.lexists(long_dir):
+                detail = rmtree_err or git_err
+                raise LaneError(f"Şerit silinemedi: {detail}" if detail else "Şerit silinemedi.")
     else:
-        _git(project, "worktree", "prune")
+        _git(project, "-c", "core.longpaths=true", "worktree", "prune")
     if delete_branch:
         _git(project, "branch", "-D", record.branch)
     record.state = "removed"
@@ -618,22 +672,49 @@ def _parse_porcelain_path(xy: str, raw_path: str) -> str:
     return _unquote_git_path(raw_path)
 
 
+def _classify_lane_status(stdout: str) -> tuple[List[str], List[str], List[str]]:
+    tracked_noise: List[str] = []
+    untracked_noise: List[str] = []
+    dirty: List[str] = []
+    for line in stdout.splitlines():
+        if len(line) < 4:
+            continue
+        xy = line[:2]
+        path = _parse_porcelain_path(xy, line[3:])
+        if xy == "??":
+            first_seg = path.split("/", 1)[0]
+            if path.startswith("ProjectSettings/") or first_seg not in ("Assets", "Packages"):
+                untracked_noise.append(path)
+            else:
+                dirty.append(path)
+        elif path.startswith("ProjectSettings/") and xy in (" M", " D"):
+            tracked_noise.append(path)
+        elif xy == " M" and path == "Packages/packages-lock.json":
+            tracked_noise.append(path)
+        else:
+            dirty.append(path)
+    return tracked_noise, untracked_noise, dirty
+
+
+def _try_remove_after_merge(project: str, record: LaneRecord) -> Optional[str]:
+    try:
+        remove_lane(project, record, delete_branch=True)
+    except LaneError as exc:
+        return str(exc)
+    return None
+
+
 def merge_lane(project: str, record: LaneRecord, *, timeout_s: int = 300) -> dict:
     validate_name(record.name)
-    if not _lanes_root_inside(project):
-        return {
-            "result": "refused",
-            "files": [],
-            "message": "Şerit kök klasörü proje klasörünün dışına yönlendirilmiş; birleştirme reddedildi.",
-        }
-    root = os.path.normcase(os.path.realpath(lanes_root(project)))
-    target = os.path.normcase(os.path.realpath(record.dir))
-    if os.path.dirname(target) != root or os.path.basename(target) != record.name:
-        return {
-            "result": "refused",
-            "files": [],
-            "message": "Şerit klasörü beklenen konumda değil; birleştirme reddedildi.",
-        }
+    try:
+        _ensure_lane_dir_safe(
+            project,
+            record,
+            outside_msg="Şerit kök klasörü proje klasörünün dışına yönlendirilmiş; birleştirme reddedildi.",
+            mismatch_msg="Şerit klasörü beklenen konumda değil; birleştirme reddedildi.",
+        )
+    except LaneError as exc:
+        return {"result": "refused", "files": [], "message": str(exc)}
     if record.proc is not None and record.proc.poll() is None:
         return {
             "result": "refused",
@@ -649,25 +730,24 @@ def merge_lane(project: str, record: LaneRecord, *, timeout_s: int = 300) -> dic
             "files": [],
             "message": f"Şerit durumu okunamadı: {err}" if err else "Şerit durumu okunamadı.",
         }
-    noise: List[str] = []
-    dirty: List[str] = []
-    for line in status_res.stdout.splitlines():
-        if len(line) < 4:
-            continue
-        xy = line[:2]
-        path = _parse_porcelain_path(xy, line[3:])
-        if xy == " M" and (path.startswith("ProjectSettings/") or path == "Packages/packages-lock.json"):
-            noise.append(path)
-        else:
-            dirty.append(path)
-    if noise:
-        co_res = _git(record.dir, "checkout", "--", *noise)
+    tracked_noise, untracked_noise, dirty = _classify_lane_status(status_res.stdout)
+    if tracked_noise:
+        co_res = _git(record.dir, "checkout", "--", *tracked_noise)
         if co_res.returncode != 0:
             err = (co_res.stderr or co_res.stdout or "").strip()
             return {
                 "result": "refused",
-                "files": noise + dirty,
+                "files": tracked_noise + untracked_noise + dirty,
                 "message": f"Şeritteki Unity ayar değişiklikleri geri alınamadı: {err}",
+            }
+    if untracked_noise:
+        clean_res = _git(record.dir, "clean", "-fdq", "--", *untracked_noise)
+        if clean_res.returncode != 0:
+            err = (clean_res.stderr or clean_res.stdout or "").strip()
+            return {
+                "result": "refused",
+                "files": untracked_noise + dirty,
+                "message": f"Şeritteki Unity geçici dosyaları temizlenemedi: {err}",
             }
     if dirty:
         return {
@@ -696,7 +776,17 @@ def merge_lane(project: str, record: LaneRecord, *, timeout_s: int = 300) -> dic
             "message": f"Şerit dalındaki commit sayısı okunamadı: {rev_res.stdout.strip()}",
         }
     if ahead == 0:
-        remove_lane(project, record, delete_branch=True)
+        cleanup_error = _try_remove_after_merge(project, record)
+        if cleanup_error:
+            return {
+                "result": "empty",
+                "files": [],
+                "cleanup_error": cleanup_error,
+                "message": (
+                    f"'{record.name}' şeridinde birleştirilecek yeni commit yok; "
+                    f"ancak şerit klasörü silinemedi: {cleanup_error}"
+                ),
+            }
         return {
             "result": "empty",
             "files": [],
@@ -762,7 +852,17 @@ def merge_lane(project: str, record: LaneRecord, *, timeout_s: int = 300) -> dic
 
     files_res = _git(project, "diff", "--name-only", "HEAD^1", "HEAD")
     files = [ln for ln in files_res.stdout.splitlines() if ln.strip()] if files_res.returncode == 0 else []
-    remove_lane(project, record, delete_branch=True)
+    cleanup_error = _try_remove_after_merge(project, record)
+    if cleanup_error:
+        return {
+            "result": "merged",
+            "files": files,
+            "cleanup_error": cleanup_error,
+            "message": (
+                f"'{record.name}' şeridi birleştirildi ({len(files)} dosya), "
+                f"ancak şerit klasörü silinemedi: {cleanup_error}"
+            ),
+        }
     return {
         "result": "merged",
         "files": files,
