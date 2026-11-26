@@ -206,11 +206,11 @@ def test_bootstrap_probes_server_and_falls_back_to_off():
     assert 'client.ConnectAsync("127.0.0.1", port)' in text
     assert "connection.Wait(150) && client.Connected" in text
     assert "bool connect = settings.autoStart && ServerReachable(settings.port);" in text
-    assert "EditorPrefs.SetBool(EditorPrefKeys.AutoStartOnLoad, connect);" in text
-    assert "EditorPrefs.SetBool(EditorPrefKeys.ResumeHttpAfterReload, connect);" in text
-    assert "EditorPrefs.SetBool(EditorPrefKeys.UseHttpTransport, true);" in text
-    assert 'EditorPrefs.SetString(EditorPrefKeys.HttpBaseUrl, $"http://127.0.0.1:{settings.port}");' in text
-    assert 'EditorPrefs.SetString(UiLanguageKey, settings.language == "tr" ? "tr" : "en");' in text
+    assert "McpPrefs.SetBool(EditorPrefKeys.AutoStartOnLoad, connect);" in text
+    assert "McpPrefs.SetBool(EditorPrefKeys.ResumeHttpAfterReload, connect);" in text
+    assert "McpPrefs.SetBool(EditorPrefKeys.UseHttpTransport, true);" in text
+    assert 'McpPrefs.SetString(EditorPrefKeys.HttpBaseUrl, $"http://127.0.0.1:{settings.port}");' in text
+    assert 'McpPrefs.SetString(UiLanguageKey, settings.language == "tr" ? "tr" : "en");' in text
     assert "if (!string.IsNullOrEmpty(settings.uvxPath))" in text
     assert "EditorApplication.update += Poll;" in text
     assert "EditorUtility.RequestScriptReload()" in text
