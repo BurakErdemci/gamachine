@@ -556,3 +556,193 @@ def test_stop_editor_skips_wait_when_proc_is_none(lane):
     lane.state = "starting"
     ul.stop_editor(lane, sleep=lambda s: None)
     assert lane.state == "stopped"
+
+
+class _FakeRegistry:
+    def __init__(self, initial=None):
+        self.store = dict(initial or {})
+        self.writes = []
+
+    def read_all(self):
+        return dict(self.store)
+
+    def write(self, name, data):
+        self.writes.append((name, data))
+        self.store[name] = data
+
+
+@pytest.fixture(autouse=True)
+def _isolate_hub_registry(monkeypatch):
+    monkeypatch.setattr(ul, "_registry", _FakeRegistry())
+
+
+def _lane_reg_bytes(path, *, backslashes=False, trailing_slash=False, upper=False):
+    text = os.path.abspath(path).replace("\\", "/")
+    if trailing_slash and not text.endswith("/"):
+        text += "/"
+    if backslashes:
+        text = text.replace("/", "\\")
+    if upper:
+        text = text.upper()
+    return (text + "\x00").encode("utf-8")
+
+
+def test_hub_snapshot_taken_at_start_editor(lane, monkeypatch):
+    old_proj = b"C:/Unity Projeler/MainProj\x00"
+    old_ws = b"C:/Unity Projeler/\x00"
+    reg = _FakeRegistry({
+        "LastUsedProjectPath_h1": old_proj,
+        "kWorkspacePath_h2": old_ws,
+    })
+    monkeypatch.setattr(ul, "_registry", reg)
+
+    ul.start_editor(lane, free_bytes=10 * GB, popen=lambda *a, **k: FakeProc())
+    try:
+        assert lane.hub_snapshot == {
+            "LastUsedProjectPath_h1": old_proj,
+            "kWorkspacePath_h2": old_ws,
+        }
+        # Mutating the store afterwards must not mutate the saved snapshot.
+        reg.store["LastUsedProjectPath_h1"] = b"C:/Changed\x00"
+        assert lane.hub_snapshot["LastUsedProjectPath_h1"] == old_proj
+    finally:
+        if lane.job is not None:
+            lane.job.close()
+            lane.job = None
+
+
+def test_hub_wait_ready_restores_lane_values_and_leaves_unrelated_and_missing(lane, monkeypatch):
+    old_proj = b"C:/Unity Projeler/MainProj\x00"
+    old_base = b"C:/Unity Projeler/MainProj\x00"
+    unrelated = b"C:/Unity Projeler/OtherProj\x00"
+    lane_bytes = _lane_reg_bytes(lane.dir)
+    reg = _FakeRegistry({
+        "LastUsedProjectPath_h1": old_proj,
+        "kProjectBasePath_h2": old_base,
+    })
+    monkeypatch.setattr(ul, "_registry", reg)
+
+    ul.start_editor(lane, free_bytes=10 * GB, popen=lambda *a, **k: FakeProc())
+    try:
+        # Unity overwrote h1 to lane dir, h2 to an unrelated project, and added h9 not in snapshot.
+        reg.store["LastUsedProjectPath_h1"] = lane_bytes
+        reg.store["kProjectBasePath_h2"] = unrelated
+        reg.store["LastUsedProjectPath_h9"] = lane_bytes
+
+        want = ul.expected_instance_hash(lane.dir)
+        ul.wait_ready(lane, lambda: [{"hash": want}], sleep=lambda s: None)
+
+        assert lane.state == "ready"
+        assert reg.store["LastUsedProjectPath_h1"] == old_proj
+        assert reg.store["kProjectBasePath_h2"] == unrelated
+        assert reg.store["LastUsedProjectPath_h9"] == lane_bytes
+        assert reg.writes == [("LastUsedProjectPath_h1", old_proj)]
+    finally:
+        if lane.job is not None:
+            lane.job.close()
+            lane.job = None
+
+
+def test_hub_stop_editor_restores_lane_values(lane, monkeypatch):
+    old_proj = b"C:/Unity Projeler/MainProj\x00"
+    reg = _FakeRegistry({"LastUsedProjectPath_h1": old_proj})
+    monkeypatch.setattr(ul, "_registry", reg)
+
+    ul.start_editor(lane, free_bytes=10 * GB, popen=lambda *a, **k: FakeProc())
+    reg.store["LastUsedProjectPath_h1"] = _lane_reg_bytes(lane.dir)
+
+    ul.stop_editor(lane, sleep=lambda s: None)
+
+    assert lane.state == "stopped"
+    assert reg.store["LastUsedProjectPath_h1"] == old_proj
+    assert reg.writes == [("LastUsedProjectPath_h1", old_proj)]
+
+
+def test_hub_kworkspace_parent_lanes_dir_is_restored(lane, monkeypatch):
+    old_ws = b"C:/Unity Projeler/\x00"
+    old_proj = b"C:/Unity Projeler/MainProj\x00"
+    reg = _FakeRegistry({
+        "kWorkspacePath_h1": old_ws,
+        "LastUsedProjectPath_h2": old_proj,
+    })
+    monkeypatch.setattr(ul, "_registry", reg)
+
+    ul.start_editor(lane, free_bytes=10 * GB, popen=lambda *a, **k: FakeProc())
+    try:
+        lanes_parent = os.path.dirname(os.path.abspath(lane.dir))
+        reg.store["kWorkspacePath_h1"] = _lane_reg_bytes(lanes_parent, trailing_slash=True)
+        # Non-kWorkspacePath_ pointing at parent lanes/ should NOT match.
+        reg.store["LastUsedProjectPath_h2"] = _lane_reg_bytes(lanes_parent, trailing_slash=True)
+
+        want = ul.expected_instance_hash(lane.dir)
+        ul.wait_ready(lane, lambda: [{"hash": want}], sleep=lambda s: None)
+
+        assert reg.store["kWorkspacePath_h1"] == old_ws
+        assert reg.store["LastUsedProjectPath_h2"] == _lane_reg_bytes(lanes_parent, trailing_slash=True)
+    finally:
+        if lane.job is not None:
+            lane.job.close()
+            lane.job = None
+
+
+def test_hub_restore_normalizes_case_and_slashes_and_ignores_sibling_prefix(lane):
+    old = b"C:/Unity Projeler/Mine\x00"
+    sibling = _lane_reg_bytes(lane.dir + "-other")
+    lane.hub_snapshot = {
+        "LastUsedProjectPath_h1": old,
+        "kProjectBasePath_h2": old,
+    }
+    reg = _FakeRegistry({
+        "LastUsedProjectPath_h1": _lane_reg_bytes(lane.dir, backslashes=True, upper=True),
+        "kProjectBasePath_h2": sibling,
+    })
+
+    written = ul.restore_hub_values(lane, registry=reg)
+
+    assert written == 1
+    assert reg.store["LastUsedProjectPath_h1"] == old
+    assert reg.store["kProjectBasePath_h2"] == sibling
+
+
+def test_hub_restore_never_writes_back_another_lanes_path(lane):
+    # The snapshot was taken while another lane's editor already pointed Unity at that lane.
+    other_lane = os.path.join(os.path.dirname(lane.dir), "other")
+    lane.hub_snapshot = {"LastUsedProjectPath_h1": _lane_reg_bytes(other_lane)}
+    reg = _FakeRegistry({"LastUsedProjectPath_h1": _lane_reg_bytes(lane.dir)})
+
+    assert ul.restore_hub_values(lane, registry=reg) == 0
+    assert reg.writes == []
+
+
+def test_hub_win_registry_noop_off_windows(monkeypatch):
+    monkeypatch.setattr(ul.sys, "platform", "linux")
+    reg = ul._WinRegistry()
+    assert reg.read_all() == {}
+    reg.write("LastUsedProjectPath_h1", b"C:/x\x00")
+
+
+def test_hub_registry_errors_never_fail_start_wait_or_stop(lane, monkeypatch):
+    class BrokenRegistry:
+        def read_all(self):
+            raise RuntimeError("boom read")
+
+        def write(self, name, data):
+            raise RuntimeError("boom write")
+
+    monkeypatch.setattr(ul, "_registry", BrokenRegistry())
+    ul.start_editor(lane, free_bytes=10 * GB, popen=lambda *a, **k: FakeProc())
+    try:
+        assert lane.hub_snapshot == {}
+        lane.hub_snapshot = {"LastUsedProjectPath_h1": b"C:/Old\x00"}
+        assert ul.restore_hub_values(lane, registry=BrokenRegistry()) == 0
+
+        monkeypatch.setattr(ul, "restore_hub_values", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("boom")))
+        want = ul.expected_instance_hash(lane.dir)
+        ul.wait_ready(lane, lambda: [{"hash": want}], sleep=lambda s: None)
+        assert lane.state == "ready"
+        ul.stop_editor(lane, sleep=lambda s: None)
+        assert lane.state == "stopped"
+    finally:
+        if lane.job is not None:
+            lane.job.close()
+            lane.job = None

@@ -14,7 +14,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import process_tree
 from spawn_env import build_spawn_env
@@ -52,6 +52,7 @@ class LaneRecord:
     state: str = "created"
     proc: Any = field(default=None, repr=False)
     job: Any = field(default=None, repr=False)
+    hub_snapshot: dict = field(default_factory=dict, repr=False)
 
 
 def validate_name(name: str) -> str:
@@ -297,6 +298,104 @@ def create_lane(project: str, name: str) -> LaneRecord:
     return LaneRecord(name=name, dir=directory, branch=branch)
 
 
+# ---------------------------------------------------------------- hub registry
+
+_HUB_KEY = r"Software\Unity Technologies\Unity Editor 5.x"
+_HUB_PREFIXES = ("LastUsedProjectPath_", "kWorkspacePath_", "kProjectBasePath_")
+
+
+class _WinRegistry:
+    """Thin HKCU registry wrapper for Unity Editor 5.x last-project values; no-op off Windows."""
+
+    def read_all(self) -> Dict[str, bytes]:
+        if sys.platform != "win32":
+            return {}
+        import winreg
+
+        out: Dict[str, bytes] = {}
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _HUB_KEY, 0, winreg.KEY_READ) as key:
+                idx = 0
+                while True:
+                    try:
+                        name, val, val_type = winreg.EnumValue(key, idx)
+                    except OSError:
+                        break
+                    idx += 1
+                    if (
+                        name.startswith(_HUB_PREFIXES)
+                        and val_type == winreg.REG_BINARY
+                        and isinstance(val, (bytes, bytearray))
+                    ):
+                        out[name] = bytes(val)
+        except OSError:
+            return {}
+        return out
+
+    def write(self, name: str, data: bytes) -> None:
+        if sys.platform != "win32":
+            return
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _HUB_KEY, 0, winreg.KEY_SET_VALUE) as key:
+            winreg.SetValueEx(key, name, 0, winreg.REG_BINARY, bytes(data))
+
+
+_registry = _WinRegistry()
+
+
+def _path_matches_prefix(candidate_norm: str, target_norm: str) -> bool:
+    if not target_norm:
+        return False
+    return candidate_norm == target_norm or candidate_norm.startswith(target_norm + "/")
+
+
+def restore_hub_values(record: LaneRecord, registry: Any = None) -> int:
+    """Write back snapshot Hub values that currently point into the lane folder."""
+    snapshot = getattr(record, "hub_snapshot", None)
+    if not snapshot:
+        return 0
+    reg = _registry if registry is None else registry
+    try:
+        current = reg.read_all() or {}
+    except Exception as exc:
+        logger.warning("Unity Hub kayıt defteri değerleri okunamadı: %s", exc)
+        return 0
+
+    try:
+        lane_abs = os.path.abspath(record.dir).replace("\\", "/").rstrip("/")
+        lane_norm = lane_abs.casefold()
+        parent_norm = os.path.dirname(lane_abs).replace("\\", "/").rstrip("/").casefold()
+    except Exception as exc:
+        logger.warning("Şerit yolu çözümlenemedi: %s", exc)
+        return 0
+
+    written = 0
+    for name, old_bytes in snapshot.items():
+        if name not in current:
+            continue
+        cur_bytes = current[name]
+        if not isinstance(cur_bytes, (bytes, bytearray)):
+            continue
+        try:
+            decoded = bytes(cur_bytes).decode("utf-8", errors="replace").rstrip("\x00")
+            cur_norm = decoded.replace("\\", "/").casefold()
+            matches = _path_matches_prefix(cur_norm, lane_norm)
+            if not matches and name.startswith("kWorkspacePath_"):
+                matches = _path_matches_prefix(cur_norm, parent_norm)
+            if not matches:
+                continue
+            # A snapshot taken while another lane ran can hold that lane's path; never write it back.
+            old_norm = bytes(old_bytes).decode("utf-8", errors="replace").replace("\\", "/").casefold()
+            if "/.gamachine/lanes/" in old_norm:
+                continue
+            reg.write(name, bytes(old_bytes))
+            written += 1
+        except Exception as exc:
+            logger.warning("Unity Hub kayıt defteri değeri geri yazılamadı (%s): %s", name, exc)
+    return written
+
+
 # ---------------------------------------------------------------- editor process
 
 def lane_log_path(directory: str) -> str:
@@ -319,6 +418,10 @@ def start_editor(record: LaneRecord, *, free_bytes: Optional[int] = None, runnin
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
     else:
         kwargs["start_new_session"] = True
+    try:
+        record.hub_snapshot = dict(_registry.read_all() or {})
+    except Exception:
+        record.hub_snapshot = {}
     proc = popen([exe, "-batchmode", "-projectPath", record.dir, "-logFile", log],
                  env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                  stderr=subprocess.DEVNULL, **kwargs)
@@ -375,15 +478,18 @@ def wait_ready(record: LaneRecord, list_instances: Callable[[], list], timeout_s
                 instances = []
             matched = next((i for i in instances if isinstance(i, dict) and i.get("hash") == want), None)
         if matched is not None:
-            if probe is None:
+            ready = probe is None
+            if not ready:
+                try:
+                    ready = bool(probe(matched))
+                except Exception:
+                    ready = False
+            if ready:
                 record.state = "ready"
-                return record
-            try:
-                ok = bool(probe(matched))
-            except Exception:
-                ok = False
-            if ok:
-                record.state = "ready"
+                try:
+                    restore_hub_values(record)
+                except Exception as exc:
+                    logger.warning("Unity Hub son proje yolu geri yüklenemedi: %s", exc)
                 return record
         if clock() >= deadline:
             record.state = "failed"
@@ -425,6 +531,10 @@ def stop_editor(record: LaneRecord, *, sleep: Callable[[float], None] = time.sle
     record.job = None
     record.proc = None
     record.pid = None
+    try:
+        restore_hub_values(record)
+    except Exception as exc:
+        logger.warning("Unity Hub son proje yolu geri yüklenemedi: %s", exc)
     lock = os.path.join(record.dir, "Temp", "UnityLockfile")
     for attempt in range(10):
         if not os.path.isfile(lock):
