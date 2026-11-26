@@ -17,7 +17,6 @@ namespace MCPForUnity.Editor
     internal static class McpPrefs
     {
         internal const string LaneIdEnvVar = "GAMACHINE_LANE_ID";
-        internal const string AllowBatchEnvVar = "UNITY_MCP_ALLOW_BATCH";
 
         // SessionState lives as long as the editor process and survives domain reloads, which is
         // exactly the lifetime a lane needs (resume-after-reload must outlive the reload).
@@ -51,8 +50,7 @@ namespace MCPForUnity.Editor
         {
             MainThreadId = Thread.CurrentThread.ManagedThreadId;
             LaneProcess = Application.isBatchMode
-                && (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(LaneIdEnvVar))
-                    || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(AllowBatchEnvVar)));
+                && !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(LaneIdEnvVar));
             if (!LaneProcess) return;
 
             LoadFromSession();
@@ -61,8 +59,8 @@ namespace MCPForUnity.Editor
         }
 
         /// <summary>
-        /// True in a batch-mode editor that may talk to the MCP server (GAMACHINE_LANE_ID or
-        /// UNITY_MCP_ALLOW_BATCH set). Such an editor must not write shared prefs or stop the server.
+        /// True in a batch-mode editor started by Gamachine as a lane (GAMACHINE_LANE_ID set).
+        /// Such an editor must not write shared prefs or stop the server.
         /// </summary>
         public static bool IsLane => LaneOverrideForTests ?? LaneProcess;
 
