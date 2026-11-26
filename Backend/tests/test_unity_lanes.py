@@ -287,3 +287,148 @@ def test_remove_running_lane_stops_it(lane):
     project = os.path.dirname(os.path.dirname(os.path.dirname(lane.dir)))
     ul.remove_lane(project, lane)
     assert proc.terminated and not os.path.exists(lane.dir)
+
+
+def test_validate_name_refuses_newline_and_device_names():
+    for bad in ("abc\n", "con", "prn", "aux", "nul", "com1", "com9", "lpt1", "lpt9", "COM1"):
+        with pytest.raises(ValueError):
+            ul.validate_name(bad)
+
+
+def test_lanes_root_junction_outside_project_refused(project, tmp_path, monkeypatch):
+    if sys.platform != "win32":
+        pytest.skip("junction test is Windows-only")
+    outside = tmp_path / "outside_gamachine"
+    outside.mkdir()
+    link = os.path.join(project, ".gamachine")
+    res = subprocess.run(["cmd", "/c", "mklink", "/J", link, str(outside)], capture_output=True)
+    if res.returncode != 0:
+        pytest.skip("junction not available")
+    git_calls = []
+    monkeypatch.setattr(
+        ul,
+        "_git",
+        lambda *a, **k: git_calls.append(a) or subprocess.CompletedProcess(a, 1, "", "mock"),
+    )
+    try:
+        with pytest.raises(ul.LaneError):
+            ul.create_lane(project, "one")
+        assert git_calls == []
+        rec = ul.LaneRecord(name="one", dir=ul.lane_dir(project, "one"), branch="gamachine/one")
+        with pytest.raises(ul.LaneError):
+            ul.remove_lane(project, rec)
+        assert git_calls == []
+    finally:
+        subprocess.run(["cmd", "/c", "rmdir", link], capture_output=True)
+
+
+def test_start_editor_refuses_double_start_and_allows_after_exit(lane):
+    proc1 = FakeProc(rc=None)
+    ul.start_editor(lane, free_bytes=10 * GB, popen=lambda *a, **k: proc1)
+    try:
+        with pytest.raises(ul.LaneError, match="zaten çalışıyor"):
+            ul.start_editor(lane, free_bytes=10 * GB, popen=lambda *a, **k: (_ for _ in ()).throw(AssertionError("spawned")))
+        assert lane.proc is proc1
+        proc1.rc = 0
+        proc2 = FakeProc(rc=None)
+        ul.start_editor(lane, free_bytes=10 * GB, popen=lambda *a, **k: proc2)
+        assert lane.proc is proc2
+    finally:
+        if lane.job is not None:
+            lane.job.close()
+            lane.job = None
+
+
+def test_start_and_stop_editor_job_lifecycle(lane, monkeypatch):
+    class FakeJob:
+        def __init__(self):
+            self.terminated = False
+            self.closed = False
+
+        def terminate(self):
+            self.terminated = True
+
+        def close(self):
+            self.closed = True
+
+    job = FakeJob()
+    monkeypatch.setattr(ul.process_tree, "new_job_object_for", lambda _p: job)
+    ul.start_editor(lane, free_bytes=10 * GB, popen=lambda *a, **k: FakeProc())
+    assert lane.job is job
+    ul.stop_editor(lane)
+    assert job.terminated and job.closed and lane.job is None
+
+
+def test_wait_ready_ignores_other_lane_hash_and_accepts_own(lane):
+    _started(lane, FakeProc())
+    other_hash = ul.expected_instance_hash(lane.dir + "-other")
+    t = [0.0]
+
+    def clock():
+        t[0] += 100
+        return t[0]
+
+    with pytest.raises(ul.LaneError):
+        ul.wait_ready(lane, lambda: [{"hash": other_hash}], timeout_s=300, sleep=lambda s: None, clock=clock)
+    assert lane.state == "failed"
+
+    _started(lane, FakeProc())
+    own_hash = ul.expected_instance_hash(lane.dir)
+    ul.wait_ready(lane, lambda: [{"hash": other_hash}, {"hash": own_hash}], sleep=lambda s: None)
+    assert lane.state == "ready"
+
+
+def test_resolve_unity_exe_refuses_exe_outside_hub_root(tmp_path, monkeypatch):
+    proj = tmp_path / "p"
+    (proj / "ProjectSettings").mkdir(parents=True)
+    (proj / "ProjectSettings" / "ProjectVersion.txt").write_text("m_EditorVersion: 6000.1.2f1\n")
+    hub = tmp_path / "hub"
+    exe = ul._exe_under(str(hub), "6000.1.2f1")
+    os.makedirs(os.path.dirname(exe))
+    open(exe, "w").close()
+    outside_exe = str(tmp_path / "outside" / "Unity.exe")
+    orig_realpath = os.path.realpath
+    monkeypatch.setattr(
+        ul.os.path,
+        "realpath",
+        lambda p: outside_exe if os.path.normcase(p) == os.path.normcase(exe) else orig_realpath(p),
+    )
+    monkeypatch.setattr(ul, "_hub_roots", lambda: [str(hub)])
+    with pytest.raises(ul.LaneError):
+        ul.resolve_unity_exe(str(proj))
+
+
+def test_remove_lane_refuses_mismatched_basename(project):
+    two = ul.create_lane(project, "two")
+    rec = ul.LaneRecord(name="one", dir=two.dir, branch="gamachine/one")
+    with pytest.raises(ul.LaneError):
+        ul.remove_lane(project, rec)
+    assert os.path.isdir(two.dir)
+
+
+def test_create_lane_reuses_existing_branch_and_rollback_preserves_it(project, monkeypatch):
+    a = ul.create_lane(project, "one")
+    ul.remove_lane(project, a)
+    assert _branches(project) == ["gamachine/one"]
+
+    b = ul.create_lane(project, "one")
+    assert b.branch == "gamachine/one" and os.path.isdir(b.dir)
+
+    ul.remove_lane(project, b)
+    monkeypatch.setattr(ul, "_install_package", lambda _d: False)
+    with pytest.raises(ul.LaneError):
+        ul.create_lane(project, "one")
+    assert not os.path.exists(ul.lane_dir(project, "one"))
+    assert _branches(project) == ["gamachine/one"]
+
+
+def test_resolve_unity_exe_accepts_china_version(tmp_path, monkeypatch):
+    proj = tmp_path / "p"
+    (proj / "ProjectSettings").mkdir(parents=True)
+    (proj / "ProjectSettings" / "ProjectVersion.txt").write_text("m_EditorVersion: 2022.3.20f1c1\n")
+    hub = tmp_path / "hub"
+    exe = ul._exe_under(str(hub), "2022.3.20f1c1")
+    os.makedirs(os.path.dirname(exe))
+    open(exe, "w").close()
+    monkeypatch.setattr(ul, "_hub_roots", lambda: [str(hub)])
+    assert ul.resolve_unity_exe(str(proj)) == exe

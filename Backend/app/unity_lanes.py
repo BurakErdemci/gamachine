@@ -7,6 +7,7 @@ creates, starts, stops and removes lanes; wiring them into routes or tools happe
 import ctypes
 import hashlib
 import json
+import logging
 import os
 import re
 import subprocess
@@ -18,7 +19,14 @@ from typing import Any, Callable, List, Optional
 import process_tree
 from spawn_env import build_spawn_env
 
-NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
+logger = logging.getLogger(__name__)
+
+NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")
+_RESERVED_NAMES = frozenset(
+    {"con", "prn", "aux", "nul"}
+    | {f"com{i}" for i in range(1, 10)}
+    | {f"lpt{i}" for i in range(1, 10)}
+)
 GB = 1024 ** 3
 PER_LANE_BYTES = 3 * GB
 HEADROOM_BYTES = 2 * GB
@@ -46,13 +54,24 @@ class LaneRecord:
 
 
 def validate_name(name: str) -> str:
-    if not isinstance(name, str) or not NAME_RE.match(name):
+    if not isinstance(name, str) or not NAME_RE.fullmatch(name):
         raise ValueError("Şerit adı küçük harf, rakam ve tireden oluşmalı (en çok 32 karakter, harf ya da rakamla başlamalı).")
+    if name in _RESERVED_NAMES:
+        raise ValueError(f"Şerit adı olarak '{name}' kullanılamaz (ayrılmış sistem adı).")
     return name
 
 
 def lanes_root(project: str) -> str:
     return os.path.join(project, ".gamachine", "lanes")
+
+
+def _lanes_root_inside(project: str) -> bool:
+    real_proj = os.path.normcase(os.path.realpath(project))
+    real_root = os.path.normcase(os.path.realpath(lanes_root(project)))
+    try:
+        return os.path.commonpath([real_proj, real_root]) == real_proj and real_root != real_proj
+    except ValueError:
+        return False
 
 
 def lane_dir(project: str, name: str) -> str:
@@ -168,7 +187,7 @@ def project_editor_version(project: str) -> Optional[str]:
     return None
 
 
-_UNITY_VERSION = re.compile(r"\d+\.\d+\.\d+[abfpx]\d+")
+_UNITY_VERSION = re.compile(r"\d+\.\d+\.\d+[abfpx]\d+(?:c\d+)?")
 
 
 def resolve_unity_exe(project: str) -> str:
@@ -229,8 +248,14 @@ def _ensure_excluded(project: str) -> None:
         fh.write(_EXCLUDE_LINE + "\n")
 
 
-def _rollback(project: str, directory: str, branch: str) -> None:
-    for args in (("worktree", "remove", "--force", directory), ("branch", "-D", branch)):
+def _rollback(project: str, directory: str, branch: str, *, delete_branch: bool = True) -> None:
+    if not _lanes_root_inside(project):
+        logger.warning("Şerit geri alma atlandı: şerit kök klasörü proje dışında (%s).", project)
+        return
+    commands = [("worktree", "remove", "--force", directory)]
+    if delete_branch:
+        commands.append(("branch", "-D", branch))
+    for args in commands:
         try:
             _git(project, *args)
         except (OSError, subprocess.TimeoutExpired):
@@ -241,6 +266,8 @@ def create_lane(project: str, name: str) -> LaneRecord:
     validate_name(name)
     if not all(os.path.isdir(os.path.join(project, d)) for d in ("Assets", "ProjectSettings")):
         raise LaneError("Bu klasör bir Unity projesi değil (Assets ve ProjectSettings yok).")
+    if not _lanes_root_inside(project):
+        raise LaneError("Şerit kök klasörü proje klasörünün dışına yönlendirilmiş; şerit oluşturulamadı.")
     top = _git_out(project, "rev-parse", "--show-toplevel")
     if not top or os.path.normcase(os.path.realpath(top)) != os.path.normcase(os.path.realpath(project)):
         raise LaneError("Unity projesi, bir git deposunun kök klasörü olmalı.")
@@ -250,17 +277,21 @@ def create_lane(project: str, name: str) -> LaneRecord:
     if os.path.lexists(directory):
         raise LaneError(f"'{name}' şeridi zaten var.")
     branch = f"gamachine/{name}"
+    branch_existed = _git_out(project, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}") is not None
     _ensure_excluded(project)
-    res = _git(project, "worktree", "add", "-b", branch, directory, "HEAD")
+    if branch_existed:
+        res = _git(project, "worktree", "add", directory, branch)
+    else:
+        res = _git(project, "worktree", "add", "-b", branch, directory, "HEAD")
     if res.returncode != 0:
         raise LaneError(f"Git worktree açılamadı: {(res.stderr or res.stdout).strip()}")
     try:
         ok = _install_package(directory)
     except Exception as exc:
-        _rollback(project, directory, branch)
+        _rollback(project, directory, branch, delete_branch=not branch_existed)
         raise LaneError(f"MCP paketi şeride kurulamadı: {exc}")
     if not ok:
-        _rollback(project, directory, branch)
+        _rollback(project, directory, branch, delete_branch=not branch_existed)
         raise LaneError("MCP paketi şeride kurulamadı; şerit geri alındı.")
     return LaneRecord(name=name, dir=directory, branch=branch)
 
@@ -273,6 +304,8 @@ def lane_log_path(directory: str) -> str:
 
 def start_editor(record: LaneRecord, *, free_bytes: Optional[int] = None, running: int = 0,
                  popen: Callable = subprocess.Popen) -> LaneRecord:
+    if record.proc is not None and record.proc.poll() is None:
+        raise LaneError("Bu şeridin editörü zaten çalışıyor.")
     reason = memory_refusal(free_bytes, running)
     if reason:
         raise LaneError(reason)
@@ -372,6 +405,8 @@ def stop_editor(record: LaneRecord) -> LaneRecord:
 
 def remove_lane(project: str, record: LaneRecord, delete_branch: bool = False) -> None:
     validate_name(record.name)
+    if not _lanes_root_inside(project):
+        raise LaneError("Şerit kök klasörü proje klasörünün dışına yönlendirilmiş; silme reddedildi.")
     root = os.path.normcase(os.path.realpath(lanes_root(project)))
     target = os.path.normcase(os.path.realpath(record.dir))
     if os.path.dirname(target) != root or os.path.basename(target) != record.name:
