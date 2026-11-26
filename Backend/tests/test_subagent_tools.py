@@ -78,6 +78,8 @@ def test_tool_descriptions_carry_the_rules():
         assert rule in start, rule
     assert "next turn" in tools["agent_message"].description
     assert "do not call this in a loop" in tools["agent_list"].description
+    assert "refresh_unity" in tools["lane_merge"].description
+    assert set(tools["lane_merge"].input_schema["properties"]) == {"lane"}
     params = tools["agent_start"].input_schema["properties"]
     assert set(params) == {"model", "brief", "effort", "name", "lane"}
 
@@ -89,6 +91,7 @@ def test_tools_carry_the_call_with_the_spawned_chat(backend):
     asyncio.run(agent_tools.agent_list())
     asyncio.run(agent_tools.agent_result(7))
     asyncio.run(agent_tools.agent_models())
+    asyncio.run(agent_tools.lane_merge("scene-a"))
     assert backend.calls == [
         ("POST", "/subagents/start", {}, {"conversation_id": 42, "model": "gpt-6-luna",
                                           "brief": "say files", "effort": "high", "name": "n1"}),
@@ -97,6 +100,7 @@ def test_tools_carry_the_call_with_the_spawned_chat(backend):
         ("GET", "/subagents/list", {"conversation_id": "42"}, None),
         ("GET", "/subagents/result", {"conversation_id": "42", "agent_id": "7"}, None),
         ("GET", "/subagents/models", {"conversation_id": "42"}, None),
+        ("POST", "/subagents/lane-merge", {}, {"conversation_id": 42, "lane": "scene-a"}),
     ]
 
 
@@ -117,6 +121,7 @@ def test_a_read_only_turn_cannot_start_or_steer_a_helper(backend, monkeypatch):
     monkeypatch.setenv("GAMACHINE_READ_ONLY", "1")
     assert "Read-only" in asyncio.run(agent_tools.agent_start("gpt-6-luna", "b"))
     assert "Read-only" in asyncio.run(agent_tools.agent_message(1, "go on"))
+    assert "Read-only" in asyncio.run(agent_tools.lane_merge("scene-a"))
     assert backend.calls == []
 
 def test_an_unreachable_backend_is_said_plainly(monkeypatch):

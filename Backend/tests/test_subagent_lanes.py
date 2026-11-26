@@ -444,3 +444,83 @@ def test_probe_instance_posts_read_console_and_handles_responses(monkeypatch):
 
     monkeypatch.setattr(subagents.httpx, "post", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")))
     assert subagents._probe_instance(inst) is False
+
+
+async def test_lane_merge_busy_unknown_merged_and_conflict(lanes_env, monkeypatch):
+    env, state = lanes_env
+    parent = _main(env)
+
+    # unknown_lane -> 404
+    with pytest.raises(HTTPException) as exc:
+        await _post(env, "/subagents/lane-merge", conversation_id=parent, lane="missing-lane")
+    assert exc.value.status_code == 404
+
+    # Start a lane and hold it while starting/running -> 409 lane_busy
+    gate = threading.Event()
+    state.wait_gate = gate
+    started = await _start_lane(env, parent, lane="merge-a")
+    child = started["chat_id"]
+    await _until(lambda: len(state.waited) == 1)
+
+    with pytest.raises(subagents.SubagentError) as serr:
+        await subagents.merge_lane(parent, 1, "merge-a")
+    assert (serr.value.status, serr.value.code) == (409, "lane_busy")
+    with pytest.raises(HTTPException) as exc:
+        await _post(env, "/subagents/lane-merge", conversation_id=parent, lane="merge-a")
+    assert exc.value.status_code == 409
+
+    # Even if state is stopped, a child with status RUNNING must still refuse 409 lane_busy.
+    _Runner.scripts[child] = ["hold", ("response", {"content": "done"}), DONE]
+    gate.set()
+    await _until(lambda: len(_Runner.of(child)) == 1)
+    lane_key = (1, subagents._real_path(state.proj), "merge-a")
+    with subagents._LOCK:
+        subagents._LANES[lane_key].state = "stopped"
+    with pytest.raises(subagents.SubagentError) as serr:
+        await subagents.merge_lane(parent, 1, "merge-a")
+    assert (serr.value.status, serr.value.code) == (409, "lane_busy")
+    with subagents._LOCK:
+        subagents._LANES[lane_key].state = "ready"
+
+    _Runner.holds[child].set()
+    await _lanes_idle()
+
+    # Conflict keeps the registry entry and describes resolution.
+    monkeypatch.setattr(
+        unity_lanes, "merge_lane",
+        lambda _p, _rec, **_kw: {"result": "conflict", "files": ["Assets/Main.unity"], "message": "conflict"},
+    )
+    conflict_res = await _post(env, "/subagents/lane-merge", conversation_id=parent, lane="merge-a")
+    assert conflict_res["result"] == "conflict"
+    assert conflict_res["files"] == ["Assets/Main.unity"]
+    assert "Assets/Main.unity" in conflict_res["text"]
+    assert "aborted" in conflict_res["text"] and "nothing changed" in conflict_res["text"]
+    assert lane_key in subagents._LANES
+
+    # Merged drops registry key and _CHILD_LANE mapping, and ends with refresh_unity instruction.
+    monkeypatch.setattr(
+        unity_lanes, "merge_lane",
+        lambda _p, _rec, **_kw: {"result": "merged", "files": ["Assets/Main.unity"], "message": "merged"},
+    )
+    merged_res = await _post(env, "/subagents/lane-merge", conversation_id=parent, lane="merge-a")
+    assert merged_res["result"] == "merged"
+    assert merged_res["files"] == ["Assets/Main.unity"]
+    assert merged_res["text"].endswith("Run refresh_unity in the user's editor so it picks up the merged files.")
+    assert lane_key not in subagents._LANES
+    assert child not in subagents._CHILD_LANE
+
+    # Disk-only worktree fallback (e.g. after app restart when _LANES is empty).
+    disk_dir = unity_lanes.lane_dir(state.proj, "disk-only")
+    os.makedirs(disk_dir, exist_ok=True)
+    with open(os.path.join(disk_dir, ".git"), "w", encoding="utf-8") as fh:
+        fh.write("gitdir: ../.git/worktrees/disk-only\n")
+    seen_records = []
+
+    def fake_disk_merge(proj, rec, **_kw):
+        seen_records.append((proj, rec.name, rec.dir, rec.branch))
+        return {"result": "empty", "files": [], "message": "empty"}
+
+    monkeypatch.setattr(unity_lanes, "merge_lane", fake_disk_merge)
+    empty_res = await _post(env, "/subagents/lane-merge", conversation_id=parent, lane="disk-only")
+    assert empty_res["result"] == "empty"
+    assert seen_records == [(state.proj, "disk-only", disk_dir, "gamachine/disk-only")]

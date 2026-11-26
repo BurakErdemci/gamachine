@@ -23,7 +23,8 @@ TOOL_MESSAGE = "agent_message"
 TOOL_STOP = "agent_stop"
 TOOL_LIST = "agent_list"
 TOOL_RESULT = "agent_result"
-TOOLS = (TOOL_MODELS, TOOL_START, TOOL_MESSAGE, TOOL_STOP, TOOL_LIST, TOOL_RESULT)
+TOOL_LANE_MERGE = "lane_merge"
+TOOLS = (TOOL_MODELS, TOOL_START, TOOL_MESSAGE, TOOL_STOP, TOOL_LIST, TOOL_RESULT, TOOL_LANE_MERGE)
 
 _NO_CHAT = "This tool works only from inside a Gamachine chat."
 _UNREACHABLE = "Gamachine could not be reached; nothing was done."
@@ -106,6 +107,12 @@ async def agent_result(agent_id: int) -> str:
     return await _call("GET", "/subagents/result", params={"agent_id": agent_id})
 
 
+async def lane_merge(lane: str) -> str:
+    if (refusal := read_only_refusal()) is not None:
+        return refusal
+    return await _call("POST", "/subagents/lane-merge", body={"lane": lane}, timeout=310.0)
+
+
 def register_agent_tools(mcp: MCPServer) -> None:
     @mcp.tool(name=TOOL_MODELS, description=(
         "Lists the connected CLI providers' models and the effort levels each accepts, for "
@@ -158,3 +165,12 @@ def register_agent_tools(mcp: MCPServer) -> None:
         "itself, so do not call this in a loop."))
     async def agent_result_tool(agent_id: int) -> str:
         return await agent_result(agent_id)
+
+    @mcp.tool(name=TOOL_LANE_MERGE, description=(
+        "Merges a finished Unity lane into the user's current branch and removes the lane "
+        "(git; scenes and prefabs through Unity's YAML merge). Call it after the lane's "
+        "helper has finished and committed. Unity's own settings noise is discarded; "
+        "uncommitted helper work or a conflict stops the merge and changes nothing. "
+        "After a merge, run refresh_unity."))
+    async def lane_merge_tool(lane: str) -> str:
+        return await lane_merge(lane)

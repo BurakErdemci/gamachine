@@ -135,6 +135,17 @@ def create_subagent_router(db: Any,
         except subagents.SubagentError as exc:
             raise _refused(exc)
 
+    @router.post("/subagents/lane-merge")
+    async def subagent_lane_merge(body: dict,
+                                  x_session_token: str = Header(alias="X-Session-Token", default="")):
+        _check_token(x_session_token)
+        parent = _as_id(body.get("conversation_id"))
+        user_id = _caller(x_session_token, parent, live=True)
+        try:
+            return await subagents.merge_lane(parent, user_id, body.get("lane"))
+        except subagents.SubagentError as exc:
+            raise _refused(exc)
+
     @router.get("/subagents/list")
     async def subagent_list(conversation_id: Optional[int] = None,
                             x_session_token: str = Header(alias="X-Session-Token", default="")):

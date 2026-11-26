@@ -12,6 +12,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
@@ -572,3 +573,198 @@ def remove_lane(project: str, record: LaneRecord, delete_branch: bool = False) -
     if delete_branch:
         _git(project, "branch", "-D", record.branch)
     record.state = "removed"
+
+
+# ---------------------------------------------------------------- merge
+
+_YAML_EXTENSIONS = (
+    "*.unity",
+    "*.prefab",
+    "*.asset",
+    "*.mat",
+    "*.controller",
+    "*.anim",
+    "*.overrideController",
+    "*.physicMaterial",
+    "*.playable",
+)
+
+
+def _yaml_merge_exe(project: str) -> Optional[str]:
+    try:
+        unity_exe = resolve_unity_exe(project)
+    except (LaneError, OSError):
+        return None
+    if sys.platform == "darwin":
+        yaml_exe = os.path.join(
+            os.path.dirname(os.path.dirname(unity_exe)), "Tools", "UnityYAMLMerge"
+        )
+    elif sys.platform == "win32":
+        yaml_exe = os.path.join(os.path.dirname(unity_exe), "Data", "Tools", "UnityYAMLMerge.exe")
+    else:
+        yaml_exe = os.path.join(os.path.dirname(unity_exe), "Data", "Tools", "UnityYAMLMerge")
+    return yaml_exe if os.path.isfile(yaml_exe) else None
+
+
+def _unquote_git_path(path: str) -> str:
+    if len(path) >= 2 and path[0] == '"' and path[-1] == '"':
+        return path[1:-1].replace('\\"', '"').replace('\\\\', '\\')
+    return path
+
+
+def _parse_porcelain_path(xy: str, raw_path: str) -> str:
+    if (xy[0] in ("R", "C") or xy[1] in ("R", "C")) and " -> " in raw_path:
+        return _unquote_git_path(raw_path.split(" -> ", 1)[1])
+    return _unquote_git_path(raw_path)
+
+
+def merge_lane(project: str, record: LaneRecord, *, timeout_s: int = 300) -> dict:
+    validate_name(record.name)
+    if not _lanes_root_inside(project):
+        return {
+            "result": "refused",
+            "files": [],
+            "message": "Şerit kök klasörü proje klasörünün dışına yönlendirilmiş; birleştirme reddedildi.",
+        }
+    root = os.path.normcase(os.path.realpath(lanes_root(project)))
+    target = os.path.normcase(os.path.realpath(record.dir))
+    if os.path.dirname(target) != root or os.path.basename(target) != record.name:
+        return {
+            "result": "refused",
+            "files": [],
+            "message": "Şerit klasörü beklenen konumda değil; birleştirme reddedildi.",
+        }
+    if record.proc is not None and record.proc.poll() is None:
+        return {
+            "result": "refused",
+            "files": [],
+            "message": "Şeridin editörü hâlâ açık; önce yardımcıyı durdurun.",
+        }
+
+    status_res = _git(record.dir, "status", "--porcelain=v1", "-uall")
+    if status_res.returncode != 0:
+        err = (status_res.stderr or status_res.stdout or "").strip()
+        return {
+            "result": "refused",
+            "files": [],
+            "message": f"Şerit durumu okunamadı: {err}" if err else "Şerit durumu okunamadı.",
+        }
+    noise: List[str] = []
+    dirty: List[str] = []
+    for line in status_res.stdout.splitlines():
+        if len(line) < 4:
+            continue
+        xy = line[:2]
+        path = _parse_porcelain_path(xy, line[3:])
+        if xy == " M" and (path.startswith("ProjectSettings/") or path == "Packages/packages-lock.json"):
+            noise.append(path)
+        else:
+            dirty.append(path)
+    if noise:
+        co_res = _git(record.dir, "checkout", "--", *noise)
+        if co_res.returncode != 0:
+            err = (co_res.stderr or co_res.stdout or "").strip()
+            return {
+                "result": "refused",
+                "files": noise + dirty,
+                "message": f"Şeritteki Unity ayar değişiklikleri geri alınamadı: {err}",
+            }
+    if dirty:
+        return {
+            "result": "refused",
+            "files": dirty,
+            "message": (
+                "Şeritte henüz commit edilmemiş değişiklikler var; önce yardımcıya bunları "
+                f"commit ettirin (veya silin): {', '.join(dirty)}"
+            ),
+        }
+
+    rev_res = _git(project, "rev-list", "--count", f"HEAD..{record.branch}")
+    if rev_res.returncode != 0:
+        err = (rev_res.stderr or rev_res.stdout or "").strip()
+        return {
+            "result": "refused",
+            "files": [],
+            "message": f"Şerit dalındaki commit sayısı okunamadı: {err}",
+        }
+    try:
+        ahead = int(rev_res.stdout.strip())
+    except ValueError:
+        return {
+            "result": "refused",
+            "files": [],
+            "message": f"Şerit dalındaki commit sayısı okunamadı: {rev_res.stdout.strip()}",
+        }
+    if ahead == 0:
+        remove_lane(project, record, delete_branch=True)
+        return {
+            "result": "empty",
+            "files": [],
+            "message": f"'{record.name}' şeridinde birleştirilecek yeni commit yok; şerit ve dal silindi.",
+        }
+
+    _ensure_excluded(project)
+    yaml_exe = _yaml_merge_exe(project)
+    attr_path: Optional[str] = None
+    merge_args: List[str] = []
+    try:
+        if yaml_exe:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", prefix="gamachine-attrs-",
+                suffix=".gitattributes", delete=False, newline="\n",
+            ) as fh:
+                attr_path = fh.name
+                fh.write("\n".join(f"{ext} merge=unityyamlmerge" for ext in _YAML_EXTENSIONS) + "\n")
+            merge_args.extend([
+                "-c", "merge.unityyamlmerge.name=Unity SmartMerge",
+                "-c", f'merge.unityyamlmerge.driver="{yaml_exe}" merge -h -p --force %O %B %A %A',
+                "-c", "merge.unityyamlmerge.recursive=binary",
+                "-c", f"core.attributesFile={attr_path}",
+            ])
+        merge_args.extend(["merge", "--no-ff", "-m", f"Merge Unity lane {record.name}", record.branch])
+        try:
+            merge_res = _git(project, *merge_args, timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            if _git_out(project, "rev-parse", "-q", "--verify", "MERGE_HEAD") is not None:
+                _git(project, "merge", "--abort")
+            return {
+                "result": "refused",
+                "files": [],
+                "message": f"Birleştirme {timeout_s} saniye içinde tamamlanamadı ve geri alındı.",
+            }
+    finally:
+        if attr_path:
+            try:
+                os.unlink(attr_path)
+            except OSError:
+                pass
+
+    if merge_res.returncode != 0:
+        diff_res = _git(project, "diff", "--name-only", "--diff-filter=U")
+        unmerged = [ln for ln in diff_res.stdout.splitlines() if ln.strip()] if diff_res.returncode == 0 else []
+        if _git_out(project, "rev-parse", "-q", "--verify", "MERGE_HEAD") is not None:
+            _git(project, "merge", "--abort")
+        if unmerged:
+            return {
+                "result": "conflict",
+                "files": unmerged,
+                "message": (
+                    f"Birleştirme çakışması nedeniyle işlem geri alındı (değişiklik yapılmadı): "
+                    f"{', '.join(unmerged)}"
+                ),
+            }
+        err = (merge_res.stderr or merge_res.stdout or "").strip()
+        return {
+            "result": "refused",
+            "files": [],
+            "message": f"Birleştirme reddedildi: {err}" if err else "Birleştirme reddedildi.",
+        }
+
+    files_res = _git(project, "diff", "--name-only", "HEAD^1", "HEAD")
+    files = [ln for ln in files_res.stdout.splitlines() if ln.strip()] if files_res.returncode == 0 else []
+    remove_lane(project, record, delete_branch=True)
+    return {
+        "result": "merged",
+        "files": files,
+        "message": f"'{record.name}' şeridi birleştirildi ve kaldırıldı ({len(files)} dosya).",
+    }

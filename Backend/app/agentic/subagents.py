@@ -77,7 +77,8 @@ TOOL_MESSAGE = "agent_message"
 TOOL_STOP = "agent_stop"
 TOOL_LIST = "agent_list"
 TOOL_RESULT = "agent_result"
-TOOLS = (TOOL_MODELS, TOOL_START, TOOL_MESSAGE, TOOL_STOP, TOOL_LIST, TOOL_RESULT)
+TOOL_LANE_MERGE = "lane_merge"
+TOOLS = (TOOL_MODELS, TOOL_START, TOOL_MESSAGE, TOOL_STOP, TOOL_LIST, TOOL_RESULT, TOOL_LANE_MERGE)
 # The Claude SDK entry's server name; Claude calls mcp__<server>__<tool>. The
 # unityai copy of the tool names lives in unity_ai_mcp/tools/agent_tools.py,
 # which imports nothing from agentic (a test holds the two equal).
@@ -395,18 +396,20 @@ def _start_editor_sync(record: unity_lanes.LaneRecord, running: int, starting: i
 
 
 async def _stop_lane_editor(lane_key: tuple, record: unity_lanes.LaneRecord) -> None:
-    with _LOCK:
-        if record.state == "stopped" and record.proc is None and record.job is None:
-            return
     try:
-        await asyncio.to_thread(unity_lanes.stop_editor, record)
-    except Exception:
-        logger.exception("[subagents] lane %s editor not stopped", record.name)
-    with _LOCK:
-        record.state = "stopped"
-        cur = asyncio.current_task()
-        if _STOP_TASKS.get(lane_key) is cur:
-            _STOP_TASKS.pop(lane_key, None)
+        with _LOCK:
+            if record.state == "stopped" and record.proc is None and record.job is None:
+                return
+        try:
+            await asyncio.to_thread(unity_lanes.stop_editor, record)
+        except Exception:
+            logger.exception("[subagents] lane %s editor not stopped", record.name)
+    finally:
+        with _LOCK:
+            record.state = "stopped"
+            cur = asyncio.current_task()
+            if _STOP_TASKS.get(lane_key) is cur:
+                _STOP_TASKS.pop(lane_key, None)
 
 
 def _schedule_stop_lane(child: int) -> None:
@@ -699,6 +702,80 @@ async def stop_children(parent: int) -> int:
     for row in rows:
         await _stop_row(row)
     return len(rows)
+
+
+async def merge_lane(parent: int, user_id: int, lane: Any) -> dict:
+    """Merge a finished Unity lane branch into the main project branch."""
+    try:
+        lane_name = unity_lanes.validate_name(lane)
+    except ValueError as exc:
+        raise SubagentError(400, str(exc), "bad_lane")
+    main = _DB.get_last_workspace(user_id) if _DB is not None else None
+    if not main:
+        raise SubagentError(400, "No Unity project is open; cannot merge lane.", "no_project")
+    lane_key = (user_id, _real_path(main), lane_name)
+    with _LOCK:
+        record = _LANES.get(lane_key)
+        mapped_children = {cid for cid, k in _CHILD_LANE.items() if k == lane_key}
+    if mapped_children and _DB is not None:
+        for r in _DB.list_subagents(parent):
+            if r.get("child_conv") in mapped_children and r.get("status") == RUNNING:
+                raise SubagentError(
+                    409,
+                    f"Lane \"{lane_name}\" is busy (sub-agent #{r['id']} is still running).",
+                    "lane_busy",
+                )
+    if record is not None and record.state in ("starting", "ready"):
+        raise SubagentError(
+            409,
+            f"Lane \"{lane_name}\" is busy (editor state: {record.state}).",
+            "lane_busy",
+        )
+    if record is None:
+        lane_ws = unity_lanes.lane_dir(main, lane_name)
+        if not _is_git_worktree(lane_ws):
+            raise SubagentError(404, f"Unknown Unity lane \"{lane_name}\".", "unknown_lane")
+        record = unity_lanes.LaneRecord(
+            name=lane_name,
+            dir=lane_ws,
+            branch=f"gamachine/{lane_name}",
+            state="stopped",
+        )
+
+    res = await asyncio.to_thread(unity_lanes.merge_lane, main, record)
+    result_kind = res.get("result")
+    files = list(res.get("files") or [])
+    if result_kind in ("merged", "empty"):
+        with _LOCK:
+            _LANES.pop(lane_key, None)
+            for cid in [c for c, k in _CHILD_LANE.items() if k == lane_key]:
+                _CHILD_LANE.pop(cid, None)
+    if result_kind == "merged":
+        file_list = ", ".join(files) if files else "none"
+        text = (
+            f"Merged lane \"{lane_name}\" into the current branch ({len(files)} file(s): {file_list}) "
+            f"and removed the lane. Run refresh_unity in the user's editor so it picks up the merged files."
+        )
+    elif result_kind == "empty":
+        text = f"Lane \"{lane_name}\" had no new commits to merge; the lane and its branch were removed."
+    elif result_kind == "conflict":
+        file_list = ", ".join(files)
+        text = (
+            f"Merge conflict in lane \"{lane_name}\" on: {file_list}. "
+            "The merge was aborted with nothing changed. "
+            "Have the helper merge the user's branch into its lane and resolve the conflicts there, "
+            "or ask the user."
+        )
+    else:
+        if files:
+            text = (
+                f"Merge of lane \"{lane_name}\" was refused because uncommitted files remain in the lane: "
+                f"{', '.join(files)}. Have the helper commit or remove them first; nothing was merged."
+            )
+        else:
+            reason = res.get("message") or "merge refused by git."
+            text = f"Merge of lane \"{lane_name}\" was refused: {reason}"
+    return {"result": result_kind, "files": files, "text": text}
 
 
 # ── list / result ────────────────────────────────────────────────────────────

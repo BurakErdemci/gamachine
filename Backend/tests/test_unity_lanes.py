@@ -746,3 +746,228 @@ def test_hub_registry_errors_never_fail_start_wait_or_stop(lane, monkeypatch):
         if lane.job is not None:
             lane.job.close()
             lane.job = None
+
+
+# ---------------------------------------------------------------- merge_lane
+
+def _git_stdout(cwd, *args):
+    return subprocess.run(
+        ["git", "-C", cwd, *args], check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+def test_merge_lane_merges_commits_and_removes_lane_and_branch(project, monkeypatch):
+    monkeypatch.setattr(ul, "_yaml_merge_exe", lambda _p: None)
+    rec = ul.create_lane(project, "one")
+    new_file = os.path.join(rec.dir, "Assets", "added.txt")
+    with open(new_file, "w", encoding="utf-8") as fh:
+        fh.write("from lane\n")
+    _run(rec.dir, "add", "Assets/added.txt")
+    _run(rec.dir, "commit", "-q", "-m", "lane add")
+
+    res = ul.merge_lane(project, rec)
+    assert res["result"] == "merged"
+    assert res["files"] == ["Assets/added.txt"]
+    assert os.path.isfile(os.path.join(project, "Assets", "added.txt"))
+    assert open(os.path.join(project, "Assets", "added.txt"), encoding="utf-8").read() == "from lane\n"
+    assert not os.path.exists(rec.dir)
+    assert _branches(project) == []
+    assert rec.state == "removed"
+
+
+def test_merge_lane_empty_removes_lane_without_merge_commit(project, monkeypatch):
+    monkeypatch.setattr(ul, "_yaml_merge_exe", lambda _p: None)
+    rec = ul.create_lane(project, "empty")
+    head_before = _git_stdout(project, "rev-parse", "HEAD")
+
+    res = ul.merge_lane(project, rec)
+    assert res["result"] == "empty"
+    assert res["files"] == []
+    assert _git_stdout(project, "rev-parse", "HEAD") == head_before
+    assert not os.path.exists(rec.dir)
+    assert _branches(project) == []
+
+
+def test_merge_lane_discards_unity_noise_and_merges(project, monkeypatch):
+    monkeypatch.setattr(ul, "_yaml_merge_exe", lambda _p: None)
+    lock_rel = os.path.join("Packages", "packages-lock.json")
+    sg_rel = os.path.join("ProjectSettings", "ShaderGraphSettings.asset")
+    os.makedirs(os.path.join(project, "Packages"), exist_ok=True)
+    with open(os.path.join(project, lock_rel), "w", encoding="utf-8") as fh:
+        fh.write('{"dependencies":{}}\n')
+    with open(os.path.join(project, sg_rel), "w", encoding="utf-8") as fh:
+        fh.write("orig: 1\n")
+    _run(project, "add", lock_rel, sg_rel)
+    _run(project, "commit", "-q", "-m", "track settings")
+
+    rec = ul.create_lane(project, "noisy")
+    with open(os.path.join(rec.dir, "Assets", "work.txt"), "w", encoding="utf-8") as fh:
+        fh.write("helper work\n")
+    _run(rec.dir, "add", "Assets/work.txt")
+    _run(rec.dir, "commit", "-q", "-m", "helper work")
+
+    # Simulate Unity dirtying tracked settings/lock files in the lane working tree.
+    with open(os.path.join(rec.dir, sg_rel), "w", encoding="utf-8") as fh:
+        fh.write("noise: 999\n")
+    with open(os.path.join(rec.dir, lock_rel), "w", encoding="utf-8") as fh:
+        fh.write('{"dependencies":{"noise":true}}\n')
+
+    res = ul.merge_lane(project, rec)
+    assert res["result"] == "merged"
+    assert res["files"] == ["Assets/work.txt"]
+    assert open(os.path.join(project, sg_rel), encoding="utf-8").read() == "orig: 1\n"
+    assert open(os.path.join(project, lock_rel), encoding="utf-8").read() == '{"dependencies":{}}\n'
+    assert not os.path.exists(rec.dir)
+
+
+def test_merge_lane_refuses_uncommitted_helper_file_and_keeps_noise_clean(project, monkeypatch):
+    monkeypatch.setattr(ul, "_yaml_merge_exe", lambda _p: None)
+    sg_rel = os.path.join("ProjectSettings", "ShaderGraphSettings.asset")
+    with open(os.path.join(project, sg_rel), "w", encoding="utf-8") as fh:
+        fh.write("orig: 1\n")
+    _run(project, "add", sg_rel)
+    _run(project, "commit", "-q", "-m", "track sg")
+
+    rec = ul.create_lane(project, "dirty")
+    with open(os.path.join(rec.dir, "Assets", "committed.txt"), "w", encoding="utf-8") as fh:
+        fh.write("committed\n")
+    _run(rec.dir, "add", "Assets/committed.txt")
+    _run(rec.dir, "commit", "-q", "-m", "committed")
+
+    # Unity noise + uncommitted helper file.
+    with open(os.path.join(rec.dir, sg_rel), "w", encoding="utf-8") as fh:
+        fh.write("noise\n")
+    with open(os.path.join(rec.dir, "Assets", "wip.txt"), "w", encoding="utf-8") as fh:
+        fh.write("uncommitted\n")
+
+    head_before = _git_stdout(project, "rev-parse", "HEAD")
+    res = ul.merge_lane(project, rec)
+    assert res["result"] == "refused"
+    assert res["files"] == ["Assets/wip.txt"]
+    assert _git_stdout(project, "rev-parse", "HEAD") == head_before
+    assert not os.path.exists(os.path.join(project, "Assets", "committed.txt"))
+    # Noise was discarded; uncommitted helper file stays untouched.
+    assert open(os.path.join(rec.dir, sg_rel), encoding="utf-8").read() == "orig: 1\n"
+    assert os.path.isfile(os.path.join(rec.dir, "Assets", "wip.txt"))
+    assert os.path.isdir(rec.dir)
+    assert _branches(project) == ["gamachine/dirty"]
+
+
+def test_merge_lane_conflict_aborts_cleanly_and_keeps_lane(project, monkeypatch):
+    monkeypatch.setattr(ul, "_yaml_merge_exe", lambda _p: None)
+    rec = ul.create_lane(project, "conflict")
+    with open(os.path.join(rec.dir, "Assets", "a.txt"), "w", encoding="utf-8") as fh:
+        fh.write("lane change\n")
+    _run(rec.dir, "commit", "-qam", "lane edit")
+
+    with open(os.path.join(project, "Assets", "a.txt"), "w", encoding="utf-8") as fh:
+        fh.write("main change\n")
+    _run(project, "commit", "-qam", "main edit")
+    head_before = _git_stdout(project, "rev-parse", "HEAD")
+
+    res = ul.merge_lane(project, rec)
+    assert res["result"] == "conflict"
+    assert res["files"] == ["Assets/a.txt"]
+    assert _git_stdout(project, "rev-parse", "HEAD") == head_before
+    merge_head = subprocess.run(
+        ["git", "-C", project, "rev-parse", "-q", "--verify", "MERGE_HEAD"],
+        capture_output=True,
+    )
+    assert merge_head.returncode != 0
+    assert _git_stdout(project, "status", "--porcelain") == ""
+    assert open(os.path.join(project, "Assets", "a.txt"), encoding="utf-8").read() == "main change\n"
+    assert os.path.isdir(rec.dir)
+    assert _branches(project) == ["gamachine/conflict"]
+
+
+def test_merge_lane_refuses_when_main_local_change_would_be_overwritten(project, monkeypatch):
+    monkeypatch.setattr(ul, "_yaml_merge_exe", lambda _p: None)
+    rec = ul.create_lane(project, "overwrite")
+    with open(os.path.join(rec.dir, "Assets", "a.txt"), "w", encoding="utf-8") as fh:
+        fh.write("lane edit\n")
+    _run(rec.dir, "commit", "-qam", "lane edit")
+
+    with open(os.path.join(project, "Assets", "a.txt"), "w", encoding="utf-8") as fh:
+        fh.write("uncommitted main edit\n")
+    head_before = _git_stdout(project, "rev-parse", "HEAD")
+
+    res = ul.merge_lane(project, rec)
+    assert res["result"] == "refused"
+    assert res["files"] == []
+    assert _git_stdout(project, "rev-parse", "HEAD") == head_before
+    assert open(os.path.join(project, "Assets", "a.txt"), encoding="utf-8").read() == "uncommitted main edit\n"
+    assert os.path.isdir(rec.dir)
+    assert _branches(project) == ["gamachine/overwrite"]
+
+
+def test_merge_lane_refuses_when_editor_still_running(project, monkeypatch):
+    monkeypatch.setattr(ul, "_yaml_merge_exe", lambda _p: None)
+    rec = ul.create_lane(project, "running")
+    rec.proc = FakeProc(rc=None)
+    res = ul.merge_lane(project, rec)
+    assert res["result"] == "refused"
+    assert "editörü hâlâ açık" in res["message"]
+    assert os.path.isdir(rec.dir)
+
+
+def test_yaml_merge_exe_and_git_driver_options(project, tmp_path, monkeypatch):
+    # Verify _yaml_merge_exe resolution against fake Unity layout.
+    hub = tmp_path / "hub"
+    unity_exe = ul._exe_under(str(hub), "6000.1.2f1")
+    os.makedirs(os.path.dirname(unity_exe), exist_ok=True)
+    open(unity_exe, "w").close()
+    monkeypatch.setattr(ul, "_hub_roots", lambda: [str(hub)])
+    assert ul._yaml_merge_exe(project) is None
+
+    if sys.platform == "darwin":
+        yaml_path = os.path.join(os.path.dirname(os.path.dirname(unity_exe)), "Tools", "UnityYAMLMerge")
+    elif sys.platform == "win32":
+        yaml_path = os.path.join(os.path.dirname(unity_exe), "Data", "Tools", "UnityYAMLMerge.exe")
+    else:
+        yaml_path = os.path.join(os.path.dirname(unity_exe), "Data", "Tools", "UnityYAMLMerge")
+    os.makedirs(os.path.dirname(yaml_path), exist_ok=True)
+    open(yaml_path, "w").close()
+    assert ul._yaml_merge_exe(project) == yaml_path
+
+    # Now record _git calls during merge_lane when _yaml_merge_exe returns a fake path.
+    rec = ul.create_lane(project, "yaml")
+    fake_yaml = r"C:\FakeUnity\UnityYAMLMerge.exe"
+    monkeypatch.setattr(ul, "_yaml_merge_exe", lambda _p: fake_yaml)
+
+    seen_calls = []
+    seen_attrs = {}
+    orig_git = ul._git
+
+    def spy_git(cwd, *args, timeout=ul._GIT_TIMEOUT_S):
+        seen_calls.append((cwd, args, timeout))
+        for arg in args:
+            if isinstance(arg, str) and arg.startswith("core.attributesFile="):
+                attr_file = arg.split("=", 1)[1]
+                seen_attrs["path"] = attr_file
+                seen_attrs["exists_during_call"] = os.path.isfile(attr_file)
+                seen_attrs["content"] = open(attr_file, encoding="utf-8").read()
+        if "merge" in args and "--no-ff" in args:
+            return subprocess.CompletedProcess(args, 0, "", "")
+        if args == ("rev-list", "--count", f"HEAD..{rec.branch}"):
+            return subprocess.CompletedProcess(args, 0, "1\n", "")
+        if args == ("diff", "--name-only", "HEAD^1", "HEAD"):
+            return subprocess.CompletedProcess(args, 0, "Assets/Test.unity\n", "")
+        return orig_git(cwd, *args, timeout=timeout)
+
+    monkeypatch.setattr(ul, "_git", spy_git)
+    res = ul.merge_lane(project, rec, timeout_s=123)
+    assert res["result"] == "merged"
+    assert res["files"] == ["Assets/Test.unity"]
+
+    merge_call = [c for c in seen_calls if "merge" in c[1] and "--no-ff" in c[1]][0]
+    cwd, args, timeout = merge_call
+    assert cwd == project and timeout == 123
+    assert "merge.unityyamlmerge.name=Unity SmartMerge" in args
+    assert f'merge.unityyamlmerge.driver="{fake_yaml}" merge -h -p --force %O %B %A %A' in args
+    assert "merge.unityyamlmerge.recursive=binary" in args
+    assert seen_attrs["exists_during_call"] is True
+    for ext in ("*.unity", "*.prefab", "*.asset", "*.mat", "*.controller",
+                "*.anim", "*.overrideController", "*.physicMaterial", "*.playable"):
+        assert f"{ext} merge=unityyamlmerge" in seen_attrs["content"]
+    # Temp attributes file is cleaned up in finally.
+    assert not os.path.exists(seen_attrs["path"])
