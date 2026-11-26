@@ -28,7 +28,8 @@ _RESERVED_NAMES = frozenset(
     | {f"lpt{i}" for i in range(1, 10)}
 )
 GB = 1024 ** 3
-PER_LANE_BYTES = 3 * GB
+# Live measurement on two batch lanes: ~6.5 GB free RAM consumed per lane during import.
+PER_LANE_BYTES = 6 * GB
 HEADROOM_BYTES = 2 * GB
 _GIT_TIMEOUT_S = 120
 _EXCLUDE_LINE = ".gamachine/"
@@ -132,14 +133,14 @@ def free_memory_bytes() -> Optional[int]:
     return None
 
 
-def memory_refusal(free_bytes: Optional[int], running_lanes: int) -> Optional[str]:
+def memory_refusal(free_bytes: Optional[int], running_lanes: int, starting_lanes: int = 0) -> Optional[str]:
     if free_bytes is None:
         return "Boş bellek ölçülemedi, bu yüzden yeni şerit başlatılmadı."
-    # Running lanes already hold their memory, so free_bytes covers only the new one.
-    need = PER_LANE_BYTES + HEADROOM_BYTES
+    # Ready lanes already hold their memory; lanes still starting have not allocated theirs yet.
+    need = PER_LANE_BYTES * (1 + starting_lanes) + HEADROOM_BYTES
     if free_bytes < need:
         return (f"Yeni bir şerit için yeterli boş bellek yok: {free_bytes / GB:.1f} GB boş, "
-                f"en az {need / GB:.1f} GB gerekir (şerit başına 3 GB + 2 GB pay); "
+                f"en az {need / GB:.1f} GB gerekir (şerit başına 6 GB + 2 GB pay); "
                 f"şu an çalışan şerit: {running_lanes}.")
     return None
 
@@ -303,10 +304,10 @@ def lane_log_path(directory: str) -> str:
 
 
 def start_editor(record: LaneRecord, *, free_bytes: Optional[int] = None, running: int = 0,
-                 popen: Callable = subprocess.Popen) -> LaneRecord:
+                 starting: int = 0, popen: Callable = subprocess.Popen) -> LaneRecord:
     if record.proc is not None and record.proc.poll() is None:
         raise LaneError("Bu şeridin editörü zaten çalışıyor.")
-    reason = memory_refusal(free_bytes, running)
+    reason = memory_refusal(free_bytes, running, starting_lanes=starting)
     if reason:
         raise LaneError(reason)
     exe = resolve_unity_exe(record.dir)
@@ -336,6 +337,14 @@ def _log_tail(directory: str, lines: int = 20) -> str:
         return ""
 
 
+def _has_license_error(directory: str) -> bool:
+    try:
+        with open(lane_log_path(directory), "r", encoding="utf-8", errors="replace") as fh:
+            return "No valid Unity Editor license" in fh.read()
+    except OSError:
+        return False
+
+
 def _failure(record: LaneRecord, reason: str) -> str:
     tail = _log_tail(record.dir)
     return f"{reason}\n{tail}" if tail else reason
@@ -343,43 +352,68 @@ def _failure(record: LaneRecord, reason: str) -> str:
 
 def wait_ready(record: LaneRecord, list_instances: Callable[[], list], timeout_s: float = 300,
                poll_s: float = 2, *, sleep: Callable[[float], None] = time.sleep,
-               clock: Callable[[], float] = time.monotonic) -> LaneRecord:
+               clock: Callable[[], float] = time.monotonic,
+               probe: Optional[Callable[[dict], bool]] = None) -> LaneRecord:
     want = expected_instance_hash(record.dir)
     deadline = clock() + timeout_s
+    matched: Optional[dict] = None
     while True:
         proc = record.proc
         if proc is not None and proc.poll() is not None:
+            rc = proc.poll()
             record.state = "failed"
-            raise LaneError(_failure(record, f"Unity süreci beklenmedik biçimde kapandı (kod {proc.poll()})."))
-        try:
-            instances = list_instances() or []
-        except Exception:
-            instances = []
-        if any(isinstance(i, dict) and i.get("hash") == want for i in instances):
-            record.state = "ready"
-            return record
+            if rc == 198 or _has_license_error(record.dir):
+                raise LaneError(
+                    "Unity lisansı bulunamadı: Unity Hub'ı açıp oturum açın ve "
+                    "lisansın etkin olduğunu kontrol edin, sonra tekrar deneyin."
+                )
+            raise LaneError(_failure(record, f"Unity süreci beklenmedik biçimde kapandı (kod {rc})."))
+        if matched is None:
+            try:
+                instances = list_instances() or []
+            except Exception:
+                instances = []
+            matched = next((i for i in instances if isinstance(i, dict) and i.get("hash") == want), None)
+        if matched is not None:
+            if probe is None:
+                record.state = "ready"
+                return record
+            try:
+                ok = bool(probe(matched))
+            except Exception:
+                ok = False
+            if ok:
+                record.state = "ready"
+                return record
         if clock() >= deadline:
             record.state = "failed"
             raise LaneError(_failure(record, f"Şerit editörü {int(timeout_s)} sn içinde MCP'ye bağlanmadı."))
         sleep(poll_s)
 
 
-def stop_editor(record: LaneRecord) -> LaneRecord:
+def stop_editor(record: LaneRecord, *, sleep: Callable[[float], None] = time.sleep) -> LaneRecord:
     proc, job = record.proc, record.job
     if job is not None:
         try:
             job.terminate()
         except Exception:
             pass
-    if proc is not None and proc.poll() is None:
+    if proc is not None:
+        if proc.poll() is None:
+            try:
+                proc.terminate()
+            except OSError:
+                pass
         try:
-            proc.terminate()
             proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
-            proc.kill()
+            try:
+                proc.kill()
+            except OSError:
+                pass
             try:
                 proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
+            except (subprocess.TimeoutExpired, OSError):
                 pass
         except OSError:
             pass
@@ -392,11 +426,17 @@ def stop_editor(record: LaneRecord) -> LaneRecord:
     record.proc = None
     record.pid = None
     lock = os.path.join(record.dir, "Temp", "UnityLockfile")
-    try:
-        if os.path.isfile(lock):
+    for attempt in range(10):
+        if not os.path.isfile(lock):
+            break
+        try:
             os.remove(lock)
-    except OSError:
-        pass
+            break
+        except FileNotFoundError:
+            break
+        except OSError:
+            if attempt < 9:
+                sleep(0.5)
     record.state = "stopped"
     return record
 

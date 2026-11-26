@@ -131,9 +131,12 @@ def test_remove_refuses_escape(project, tmp_path):
 
 def test_memory_refusal():
     assert "ölçülemedi" in ul.memory_refusal(None, 0)
-    assert ul.memory_refusal(5 * GB - 1, 0)
-    assert ul.memory_refusal(5 * GB, 0) is None
-    assert ul.memory_refusal(20 * GB, 3) is None
+    assert ul.memory_refusal(8 * GB - 1, 0)
+    assert "şerit başına 6 GB" in ul.memory_refusal(8 * GB - 1, 0)
+    assert ul.memory_refusal(8 * GB, 0) is None
+    assert ul.memory_refusal(9 * GB, 2, starting_lanes=0) is None
+    assert ul.memory_refusal(14 * GB - 1, 0, starting_lanes=1)
+    assert ul.memory_refusal(14 * GB, 0, starting_lanes=1) is None
 
 
 def test_free_memory_is_int_or_none():
@@ -432,3 +435,124 @@ def test_resolve_unity_exe_accepts_china_version(tmp_path, monkeypatch):
     open(exe, "w").close()
     monkeypatch.setattr(ul, "_hub_roots", lambda: [str(hub)])
     assert ul.resolve_unity_exe(str(proj)) == exe
+
+
+def test_start_editor_passes_starting_lanes_to_memory_gate(lane):
+    with pytest.raises(ul.LaneError):
+        ul.start_editor(
+            lane,
+            free_bytes=13 * GB,
+            running=0,
+            starting=1,
+            popen=lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not spawn")),
+        )
+    assert lane.state == "created"
+
+
+def test_wait_ready_probe_retries_then_succeeds(lane):
+    _started(lane, FakeProc())
+    want = ul.expected_instance_hash(lane.dir)
+    seen = []
+    probe_answers = iter([False, False, True])
+
+    def fake_probe(inst):
+        seen.append((inst, lane.state))
+        return next(probe_answers)
+
+    ul.wait_ready(
+        lane,
+        lambda: [{"hash": want, "project": "Proj"}],
+        sleep=lambda s: None,
+        probe=fake_probe,
+    )
+    assert lane.state == "ready"
+    assert len(seen) == 3
+    assert all(st == "starting" for _, st in seen)
+    assert seen[0][0] == {"hash": want, "project": "Proj"}
+
+
+def test_wait_ready_probe_never_succeeds_times_out(lane):
+    _started(lane, FakeProc())
+    want = ul.expected_instance_hash(lane.dir)
+    t = [0.0]
+
+    def clock():
+        t[0] += 100
+        return t[0]
+
+    with pytest.raises(ul.LaneError):
+        ul.wait_ready(
+            lane,
+            lambda: [{"hash": want, "project": "Proj"}],
+            timeout_s=300,
+            sleep=lambda s: None,
+            clock=clock,
+            probe=lambda inst: False,
+        )
+    assert lane.state == "failed"
+
+
+def test_wait_ready_license_error_by_exit_code_198(lane):
+    _started(lane, FakeProc(rc=198))
+    with pytest.raises(ul.LaneError) as e:
+        ul.wait_ready(lane, lambda: [], sleep=lambda s: None)
+    assert lane.state == "failed"
+    assert str(e.value) == (
+        "Unity lisansı bulunamadı: Unity Hub'ı açıp oturum açın ve "
+        "lisansın etkin olduğunu kontrol edin, sonra tekrar deneyin."
+    )
+
+
+def test_wait_ready_license_error_by_log_line(lane):
+    _started(lane, FakeProc(rc=1))
+    os.makedirs(os.path.dirname(ul.lane_log_path(lane.dir)), exist_ok=True)
+    with open(ul.lane_log_path(lane.dir), "w", encoding="utf-8") as fh:
+        fh.write("License check...\nNo valid Unity Editor license found. Please activate.\n")
+    with pytest.raises(ul.LaneError) as e:
+        ul.wait_ready(lane, lambda: [], sleep=lambda s: None)
+    assert lane.state == "failed"
+    assert "Unity lisansı bulunamadı" in str(e.value)
+
+
+def test_stop_editor_waits_for_process_and_retries_lockfile_removal(lane, monkeypatch):
+    class WaitSpyProc(FakeProc):
+        def __init__(self):
+            super().__init__(rc=0)  # already has rc (e.g. job.terminate ran first)
+            self.wait_timeouts = []
+
+        def wait(self, timeout=None):
+            self.wait_timeouts.append(timeout)
+            return self.rc
+
+    proc = WaitSpyProc()
+    _started(lane, proc)
+    lock = os.path.join(lane.dir, "Temp", "UnityLockfile")
+    os.makedirs(os.path.dirname(lock), exist_ok=True)
+    open(lock, "w").close()
+
+    orig_remove = os.remove
+    remove_attempts = [0]
+
+    def flaky_remove(path):
+        if os.path.normcase(path) == os.path.normcase(lock):
+            remove_attempts[0] += 1
+            if remove_attempts[0] == 1:
+                raise PermissionError("locked by dying process")
+        return orig_remove(path)
+
+    sleeps = []
+    monkeypatch.setattr(ul.os, "remove", flaky_remove)
+    ul.stop_editor(lane, sleep=sleeps.append)
+
+    assert proc.wait_timeouts == [10]
+    assert remove_attempts[0] == 2
+    assert sleeps == [0.5]
+    assert not os.path.exists(lock)
+    assert lane.state == "stopped"
+
+
+def test_stop_editor_skips_wait_when_proc_is_none(lane):
+    lane.proc = None
+    lane.state = "starting"
+    ul.stop_editor(lane, sleep=lambda s: None)
+    assert lane.state == "stopped"
