@@ -103,6 +103,8 @@ namespace MCPForUnity.Editor.Gamachine
 
             McpPrefs.SetBool(EditorPrefKeys.UseHttpTransport, true);
             McpPrefs.SetString(EditorPrefKeys.HttpBaseUrl, $"http://127.0.0.1:{settings.port}");
+            // A lane always talks to Gamachine's local server, whatever scope the user saved.
+            if (McpPrefs.IsLane) McpPrefs.SetString(EditorPrefKeys.HttpTransportScope, "local");
             McpPrefs.SetString(UiLanguageKey, settings.language == "tr" ? "tr" : "en");
             if (!string.IsNullOrEmpty(settings.uvxPath))
                 McpPrefs.SetString(EditorPrefKeys.UvxPathOverride, settings.uvxPath);
