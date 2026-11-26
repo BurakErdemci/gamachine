@@ -28,6 +28,10 @@ def project(tmp_path, monkeypatch):
     (proj / "Packages" / "manifest.json").write_text("{}")
     (proj / "Assets" / "a.txt").write_text("x")
     _run(proj, "init", "-q")
+    # merge_lane runs git with the spawn allowlist env (no GIT_AUTHOR_*), so the merge commit needs a
+    # repo-local identity; CI runners have no global one.
+    _run(proj, "config", "user.name", "t")
+    _run(proj, "config", "user.email", "t@t")
     _run(proj, "add", "-A")
     _run(proj, "commit", "-q", "-m", "init")
     calls = []
