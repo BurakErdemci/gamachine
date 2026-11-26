@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using UnityEditor;
 using UnityEngine;
@@ -56,6 +57,11 @@ namespace MCPForUnity.Editor
             LoadFromSession();
             // Writes made off the main thread cannot reach SessionState; save them before the reload.
             AssemblyReloadEvents.beforeAssemblyReload += FlushToSession;
+
+            // A lane starts with no prefs of its own, and InitializeOnLoad order is not fixed: without
+            // this, the first reader (the stdio bridge, the config cache, auto-start) would see the
+            // user's values instead of the lane's autoconnect.json.
+            RuntimeHelpers.RunClassConstructor(typeof(Gamachine.GamachineAutoConnect).TypeHandle);
         }
 
         /// <summary>
