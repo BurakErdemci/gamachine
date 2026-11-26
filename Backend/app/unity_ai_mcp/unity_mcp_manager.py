@@ -311,6 +311,22 @@ def unity_mcp_disabled() -> bool:
     return os.environ.get("GAMACHINE_NO_UNITY_MCP", "").strip().lower() in ("1", "true", "yes")
 
 
+def configured_mcp_port() -> int:
+    """Port for this backend's Unity MCP server from GAMACHINE_MCP_PORT (default 8080)."""
+    # dev/test override so an isolated backend can run beside a live Gamachine that owns 8080
+    raw = os.environ.get("GAMACHINE_MCP_PORT")
+    if raw is None or not raw.strip():
+        return 8080
+    try:
+        port = int(raw.strip())
+        if 1024 <= port <= 65535:
+            return port
+    except ValueError:
+        pass
+    logger.warning("[UnityMCP] Ignoring invalid GAMACHINE_MCP_PORT=%r; using 8080.", raw)
+    return 8080
+
+
 # Unity bağlantı durumu
 class UnityMCPStatus:
     OFF = "off"            # Sunucu kapalı
@@ -332,7 +348,7 @@ class UnityMCPManager:
 
     def __init__(self):
         self.process: Optional[subprocess.Popen] = None
-        self.mcp_port = 8080
+        self.mcp_port = configured_mcp_port()
         self._starting = False  # Çift başlatmayı önler
         self._autoconnect_workspaces: set[str] = set()
         self.active_workspace: Optional[str] = None

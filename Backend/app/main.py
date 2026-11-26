@@ -249,9 +249,22 @@ def _reset_unity_autoconnect_on_startup() -> None:
         logger.debug("[Startup] Autoconnect reset skipped: %s", e)
 
 
+def _cleanup_mcp_port_on_startup() -> None:
+    try:
+        from unity_ai_mcp.mcp_port_guard import terminate_port_listeners
+        from unity_ai_mcp.unity_mcp_manager import unity_mcp_manager
+        cleanup = terminate_port_listeners(unity_mcp_manager.mcp_port)
+        for pid in cleanup.killed:
+            logger.info(f"[Startup] Orphan MCP süreci temizlendi (PID: {pid})")
+        if cleanup.refused:
+            logger.warning(f"[Startup] {cleanup.message}")
+    except Exception as e:
+        logger.debug(f"[Startup] Port temizleme atlandı: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Backend başlarken: 8080'de geçen oturumdan kalmış KENDİ MCP sunucumuz varsa
+    # Backend başlarken: geçen oturumdan kalmış KENDİ MCP sunucumuz varsa
     # temizle. Eskiden porttaki her LISTEN sahibi öldürülüyordu; 8080 çok yaygın
     # bir port olduğu için kullanıcının alakasız bir dev server'ı da haber
     # verilmeden ölüyordu. Artık kimliği doğrulanan süreç öldürülüyor, doğrulanamayan
@@ -261,15 +274,7 @@ async def lifespan(app: FastAPI):
     if no_unity_mcp:
         logger.info("[Startup] GAMACHINE_NO_UNITY_MCP is set: Unity MCP port cleanup, supervisor and shutdown are skipped.")
     else:
-        try:
-            from unity_ai_mcp.mcp_port_guard import DEFAULT_MCP_PORT, terminate_port_listeners
-            cleanup = terminate_port_listeners(DEFAULT_MCP_PORT)
-            for pid in cleanup.killed:
-                logger.info(f"[Startup] Orphan MCP süreci temizlendi (PID: {pid})")
-            if cleanup.refused:
-                logger.warning(f"[Startup] {cleanup.message}")
-        except Exception as e:
-            logger.debug(f"[Startup] Port temizleme atlandı: {e}")
+        _cleanup_mcp_port_on_startup()
 
     _reset_unity_autoconnect_on_startup()
 

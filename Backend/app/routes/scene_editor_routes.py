@@ -104,7 +104,7 @@ def _post_unity(command: str, params: dict, project_path: str = "") -> dict:
         # Names the editor: /api/command otherwise takes the first connected session.
         body["project_path"] = project_path
     request = urllib.request.Request(
-        "http://localhost:8080/api/command", method="POST",
+        f"http://localhost:{unity_mcp_manager.mcp_port}/api/command", method="POST",
         data=json.dumps(body).encode("utf-8"),
         headers={"Content-Type": "application/json",
                  **unity_mcp_manager.api_headers(),
