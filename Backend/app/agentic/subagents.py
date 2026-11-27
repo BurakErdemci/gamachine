@@ -122,6 +122,7 @@ _CHILD_LANE: Dict[int, tuple] = {}
 _LANE_TASKS: Dict[int, asyncio.Task] = {}
 _STOP_TASKS: Dict[tuple, asyncio.Task] = {}
 _ADMITTED_LANES: set = set()
+_MERGING_LANES: set = set()
 _ADMISSION_LOCKS: Dict[asyncio.AbstractEventLoop, asyncio.Lock] = {}
 
 # ── live progress (in memory) ────────────────────────────────────────────────
@@ -169,7 +170,16 @@ def _clear_state_locked() -> None:
     _LANE_TASKS.clear()
     _STOP_TASKS.clear()
     _ADMITTED_LANES.clear()
+    _MERGING_LANES.clear()
     _ADMISSION_LOCKS.clear()
+
+
+def _merging_error(lane_name: str) -> SubagentError:
+    return SubagentError(
+        409,
+        f'Lane "{lane_name}" is being merged; send the message after lane_merge returns.',
+        "lane_busy",
+    )
 
 
 def configure(db: Any, *, stop_child: Optional[Callable[[int], Awaitable[None]]] = None,
@@ -616,6 +626,8 @@ def start(parent: int, user_id: int, *, model: Any, effort: Any, brief: Any,
             raise SubagentError(400, "Bir Unity projesi açık değil; şerit açılamaz.", "no_project")
         lane_key = (user_id, _real_path(main_project), lane_name)
         with _LOCK:
+            if lane_key in _MERGING_LANES:
+                raise _merging_error(lane_name)
             existing = _LANES.get(lane_key)
             if existing is not None and existing.state in ("starting", "ready"):
                 raise SubagentError(409, "Bu şerit başka bir yardımcıda çalışıyor.", "lane_busy")
@@ -719,6 +731,8 @@ def message(parent: int, agent_id: Any, text: Any) -> dict:
     restart_lane = False
     if lane_key is not None:
         with _LOCK:
+            if lane_key in _MERGING_LANES:
+                raise _merging_error(lane_name or lane_key[2])
             record = _LANES.get(lane_key)
             stop_task = _STOP_TASKS.get(lane_key)
             lane_task = _LANE_TASKS.get(child)
@@ -861,29 +875,14 @@ async def merge_lane(parent: int, user_id: int, lane: Any) -> dict:
         raise SubagentError(400, "No Unity project is open; cannot merge lane.", "no_project")
     lane_key = (user_id, _real_path(main), lane_name)
     with _LOCK:
-        record = _LANES.get(lane_key)
-        mapped_children = {cid for cid, k in _CHILD_LANE.items() if k == lane_key}
-        stop_task = _STOP_TASKS.get(lane_key)
-    if mapped_children and _DB is not None:
-        for r in _DB.list_subagents(parent):
-            if r.get("child_conv") in mapped_children and r.get("status") == RUNNING:
-                raise SubagentError(
-                    409,
-                    f"Lane \"{lane_name}\" is busy (sub-agent #{r['id']} is still running).",
-                    "lane_busy",
-                )
-    if stop_task is not None and not stop_task.done():
-        try:
-            await asyncio.wait_for(asyncio.shield(stop_task), timeout=60.0)
-        except asyncio.TimeoutError:
-            raise SubagentError(
-                409,
-                f"Lane \"{lane_name}\" is busy (editor is still stopping).",
-                "lane_busy",
-            )
+        if lane_key in _MERGING_LANES:
+            raise _merging_error(lane_name)
+        _MERGING_LANES.add(lane_key)
+    try:
         with _LOCK:
             record = _LANES.get(lane_key)
             mapped_children = {cid for cid, k in _CHILD_LANE.items() if k == lane_key}
+            stop_task = _STOP_TASKS.get(lane_key)
         if mapped_children and _DB is not None:
             for r in _DB.list_subagents(parent):
                 if r.get("child_conv") in mapped_children and r.get("status") == RUNNING:
@@ -892,71 +891,94 @@ async def merge_lane(parent: int, user_id: int, lane: Any) -> dict:
                         f"Lane \"{lane_name}\" is busy (sub-agent #{r['id']} is still running).",
                         "lane_busy",
                     )
-    if record is not None and record.state in ("starting", "ready"):
-        raise SubagentError(
-            409,
-            f"Lane \"{lane_name}\" is busy (editor state: {record.state}).",
-            "lane_busy",
-        )
-    if record is None:
-        lane_ws = unity_lanes.lane_dir(main, lane_name)
-        if not _is_git_worktree(lane_ws):
-            raise SubagentError(404, f"Unknown Unity lane \"{lane_name}\".", "unknown_lane")
-        record = unity_lanes.LaneRecord(
-            name=lane_name,
-            dir=lane_ws,
-            branch=f"gamachine/{lane_name}",
-            state="stopped",
-        )
+        if stop_task is not None and not stop_task.done():
+            try:
+                await asyncio.wait_for(asyncio.shield(stop_task), timeout=60.0)
+            except asyncio.TimeoutError:
+                raise SubagentError(
+                    409,
+                    f"Lane \"{lane_name}\" is busy (editor is still stopping).",
+                    "lane_busy",
+                )
+            with _LOCK:
+                record = _LANES.get(lane_key)
+                mapped_children = {cid for cid, k in _CHILD_LANE.items() if k == lane_key}
+            if mapped_children and _DB is not None:
+                for r in _DB.list_subagents(parent):
+                    if r.get("child_conv") in mapped_children and r.get("status") == RUNNING:
+                        raise SubagentError(
+                            409,
+                            f"Lane \"{lane_name}\" is busy (sub-agent #{r['id']} is still running).",
+                            "lane_busy",
+                        )
+        if record is not None and record.state in ("starting", "ready"):
+            raise SubagentError(
+                409,
+                f"Lane \"{lane_name}\" is busy (editor state: {record.state}).",
+                "lane_busy",
+            )
+        if record is None:
+            lane_ws = unity_lanes.lane_dir(main, lane_name)
+            if not _is_git_worktree(lane_ws):
+                raise SubagentError(404, f"Unknown Unity lane \"{lane_name}\".", "unknown_lane")
+            record = unity_lanes.LaneRecord(
+                name=lane_name,
+                dir=lane_ws,
+                branch=f"gamachine/{lane_name}",
+                state="stopped",
+            )
 
-    res = await asyncio.to_thread(unity_lanes.merge_lane, main, record)
-    result_kind = res.get("result")
-    files = list(res.get("files") or [])
-    cleanup_error = res.get("cleanup_error")
-    if result_kind in ("merged", "empty"):
+        res = await asyncio.to_thread(unity_lanes.merge_lane, main, record)
+        result_kind = res.get("result")
+        files = list(res.get("files") or [])
+        cleanup_error = res.get("cleanup_error")
+        if result_kind in ("merged", "empty"):
+            with _LOCK:
+                _LANES.pop(lane_key, None)
+                for cid in [c for c, k in _CHILD_LANE.items() if k == lane_key]:
+                    _CHILD_LANE.pop(cid, None)
+        if result_kind == "merged":
+            file_list = ", ".join(files) if files else "none"
+            if cleanup_error:
+                text = (
+                    f"Merged lane \"{lane_name}\" into the current branch ({len(files)} file(s): {file_list}), "
+                    f"but the lane folder could not be removed ({cleanup_error}). "
+                    f"Run refresh_unity in the user's editor so it picks up the merged files."
+                )
+            else:
+                text = (
+                    f"Merged lane \"{lane_name}\" into the current branch ({len(files)} file(s): {file_list}) "
+                    f"and removed the lane. Run refresh_unity in the user's editor so it picks up the merged files."
+                )
+        elif result_kind == "empty":
+            if cleanup_error:
+                text = (
+                    f"Lane \"{lane_name}\" had no new commits to merge, "
+                    f"but the lane folder could not be removed ({cleanup_error})."
+                )
+            else:
+                text = f"Lane \"{lane_name}\" had no new commits to merge; the lane and its branch were removed."
+        elif result_kind == "conflict":
+            file_list = ", ".join(files)
+            text = (
+                f"Merge conflict in lane \"{lane_name}\" on: {file_list}. "
+                "The merge was aborted with nothing changed. "
+                "Have the helper merge the user's branch into its lane and resolve the conflicts there, "
+                "or ask the user."
+            )
+        else:
+            if files:
+                text = (
+                    f"Merge of lane \"{lane_name}\" was refused because uncommitted files remain in the lane: "
+                    f"{', '.join(files)}. Have the helper commit or remove them first; nothing was merged."
+                )
+            else:
+                reason = res.get("message") or "merge refused by git."
+                text = f"Merge of lane \"{lane_name}\" was refused: {reason}"
+        return {"result": result_kind, "files": files, "text": text}
+    finally:
         with _LOCK:
-            _LANES.pop(lane_key, None)
-            for cid in [c for c, k in _CHILD_LANE.items() if k == lane_key]:
-                _CHILD_LANE.pop(cid, None)
-    if result_kind == "merged":
-        file_list = ", ".join(files) if files else "none"
-        if cleanup_error:
-            text = (
-                f"Merged lane \"{lane_name}\" into the current branch ({len(files)} file(s): {file_list}), "
-                f"but the lane folder could not be removed ({cleanup_error}). "
-                f"Run refresh_unity in the user's editor so it picks up the merged files."
-            )
-        else:
-            text = (
-                f"Merged lane \"{lane_name}\" into the current branch ({len(files)} file(s): {file_list}) "
-                f"and removed the lane. Run refresh_unity in the user's editor so it picks up the merged files."
-            )
-    elif result_kind == "empty":
-        if cleanup_error:
-            text = (
-                f"Lane \"{lane_name}\" had no new commits to merge, "
-                f"but the lane folder could not be removed ({cleanup_error})."
-            )
-        else:
-            text = f"Lane \"{lane_name}\" had no new commits to merge; the lane and its branch were removed."
-    elif result_kind == "conflict":
-        file_list = ", ".join(files)
-        text = (
-            f"Merge conflict in lane \"{lane_name}\" on: {file_list}. "
-            "The merge was aborted with nothing changed. "
-            "Have the helper merge the user's branch into its lane and resolve the conflicts there, "
-            "or ask the user."
-        )
-    else:
-        if files:
-            text = (
-                f"Merge of lane \"{lane_name}\" was refused because uncommitted files remain in the lane: "
-                f"{', '.join(files)}. Have the helper commit or remove them first; nothing was merged."
-            )
-        else:
-            reason = res.get("message") or "merge refused by git."
-            text = f"Merge of lane \"{lane_name}\" was refused: {reason}"
-    return {"result": result_kind, "files": files, "text": text}
+            _MERGING_LANES.discard(lane_key)
 
 
 # ── list / result ────────────────────────────────────────────────────────────

@@ -151,11 +151,21 @@ def test_agent_chat_invalid_lane_shapes_get_main(env):
     notlanes.mkdir(parents=True)
     nested = tmp / "proj" / ".gamachine" / "lanes" / "x" / "sub"
     nested.mkdir(parents=True)
-    missing = tmp / "proj" / ".gamachine" / "lanes" / "missing"
     bad_name = tmp / "proj" / ".gamachine" / "lanes" / "BadName"
     bad_name.mkdir(parents=True)
-    for ws in (notlanes, nested, missing, bad_name):
+    for ws in (notlanes, nested, bad_name):
         assert scope_workspace(db, _agent_chat(db, ws), 1) == str(main)
+
+
+def test_agent_chat_missing_lane_folder_keeps_lane(env):
+    db, main, tmp = env
+    missing = main / ".gamachine" / "lanes" / "missing"
+    chat = _agent_chat(db, missing)
+    assert scope_workspace(db, chat, 1) == str(missing)
+    other = tmp / "OtherProject"
+    other.mkdir()
+    db.save_workspace(1, str(other))
+    assert scope_workspace(db, chat, 1) == str(missing)
 
 
 def test_normal_chat_with_lane_shaped_workspace_gets_main(env):

@@ -450,3 +450,107 @@ def test_scene_mode_retries_permission_error_and_route_turns_oserror_into_400(tm
         r_perm = client.post("/workspace/scene-mode", json={"mode": "team"})
         assert r_perm.status_code == 400
         assert "locked" in r_perm.json()["detail"]
+
+
+# ── 9. Fix2: merge lock, scope_workspace missing lane, create_lane prune ─────
+
+async def test_merging_lane_refuses_message_start_and_second_merge_then_clears(lane_env, monkeypatch):
+    env, st = lane_env
+    parent = _main(env)
+    started = await _start_lane(env, parent, "merge-lock", name="h")
+    await _lanes_idle()
+
+    entered = threading.Event()
+    release = threading.Event()
+    real_merge = ul.merge_lane
+
+    def slow_merge(project, record, **kw):
+        entered.set()
+        assert release.wait(timeout=10.0)
+        return real_merge(project, record, **kw)
+
+    monkeypatch.setattr(ul, "merge_lane", slow_merge)
+    merge_task = asyncio.create_task(subagents.merge_lane(parent, 1, "merge-lock"))
+    await _until(entered.is_set, timeout=5)
+
+    expected_msg = 'Lane "merge-lock" is being merged; send the message after lane_merge returns.'
+    calls_before = st.popen_calls
+
+    with pytest.raises(subagents.SubagentError) as msg_exc:
+        subagents.message(parent, started["agent_id"], "devam")
+    assert (msg_exc.value.status, msg_exc.value.code, msg_exc.value.message) == (409, "lane_busy", expected_msg)
+
+    cat = await env.catalog(1)
+    with pytest.raises(subagents.SubagentError) as start_exc:
+        subagents.start(parent, 1, model=CODEX, effort="high", brief="yeni", catalog=cat, lane="merge-lock")
+    assert (start_exc.value.status, start_exc.value.code, start_exc.value.message) == (409, "lane_busy", expected_msg)
+
+    with pytest.raises(subagents.SubagentError) as merge2_exc:
+        await subagents.merge_lane(parent, 1, "merge-lock")
+    assert (merge2_exc.value.status, merge2_exc.value.code, merge2_exc.value.message) == (409, "lane_busy", expected_msg)
+
+    assert st.popen_calls == calls_before
+    assert len(env.db.list_subagents(parent)) == 1
+
+    release.set()
+    res = await merge_task
+    assert res["result"] == "empty"
+    assert not subagents._MERGING_LANES
+
+    # Also clears on error exit (e.g. 404 unknown_lane).
+    with pytest.raises(subagents.SubagentError) as unk_exc:
+        await subagents.merge_lane(parent, 1, "merge-lock")
+    assert (unk_exc.value.status, unk_exc.value.code) == (404, "unknown_lane")
+    assert not subagents._MERGING_LANES
+
+
+async def test_scope_workspace_keeps_missing_lane_folder_and_never_falls_back(lane_env):
+    from unity_lane_paths import scope_workspace
+
+    env, st = lane_env
+    parent = _main(env)
+    started = await _start_lane(env, parent, "gone-lane", name="h")
+    await _lanes_idle()
+    res = await _post(env, "/subagents/lane-merge", conversation_id=parent, lane="gone-lane")
+    assert res["result"] == "empty"
+    lane_ws = ul.lane_dir(st.proj, "gone-lane")
+    assert not os.path.exists(lane_ws)
+    assert os.path.realpath(scope_workspace(env.db, started["chat_id"], 1)) == os.path.realpath(lane_ws)
+
+
+def test_create_lane_prunes_stale_worktree_only_when_folder_missing(tmp_path, monkeypatch):
+    import shutil
+    import stat
+    from unity_lane_paths import scope_workspace  # noqa: F401
+
+    monkeypatch.setattr(ul, "_install_package", lambda _d: True)
+    project = _make_git_project(tmp_path)
+    rec = ul.create_lane(project, "hand-del")
+
+    def _rw(func, p, _exc):
+        os.chmod(p, stat.S_IWRITE)
+        func(p)
+
+    shutil.rmtree(rec.dir, onerror=_rw)
+    assert not os.path.exists(rec.dir)
+
+    seen_git = []
+    real_git = ul._git
+
+    def spy_git(proj, *args, **kw):
+        seen_git.append(args)
+        return real_git(proj, *args, **kw)
+
+    monkeypatch.setattr(ul, "_git", spy_git)
+    rec2 = ul.create_lane(project, "hand-del")
+    assert os.path.isdir(rec2.dir)
+    assert ("worktree", "prune") in seen_git
+    prune_idx = seen_git.index(("worktree", "prune"))
+    add_idx = next(i for i, a in enumerate(seen_git) if len(a) >= 2 and a[0] == "worktree" and a[1] == "add")
+    assert prune_idx < add_idx
+
+    # When the lane folder exists, create_lane refuses without pruning.
+    seen_git.clear()
+    with pytest.raises(ul.LaneError):
+        ul.create_lane(project, "hand-del")
+    assert not any(len(a) >= 2 and a[0] == "worktree" and a[1] == "prune" for a in seen_git)

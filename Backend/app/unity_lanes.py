@@ -285,6 +285,7 @@ def create_lane(project: str, name: str) -> LaneRecord:
     branch = f"gamachine/{name}"
     branch_existed = _git_out(project, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}") is not None
     _ensure_excluded(project)
+    _git(project, "worktree", "prune")
     if branch_existed:
         res = _git(project, "worktree", "add", directory, branch)
     else:
