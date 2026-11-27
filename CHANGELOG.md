@@ -7,7 +7,7 @@ Bu dosya kullanıcıya görünen değişiklikleri taşır. Tam geçmiş için `g
 > kullanıcının indirme anında gördüğü sayfa. Eski girdiler olduğu gibi bırakıldı —
 > geçmişi yarım çevirmek, tek dilde bırakmaktan da iki dilde bırakmaktan da kötü.
 
-## v4.1.0 — XX November 2026
+## v4.1.0 — 27 November 2026
 
 Your main agent can now run a team: it starts helper agents on other connected CLI models, runs scripts that do many tool calls in one step, and in Unity it can give each helper a project copy and editor of its own.
 
