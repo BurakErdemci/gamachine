@@ -3,11 +3,14 @@
 import json
 import os
 import tempfile
+import time
 
 import unity_lanes
 
 MODES = ("code", "mixed", "team")
 DEFAULT = "mixed"
+_REPLACE_ATTEMPTS = 80
+_REPLACE_DELAY_S = 0.005
 
 
 def _is_link(path: str) -> bool:
@@ -91,6 +94,12 @@ def set(workspace: str, mode: str) -> str:
         if not inside:
             raise ValueError(f"path resolves outside project: {path}")
 
+    for d in (user_settings, gamachine_dir):
+        if os.path.exists(d) and not os.path.isdir(d):
+            raise ValueError(f"expected directory at {d}")
+    if os.path.exists(target) and not os.path.isfile(target):
+        raise ValueError(f"scene mode target is not a file: {target}")
+
     os.makedirs(gamachine_dir, exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(dir=gamachine_dir, prefix=".scene_mode-", suffix=".tmp")
     try:
@@ -100,7 +109,14 @@ def set(workspace: str, mode: str) -> str:
             fh.write("\n")
             fh.flush()
             os.fsync(fh.fileno())
-        os.replace(tmp_path, target)
+        for attempt in range(_REPLACE_ATTEMPTS):
+            try:
+                os.replace(tmp_path, target)
+                break
+            except PermissionError:
+                if attempt == _REPLACE_ATTEMPTS - 1:
+                    raise
+                time.sleep(_REPLACE_DELAY_S)
     finally:
         if os.path.exists(tmp_path):
             try:

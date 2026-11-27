@@ -83,7 +83,7 @@ are done).
 
 ## POST /subagents/start
 
-Body `{"conversation_id": N, "model": "...", "brief": "...", "effort": "auto", "name": "...", "lane": "..."}` (`effort`, `name`, and `lane` are optional). When `lane` is non-empty, the sub-agent's hidden chat runs in a Unity lane (a git worktree plus its own batch-mode Unity editor at `<project>/.gamachine/lanes/<lane>`) and its first turn starts once that editor connects to Unity MCP.
+Body `{"conversation_id": N, "model": "...", "brief": "...", "effort": "auto", "name": "...", "lane": "..."}` (`effort`, `name`, and `lane` are optional). When `lane` is non-empty, the sub-agent's hidden chat runs in a Unity lane (a git worktree plus its own batch-mode Unity editor at `<project>/.gamachine/lanes/<lane>`) and its first turn starts once that editor connects to Unity MCP. Messaging a lane helper through `/subagents/message` when its editor is not running (including after an app restart or after its lane was merged and removed) re-creates the worktree if missing and restarts the editor before running the turn.
 
 - 200 `{"status": "running", "agent_id": A, "chat_id": C, "name": "...", "model": "...", "effort": "...", "text": "..."}` (includes `"lane": "<name>"` when started in a lane).
 - 400 (`bad_lane`): invalid `lane` name (must be 1–32 chars of lowercase letters, digits and hyphens, starting with a letter or digit).
@@ -103,17 +103,18 @@ Body `{"conversation_id": N, "lane": "..."}`. Merges a finished Unity lane's com
 user's current branch (using UnityYAMLMerge for Unity YAML extensions when found next to the project's
 editor, otherwise plain git), discards Unity settings noise (`ProjectSettings/*` and
 `Packages/packages-lock.json` unstaged modifications), and removes the lane and its branch on `"merged"`
-or `"empty"`. Requires a running turn of the chat.
+or `"empty"`. If the helper is no longer running and only the lane editor's stop is in progress, the call
+waits up to 60 s for the stop to finish before merging. Requires a running turn of the chat.
 
 - 200 `{"result": "merged" | "empty" | "conflict" | "refused", "files": [...], "text": "..."}`:
   - `"merged"`: lane commits merged with `--no-ff`, lane worktree and branch removed; `text` directs the agent to run `refresh_unity`.
   - `"empty"`: lane had no commits ahead of `HEAD`; lane worktree and branch removed.
   - `"conflict"`: merge aborted with `MERGE_HEAD` cleared and nothing changed; `files` lists the unmerged paths, lane and branch stay.
-  - `"refused"`: uncommitted non-noise files in the lane (`files` lists them), editor process still running, or git refused the merge (e.g. local changes would be overwritten); nothing changed in the project, lane and branch stay.
+  - `"refused"`: uncommitted non-noise files in the lane (`files` lists them), editor process still running, lane HEAD detached or off `gamachine/<lane>`, lane already removed by a concurrent merge, or git refused the merge (e.g. local changes would be overwritten); nothing changed in the project, lane and branch stay.
 - 400 (`bad_lane`): invalid `lane` name.
 - 400 (`no_project`): no workspace/Unity project is open for the user.
 - 404 (`unknown_lane`): no registered lane or git worktree at `<project>/.gamachine/lanes/<lane>`.
-- 409 (`lane_busy`): a sub-agent mapped to the lane is still `running`, or the lane editor state is `starting` or `ready`.
+- 409 (`lane_busy`): a sub-agent mapped to the lane is still `running`, the editor stop timed out, or the lane editor state is `starting` or `ready`.
 
 ## GET /agent-settings/script-tool, PUT /agent-settings/script-tool
 

@@ -15,6 +15,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
@@ -345,6 +346,9 @@ class _WinRegistry:
 
 
 _registry = _WinRegistry()
+_HUB_LOCK = threading.Lock()
+_PRE_LANE_SNAPSHOTS: Dict[str, Dict[str, bytes]] = {}
+_ACTIVE_HUB_LANES: Dict[str, set] = {}
 
 
 def _path_matches_prefix(candidate_norm: str, target_norm: str) -> bool:
@@ -353,10 +357,43 @@ def _path_matches_prefix(candidate_norm: str, target_norm: str) -> bool:
     return candidate_norm == target_norm or candidate_norm.startswith(target_norm + "/")
 
 
+def _is_lane_registry_value(raw: Any) -> bool:
+    if not isinstance(raw, (bytes, bytearray)):
+        return False
+    norm = bytes(raw).decode("utf-8", errors="replace").rstrip("\x00").replace("\\", "/").rstrip("/").casefold()
+    return "/.gamachine/lanes/" in norm or norm.endswith("/.gamachine/lanes")
+
+
+def _lane_hub_scope(directory: str) -> Optional[tuple[str, str]]:
+    """Return (project_key, lanes_dir_norm) when `directory` sits under <project>/.gamachine/lanes/<name>."""
+    lane_abs = os.path.abspath(directory).replace("\\", "/").rstrip("/")
+    lanes_dir = os.path.dirname(lane_abs).rstrip("/")
+    gamachine_dir = os.path.dirname(lanes_dir).rstrip("/")
+    project_dir = os.path.dirname(gamachine_dir).rstrip("/")
+    if (
+        project_dir
+        and os.path.basename(lanes_dir).casefold() == "lanes"
+        and os.path.basename(gamachine_dir).casefold() == ".gamachine"
+    ):
+        proj_key = os.path.normcase(os.path.realpath(project_dir))
+        return proj_key, lanes_dir.casefold()
+    return None
+
+
 def restore_hub_values(record: LaneRecord, registry: Any = None) -> int:
-    """Write back snapshot Hub values that currently point into the lane folder."""
-    snapshot = getattr(record, "hub_snapshot", None)
-    if not snapshot:
+    """Write back snapshot Hub values that currently point into this project's lanes folder."""
+    snapshot = getattr(record, "hub_snapshot", None) or {}
+    scope = _lane_hub_scope(record.dir)
+    with _HUB_LOCK:
+        pre_snap = dict(_PRE_LANE_SNAPSHOTS.get(scope[0], {})) if scope else {}
+    candidates: Dict[str, bytes] = {}
+    for name, val in snapshot.items():
+        if not _is_lane_registry_value(val):
+            candidates[name] = bytes(val)
+    for name, val in pre_snap.items():
+        if not _is_lane_registry_value(val):
+            candidates[name] = bytes(val)
+    if not candidates:
         return 0
     reg = _registry if registry is None else registry
     try:
@@ -368,13 +405,13 @@ def restore_hub_values(record: LaneRecord, registry: Any = None) -> int:
     try:
         lane_abs = os.path.abspath(record.dir).replace("\\", "/").rstrip("/")
         lane_norm = lane_abs.casefold()
-        parent_norm = os.path.dirname(lane_abs).replace("\\", "/").rstrip("/").casefold()
+        lanes_norm = scope[1] if scope else os.path.dirname(lane_abs).replace("\\", "/").rstrip("/").casefold()
     except Exception as exc:
         logger.warning("Şerit yolu çözümlenemedi: %s", exc)
         return 0
 
     written = 0
-    for name, old_bytes in snapshot.items():
+    for name, old_bytes in candidates.items():
         if name not in current:
             continue
         cur_bytes = current[name]
@@ -382,15 +419,17 @@ def restore_hub_values(record: LaneRecord, registry: Any = None) -> int:
             continue
         try:
             decoded = bytes(cur_bytes).decode("utf-8", errors="replace").rstrip("\x00")
-            cur_norm = decoded.replace("\\", "/").casefold()
-            matches = _path_matches_prefix(cur_norm, lane_norm)
+            cur_norm = decoded.replace("\\", "/").rstrip("/").casefold()
+            if scope is not None:
+                matches = cur_norm.startswith(lanes_norm + "/")
+            else:
+                matches = _path_matches_prefix(cur_norm, lane_norm)
             if not matches and name.startswith("kWorkspacePath_"):
-                matches = _path_matches_prefix(cur_norm, parent_norm)
+                matches = _path_matches_prefix(cur_norm, lanes_norm)
             if not matches:
                 continue
             # A snapshot taken while another lane ran can hold that lane's path; never write it back.
-            old_norm = bytes(old_bytes).decode("utf-8", errors="replace").replace("\\", "/").casefold()
-            if "/.gamachine/lanes/" in old_norm:
+            if _is_lane_registry_value(old_bytes):
                 continue
             reg.write(name, bytes(old_bytes))
             written += 1
@@ -422,12 +461,29 @@ def start_editor(record: LaneRecord, *, free_bytes: Optional[int] = None, runnin
     else:
         kwargs["start_new_session"] = True
     try:
-        record.hub_snapshot = dict(_registry.read_all() or {})
+        current_reg = dict(_registry.read_all() or {})
     except Exception:
-        record.hub_snapshot = {}
+        current_reg = {}
+    record.hub_snapshot = current_reg
+    scope = _lane_hub_scope(record.dir)
+    if scope is not None:
+        proj_key = scope[0]
+        with _HUB_LOCK:
+            if not _ACTIVE_HUB_LANES.get(proj_key):
+                _PRE_LANE_SNAPSHOTS[proj_key] = {
+                    k: bytes(v) for k, v in current_reg.items() if not _is_lane_registry_value(v)
+                }
+            else:
+                snap = _PRE_LANE_SNAPSHOTS.setdefault(proj_key, {})
+                for k, v in current_reg.items():
+                    if k not in snap and not _is_lane_registry_value(v):
+                        snap[k] = bytes(v)
     proc = popen([exe, "-batchmode", "-projectPath", record.dir, "-logFile", log],
                  env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                  stderr=subprocess.DEVNULL, **kwargs)
+    if scope is not None:
+        with _HUB_LOCK:
+            _ACTIVE_HUB_LANES.setdefault(scope[0], set()).add(record.name)
     record.proc = proc
     record.pid = getattr(proc, "pid", None)
     record.job = process_tree.new_job_object_for(proc)
@@ -538,6 +594,16 @@ def stop_editor(record: LaneRecord, *, sleep: Callable[[float], None] = time.sle
         restore_hub_values(record)
     except Exception as exc:
         logger.warning("Unity Hub son proje yolu geri yüklenemedi: %s", exc)
+    scope = _lane_hub_scope(record.dir)
+    if scope is not None:
+        proj_key = scope[0]
+        with _HUB_LOCK:
+            active = _ACTIVE_HUB_LANES.get(proj_key)
+            if active is not None:
+                active.discard(record.name)
+                if not active:
+                    _ACTIVE_HUB_LANES.pop(proj_key, None)
+                    _PRE_LANE_SNAPSHOTS.pop(proj_key, None)
     lock = os.path.join(record.dir, "Temp", "UnityLockfile")
     for attempt in range(10):
         if not os.path.isfile(lock):
@@ -696,6 +762,20 @@ def _classify_lane_status(stdout: str) -> tuple[List[str], List[str], List[str]]
     return tracked_noise, untracked_noise, dirty
 
 
+_MERGE_LOCKS_GUARD = threading.Lock()
+_MERGE_LOCKS: Dict[str, threading.Lock] = {}
+
+
+def _merge_lock_for(project: str) -> threading.Lock:
+    key = os.path.normcase(os.path.realpath(project))
+    with _MERGE_LOCKS_GUARD:
+        lock = _MERGE_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _MERGE_LOCKS[key] = lock
+        return lock
+
+
 def _try_remove_after_merge(project: str, record: LaneRecord) -> Optional[str]:
     try:
         remove_lane(project, record, delete_branch=True)
@@ -706,6 +786,11 @@ def _try_remove_after_merge(project: str, record: LaneRecord) -> Optional[str]:
 
 def merge_lane(project: str, record: LaneRecord, *, timeout_s: int = 300) -> dict:
     validate_name(record.name)
+    with _merge_lock_for(project):
+        return _merge_lane_locked(project, record, timeout_s=timeout_s)
+
+
+def _merge_lane_locked(project: str, record: LaneRecord, *, timeout_s: int = 300) -> dict:
     try:
         _ensure_lane_dir_safe(
             project,
@@ -721,6 +806,47 @@ def merge_lane(project: str, record: LaneRecord, *, timeout_s: int = 300) -> dic
             "files": [],
             "message": "Şeridin editörü hâlâ açık; önce yardımcıyı durdurun.",
         }
+    if record.state == "removed" or not os.path.isdir(record.dir):
+        return {
+            "result": "refused",
+            "files": [],
+            "message": f"'{record.name}' şeridi artık mevcut değil (zaten birleştirilmiş veya kaldırılmış olabilir).",
+        }
+
+    sym_res = _git(record.dir, "symbolic-ref", "--quiet", "--short", "HEAD")
+    if sym_res.returncode != 0:
+        return {
+            "result": "refused",
+            "files": [],
+            "message": (
+                f"Şeritteki HEAD ayrık (detached HEAD); yardımcıya değişiklikleri "
+                f"'{record.branch}' dalına commit ettirin (birleştirme yapılmadı)."
+            ),
+        }
+    cur_branch = sym_res.stdout.strip()
+    if cur_branch != record.branch:
+        return {
+            "result": "refused",
+            "files": [],
+            "message": (
+                f"Şerit '{record.branch}' dalında değil ('{cur_branch}' dalında); "
+                f"yardımcıya değişiklikleri '{record.branch}' dalına geçirip commit ettirin "
+                "(birleştirme yapılmadı)."
+            ),
+        }
+    head_sha = _git_out(record.dir, "rev-parse", "--verify", "HEAD")
+    if head_sha:
+        anc_res = _git(project, "merge-base", "--is-ancestor", head_sha, record.branch)
+        if anc_res.returncode != 0:
+            return {
+                "result": "refused",
+                "files": [],
+                "message": (
+                    f"'{record.branch}' dalı şeritteki HEAD commit'ini içermiyor; "
+                    f"yardımcıya değişiklikleri '{record.branch}' dalına commit ettirin "
+                    "(birleştirme yapılmadı)."
+                ),
+            }
 
     status_res = _git(record.dir, "status", "--porcelain=v1", "-uall")
     if status_res.returncode != 0:
@@ -776,6 +902,21 @@ def merge_lane(project: str, record: LaneRecord, *, timeout_s: int = 300) -> dic
             "message": f"Şerit dalındaki commit sayısı okunamadı: {rev_res.stdout.strip()}",
         }
     if ahead == 0:
+        if head_sha:
+            head_ahead_res = _git(project, "rev-list", "--count", f"HEAD..{head_sha}")
+            try:
+                head_ahead = int(head_ahead_res.stdout.strip()) if head_ahead_res.returncode == 0 else 0
+            except ValueError:
+                head_ahead = 0
+            if head_ahead > 0:
+                return {
+                    "result": "refused",
+                    "files": [],
+                    "message": (
+                        f"Şeritteki HEAD '{record.branch}' dalında değil; yardımcıya değişiklikleri "
+                        f"'{record.branch}' dalına commit ettirin (birleştirme yapılmadı)."
+                    ),
+                }
         cleanup_error = _try_remove_after_merge(project, record)
         if cleanup_error:
             return {

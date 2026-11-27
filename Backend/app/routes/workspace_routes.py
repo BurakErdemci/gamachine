@@ -120,7 +120,7 @@ def create_workspace_router(db):
             raise HTTPException(status_code=400, detail="mode must be a string")
         try:
             saved = scene_mode.set(workspace, body.get("mode"))
-        except ValueError as exc:
+        except (ValueError, OSError) as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         return {"mode": saved, "modes": list(scene_mode.MODES), "workspace": workspace}
 

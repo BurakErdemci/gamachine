@@ -121,6 +121,8 @@ _LANES: Dict[tuple, unity_lanes.LaneRecord] = {}
 _CHILD_LANE: Dict[int, tuple] = {}
 _LANE_TASKS: Dict[int, asyncio.Task] = {}
 _STOP_TASKS: Dict[tuple, asyncio.Task] = {}
+_ADMITTED_LANES: set = set()
+_ADMISSION_LOCKS: Dict[asyncio.AbstractEventLoop, asyncio.Lock] = {}
 
 # ── live progress (in memory) ────────────────────────────────────────────────
 THINKING, WRITING, RUNNING_TOOL, WAITING_APPROVAL, QUEUED = (
@@ -166,6 +168,8 @@ def _clear_state_locked() -> None:
     _CHILD_LANE.clear()
     _LANE_TASKS.clear()
     _STOP_TASKS.clear()
+    _ADMITTED_LANES.clear()
+    _ADMISSION_LOCKS.clear()
 
 
 def configure(db: Any, *, stop_child: Optional[Callable[[int], Awaitable[None]]] = None,
@@ -333,6 +337,38 @@ def _is_git_worktree(directory: str) -> bool:
     return os.path.isdir(directory) and os.path.exists(os.path.join(directory, ".git"))
 
 
+def _parse_lane_workspace(workspace: Any) -> Optional[tuple[str, str]]:
+    if not workspace or not isinstance(workspace, str):
+        return None
+    norm = os.path.normpath(workspace)
+    lane_name = os.path.basename(norm)
+    lanes_dir = os.path.dirname(norm)
+    gamachine_dir = os.path.dirname(lanes_dir)
+    project = os.path.dirname(gamachine_dir)
+    if (
+        project
+        and project != gamachine_dir
+        and os.path.basename(lanes_dir) == "lanes"
+        and os.path.basename(gamachine_dir) == ".gamachine"
+    ):
+        try:
+            unity_lanes.validate_name(lane_name)
+            return project, lane_name
+        except ValueError:
+            return None
+    return None
+
+
+def _get_admission_lock() -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    with _LOCK:
+        lock = _ADMISSION_LOCKS.get(loop)
+        if lock is None:
+            lock = asyncio.Lock()
+            _ADMISSION_LOCKS[loop] = lock
+        return lock
+
+
 def _running_lane_count(exclude_key: Optional[tuple] = None) -> int:
     with _LOCK:
         return sum(
@@ -344,7 +380,10 @@ def _running_lane_count(exclude_key: Optional[tuple] = None) -> int:
 def _lane_counts(exclude_key: Optional[tuple] = None) -> tuple:
     with _LOCK:
         ready = sum(1 for k, r in _LANES.items() if k != exclude_key and r.state == "ready")
-        starting = sum(1 for k, r in _LANES.items() if k != exclude_key and r.state == "starting")
+        starting = sum(
+            1 for k, r in _LANES.items()
+            if k != exclude_key and r.state == "starting" and k in _ADMITTED_LANES
+        )
     return ready, starting
 
 
@@ -406,6 +445,7 @@ async def _stop_lane_editor(lane_key: tuple, record: unity_lanes.LaneRecord) -> 
             logger.exception("[subagents] lane %s editor not stopped", record.name)
     finally:
         with _LOCK:
+            _ADMITTED_LANES.discard(lane_key)
             record.state = "stopped"
             cur = asyncio.current_task()
             if _STOP_TASKS.get(lane_key) is cur:
@@ -445,7 +485,13 @@ async def _run_lane_and_turn(row: dict, lane_key: tuple, main_project: Optional[
         stop_task = _STOP_TASKS.get(lane_key)
     if record is None:
         return
+    if not main_project:
+        parsed = _parse_lane_workspace(lane_ws)
+        if parsed is not None:
+            main_project = parsed[0]
     started_editor = False
+    created_here = False
+    delete_branch_on_fail = True
     try:
         if stop_task is not None and not stop_task.done():
             try:
@@ -454,6 +500,7 @@ async def _run_lane_and_turn(row: dict, lane_key: tuple, main_project: Optional[
                 pass
             with _LOCK:
                 record.state = "starting"
+                _LANES[lane_key] = record
         if create_if_missing:
             if _is_git_worktree(lane_ws):
                 reused = unity_lanes.LaneRecord(
@@ -464,16 +511,28 @@ async def _run_lane_and_turn(row: dict, lane_key: tuple, main_project: Optional[
                     _LANES[lane_key] = reused
                 record = reused
             else:
+                if not main_project:
+                    raise unity_lanes.LaneError("Bir Unity projesi açık değil; şerit açılamaz.")
+                branch_existed = await asyncio.to_thread(
+                    lambda: unity_lanes._git_out(
+                        main_project, "rev-parse", "--verify", "--quiet", f"refs/heads/gamachine/{lane_name}"
+                    ) is not None
+                )
                 created = await asyncio.to_thread(
                     unity_lanes.create_lane, main_project, lane_name,
                 )
+                created_here = True
+                delete_branch_on_fail = not branch_existed
                 with _LOCK:
                     created.state = "starting"
                     _LANES[lane_key] = created
                 record = created
-        running_count, starting_count = _lane_counts(exclude_key=lane_key)
-        await asyncio.to_thread(_start_editor_sync, record, running_count, starting_count)
-        started_editor = True
+        async with _get_admission_lock():
+            running_count, starting_count = _lane_counts(exclude_key=lane_key)
+            await asyncio.to_thread(_start_editor_sync, record, running_count, starting_count)
+            started_editor = True
+            with _LOCK:
+                _ADMITTED_LANES.add(lane_key)
         await asyncio.to_thread(
             unity_lanes.wait_ready,
             record,
@@ -490,6 +549,8 @@ async def _run_lane_and_turn(row: dict, lane_key: tuple, main_project: Optional[
             return
         turn_runner.start_background_turn(child, prompt, "user")
     except asyncio.CancelledError:
+        with _LOCK:
+            _ADMITTED_LANES.discard(lane_key)
         if started_editor or record.proc is not None or record.job is not None:
             await _stop_lane_editor(lane_key, record)
         else:
@@ -498,6 +559,8 @@ async def _run_lane_and_turn(row: dict, lane_key: tuple, main_project: Optional[
         raise
     except Exception as exc:
         logger.exception("[subagents] lane %s startup failed for agent %s", lane_name, row["id"])
+        with _LOCK:
+            _ADMITTED_LANES.discard(lane_key)
         if started_editor or record.proc is not None or record.job is not None:
             try:
                 await asyncio.to_thread(unity_lanes.stop_editor, record)
@@ -506,6 +569,19 @@ async def _run_lane_and_turn(row: dict, lane_key: tuple, main_project: Optional[
         with _LOCK:
             if record.state in ("created", "starting", "ready"):
                 record.state = "failed"
+        if created_here and main_project:
+            try:
+                await asyncio.to_thread(
+                    unity_lanes.remove_lane,
+                    main_project,
+                    record,
+                    delete_branch=delete_branch_on_fail,
+                )
+            except Exception:
+                logger.exception("[subagents] failed-lane cleanup failed for %s", lane_name)
+            with _LOCK:
+                if _LANES.get(lane_key) is record:
+                    _LANES.pop(lane_key, None)
         cur_row = _DB.get_subagent(row["id"]) if _DB is not None else None
         if cur_row is not None and cur_row["status"] != STOPPED:
             reason = str(exc).strip() or type(exc).__name__
@@ -614,12 +690,82 @@ def message(parent: int, agent_id: Any, text: Any) -> dict:
     if len(text) > MESSAGE_MAX_CHARS:
         raise SubagentError(400, f"text is longer than {MESSAGE_MAX_CHARS} characters.", "bad_text")
     child = row["child_conv"]
+    clean_text = text.strip()
+    main_project: Optional[str] = None
+    lane_name: Optional[str] = None
+    lane_ws: Optional[str] = None
     with _LOCK:
         lane_key = _CHILD_LANE.get(child)
         record = _LANES.get(lane_key) if lane_key is not None else None
-        restart_lane = record is not None and record.state in ("stopped", "failed")
-        if restart_lane:
-            record.state = "starting"
+    child_ws = _DB.get_conversation_workspace(child) if _DB is not None else None
+    parsed = _parse_lane_workspace(child_ws)
+    if parsed is not None:
+        main_project, lane_name = parsed
+        lane_ws = unity_lanes.lane_dir(main_project, lane_name)
+        if lane_key is None:
+            owner = _DB.get_conversation_owner(parent) if _DB is not None else None
+            lane_key = (owner, _real_path(main_project), lane_name)
+            with _LOCK:
+                _CHILD_LANE[child] = lane_key
+                record = _LANES.get(lane_key)
+    elif record is not None:
+        parsed_rec = _parse_lane_workspace(record.dir)
+        if parsed_rec is not None:
+            main_project, lane_name = parsed_rec
+        else:
+            lane_name = record.name
+        lane_ws = record.dir
+
+    restart_lane = False
+    if lane_key is not None:
+        with _LOCK:
+            record = _LANES.get(lane_key)
+            stop_task = _STOP_TASKS.get(lane_key)
+            lane_task = _LANE_TASKS.get(child)
+            other_children = [c for c, k in _CHILD_LANE.items() if k == lane_key and c != child]
+            other_starting = any(c in _LANE_TASKS for c in other_children)
+        other_running = False
+        if other_children and _DB is not None:
+            other_set = set(other_children)
+            other_running = any(
+                r.get("child_conv") in other_set and r.get("status") == RUNNING
+                for r in _DB.list_subagents(parent)
+            )
+        stop_pending = stop_task is not None and not stop_task.done()
+        if (other_starting or other_running) and record is not None and record.state in ("starting", "ready") and not stop_pending:
+            raise SubagentError(409, "Bu şerit başka bir yardımcıda çalışıyor.", "lane_busy")
+        if lane_task is not None and not lane_task.done():
+            if _RESUME_CHILD is not None:
+                try:
+                    _RESUME_CHILD(child)
+                except Exception:
+                    logger.exception("[subagents] child %s not resumed", child)
+            _DB.set_subagent_status(row["id"], RUNNING)
+            with _LOCK:
+                _OPEN_FAILS.pop(child, None)
+            mid = _DB.add_message(child, "user", clean_text)
+            _DB.queue_turn_input(child, mid, "user")
+            return {
+                "status": "queued", "agent_id": row["id"],
+                "text": (f"Sub-agent #{row['id']} \"{row['name']}\" lane is starting; "
+                         "the message is queued for its turn."),
+            }
+        if record is not None and record.state == "ready" and not stop_pending:
+            restart_lane = False
+        else:
+            restart_lane = True
+            with _LOCK:
+                if record is None or record.state == "removed":
+                    record = unity_lanes.LaneRecord(
+                        name=lane_name or lane_key[2],
+                        dir=lane_ws or "",
+                        branch=f"gamachine/{lane_name or lane_key[2]}",
+                        state="starting",
+                    )
+                    _LANES[lane_key] = record
+                else:
+                    record.state = "starting"
+
     if _RESUME_CHILD is not None:
         try:
             _RESUME_CHILD(child)
@@ -632,8 +778,8 @@ def message(parent: int, agent_id: Any, text: Any) -> dict:
         loop = asyncio.get_running_loop()
         task = loop.create_task(
             _run_lane_and_turn(
-                row, lane_key, None, record.name, record.dir,
-                text.strip(), create_if_missing=False,
+                row, lane_key, main_project, record.name, record.dir,
+                clean_text, create_if_missing=True,
             )
         )
         with _LOCK:
@@ -643,7 +789,7 @@ def message(parent: int, agent_id: Any, text: Any) -> dict:
             "text": (f"Sub-agent #{row['id']} \"{row['name']}\" lane \"{record.name}\" is "
                      "starting; it continues with the message once ready. Its result arrives by itself."),
         }
-    status = turn_runner.start_background_turn(child, text.strip(), "user")
+    status = turn_runner.start_background_turn(child, clean_text, "user")
     if status == "queued":
         said = "is running; the message reaches it at its next turn boundary"
     else:
@@ -717,6 +863,7 @@ async def merge_lane(parent: int, user_id: int, lane: Any) -> dict:
     with _LOCK:
         record = _LANES.get(lane_key)
         mapped_children = {cid for cid, k in _CHILD_LANE.items() if k == lane_key}
+        stop_task = _STOP_TASKS.get(lane_key)
     if mapped_children and _DB is not None:
         for r in _DB.list_subagents(parent):
             if r.get("child_conv") in mapped_children and r.get("status") == RUNNING:
@@ -725,6 +872,26 @@ async def merge_lane(parent: int, user_id: int, lane: Any) -> dict:
                     f"Lane \"{lane_name}\" is busy (sub-agent #{r['id']} is still running).",
                     "lane_busy",
                 )
+    if stop_task is not None and not stop_task.done():
+        try:
+            await asyncio.wait_for(asyncio.shield(stop_task), timeout=60.0)
+        except asyncio.TimeoutError:
+            raise SubagentError(
+                409,
+                f"Lane \"{lane_name}\" is busy (editor is still stopping).",
+                "lane_busy",
+            )
+        with _LOCK:
+            record = _LANES.get(lane_key)
+            mapped_children = {cid for cid, k in _CHILD_LANE.items() if k == lane_key}
+        if mapped_children and _DB is not None:
+            for r in _DB.list_subagents(parent):
+                if r.get("child_conv") in mapped_children and r.get("status") == RUNNING:
+                    raise SubagentError(
+                        409,
+                        f"Lane \"{lane_name}\" is busy (sub-agent #{r['id']} is still running).",
+                        "lane_busy",
+                    )
     if record is not None and record.state in ("starting", "ready"):
         raise SubagentError(
             409,

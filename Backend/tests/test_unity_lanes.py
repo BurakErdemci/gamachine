@@ -692,21 +692,25 @@ def test_hub_kworkspace_parent_lanes_dir_is_restored(lane, monkeypatch):
 
 def test_hub_restore_normalizes_case_and_slashes_and_ignores_sibling_prefix(lane):
     old = b"C:/Unity Projeler/Mine\x00"
-    sibling = _lane_reg_bytes(lane.dir + "-other")
+    other_lane = _lane_reg_bytes(lane.dir + "-other")
+    sibling_root = _lane_reg_bytes(os.path.dirname(lane.dir) + "-other/one")
     lane.hub_snapshot = {
         "LastUsedProjectPath_h1": old,
         "kProjectBasePath_h2": old,
+        "LastUsedProjectPath_h3": old,
     }
     reg = _FakeRegistry({
         "LastUsedProjectPath_h1": _lane_reg_bytes(lane.dir, backslashes=True, upper=True),
-        "kProjectBasePath_h2": sibling,
+        "kProjectBasePath_h2": sibling_root,
+        "LastUsedProjectPath_h3": other_lane,
     })
 
     written = ul.restore_hub_values(lane, registry=reg)
 
-    assert written == 1
+    assert written == 2
     assert reg.store["LastUsedProjectPath_h1"] == old
-    assert reg.store["kProjectBasePath_h2"] == sibling
+    assert reg.store["LastUsedProjectPath_h3"] == old
+    assert reg.store["kProjectBasePath_h2"] == sibling_root
 
 
 def test_hub_restore_never_writes_back_another_lanes_path(lane):
