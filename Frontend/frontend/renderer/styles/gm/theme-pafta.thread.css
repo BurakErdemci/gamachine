@@ -82,13 +82,24 @@
    tools), so the mockup's fixed five-column template becomes "number, subject, then auto". */
 [data-theme="pafta"] .title-block { grid-template-columns: auto 1fr; grid-auto-flow: column; grid-auto-columns: auto; }
 [data-theme="pafta"] .tb-actions { margin: 0; padding: 0 6px; border-left: 1px solid var(--paper-line-strong); align-self: stretch; }
+[data-theme="pafta"] .tb-scene { align-items: flex-start; }
+/* The title block has a fixed width here: a chip beside the project name took that width from
+   the subject cell and wrapped the subject onto four lines. Under the name it keeps the cell as
+   narrow as before, the drawing's label-over-value rhythm, and the cell label already says what it is. */
+[data-theme="pafta"] .tb-scene-val { flex-direction: column; align-items: flex-start; gap: 4px; }
+[data-theme="pafta"] .tb-scene .tb-proj-sep,
+[data-theme="pafta"] .tb-scene .scene-chip-k { display: none; }
+[data-theme="pafta"] .tb-scene .tb-v { max-width: 180px; }
+[data-theme="pafta"] .scene-chip { height: 22px; padding: 0 6px 0 7px; }
 @container stage (max-width: 760px) {
   [data-theme="pafta"] .title-block {
     grid-template-columns: minmax(0, 1fr); grid-auto-flow: row;
     width: calc(100% - 36px);
   }
   [data-theme="pafta"] .tb-title { grid-column: 1 / -1; order: -1; border-left: 0; }
-  [data-theme="pafta"] .tb-actions { grid-column: 1 / -1; border-left: 0; padding: 6px 14px; }
+  [data-theme="pafta"] .tb-scene { border-left: 0; border-top: 1px solid var(--paper-line-strong); min-width: 0; }
+  [data-theme="pafta"] .tb-scene .tb-v { max-width: none; }
+  [data-theme="pafta"] .tb-actions { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--paper-line-strong); padding: 6px 14px; }
 }
 
 /* ================= confirm dialog: a REVISION cell =================

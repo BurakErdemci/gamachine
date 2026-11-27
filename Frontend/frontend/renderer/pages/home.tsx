@@ -1443,6 +1443,9 @@ export default function Home() {
             conversation={activeConversation}
             projectName={projectName}
             awaiting={cardWaiting}
+            api={API}
+            sessionToken={auth.user?.sessionToken}
+            workspacePath={fs.savedWorkspacePath}
             actions={(
               <>
                 <SideQuestionButton convId={chat.activeConvId} active={side.isOpen} onOpen={toggleSideChat} labelled />

@@ -1,6 +1,7 @@
 import React from 'react';
 import { useLang } from '../../lib/i18n';
 import { stripBidi } from '../../lib/modelText';
+import { SceneModeChip } from './SceneModeChip';
 import type { Conversation } from './types';
 
 interface ThreadHeaderProps {
@@ -10,6 +11,9 @@ interface ThreadHeaderProps {
   awaiting: boolean;
   /** The chat's own tools (side question, branch), kept from the old chat header. */
   actions?: React.ReactNode;
+  api?: string;
+  sessionToken?: string | null;
+  workspacePath?: string | null;
 }
 
 /** dd.mm.yy, the mockup's date cell; nothing when the stored date does not parse. */
@@ -33,7 +37,15 @@ export const shortDate = (iso?: string | null): string => {
  * "Approval" cell shows a waiting request instead of a decided/total count (decisions are not
  * counted per chat). Each cell is left out rather than shown with a made-up value.
  */
-export const ThreadHeader: React.FC<ThreadHeaderProps> = ({ conversation, projectName, awaiting, actions }) => {
+export const ThreadHeader: React.FC<ThreadHeaderProps> = ({
+  conversation,
+  projectName,
+  awaiting,
+  actions,
+  api,
+  sessionToken,
+  workspacePath,
+}) => {
   const { t } = useLang();
   if (!conversation) return null;
   const date = shortDate(conversation.created_at);
@@ -55,7 +67,17 @@ export const ThreadHeader: React.FC<ThreadHeaderProps> = ({ conversation, projec
       {projectName && (
         <div className="tb-cell tb-model tb-scene">
           <span className="tb-k">{t('tb.project')}</span>
-          <span className="tb-v">{projectName}</span>
+          <span className="tb-scene-val">
+            <span className="tb-v">{projectName}</span>
+            {api && sessionToken && (
+              <SceneModeChip
+                api={api}
+                sessionToken={sessionToken}
+                workspacePath={workspacePath}
+                projectName={projectName}
+              />
+            )}
+          </span>
         </div>
       )}
       {awaiting && (

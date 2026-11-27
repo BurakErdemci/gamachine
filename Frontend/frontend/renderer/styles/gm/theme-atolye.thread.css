@@ -6,6 +6,12 @@
 [data-theme="atolye"] .title-block {
   width: calc(100% - 80px); max-width: 720px; padding: 18px 0 12px; margin-bottom: 8px;
 }
+@container stage (max-width: 760px) {
+  [data-theme="atolye"] .title-block { width: calc(100% - 56px); padding: 16px 0 12px; }
+}
+@container stage (max-width: 520px) {
+  [data-theme="atolye"] .title-block { width: calc(100% - 40px); padding: 14px 0 10px; }
+}
 /* ================= Signature 1: the WORK-ORDER TAG =================
    Left stub, torn along a perforation, with a reinforced grommet hole. */
 [data-theme="atolye"] .approval { padding-left: 50px; }
