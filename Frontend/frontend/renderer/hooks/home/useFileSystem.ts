@@ -123,6 +123,7 @@ const useLatestRequest = () => {
 
 export const useFileSystem = (API: string, user: UserData | null, showToast: (msg: string, type: any) => void) => {
   const [workspacePath, setWorkspacePath] = useState<string | null>(null);
+  const [savedWorkspacePath, setSavedWorkspacePath] = useState<string | null>(null);
   const [lastWorkspacePath, setLastWorkspacePath] = useState<string | null>(null);
   const [rootFolderPath, setRootFolderPath] = useState<string | null>(null);
   const [fileTree, setFileTree] = useState<FileEntry[]>([]);
@@ -383,6 +384,7 @@ export const useFileSystem = (API: string, user: UserData | null, showToast: (ms
   // in-flight selection used to commit after it and silently reopen.
   const selectWorkspace = useCallback(async (path: string): Promise<boolean> => {
     const gecerliMi = workspaceRequest.claim();
+    setSavedWorkspacePath(null);
     // Klasör hâlâ var mı? (silinmiş/taşınmış workspace'i otomatik yüklemeyi engelle)
     if (ipc) {
       const exists = await ipc.invoke('path-exists', path);
@@ -444,6 +446,7 @@ export const useFileSystem = (API: string, user: UserData | null, showToast: (ms
             { user_id: user.id, path: backendPath },
             { headers: { 'X-Session-Token': user.sessionToken } }
           );
+          if (gecerliMi()) setSavedWorkspacePath(backendPath);
           // A refusal for a switch the user already left names the wrong project.
           const reason = gecerliMi() ? response.data?.mcp?.reason : undefined;
           if (response.data?.mcp?.state === 'off' && typeof reason === 'string' && reason.length > 0) {
@@ -523,6 +526,7 @@ export const useFileSystem = (API: string, user: UserData | null, showToast: (ms
     workspaceRequest.invalidate();
     contentRequest.invalidate();
     setWorkspacePath(null);
+    setSavedWorkspacePath(null);
     setRootFolderPath(null);
     setFileTree([]);
     setExpandedDirs(new Set());
@@ -833,7 +837,7 @@ export const useFileSystem = (API: string, user: UserData | null, showToast: (ms
   }, [exportModal, refreshFileTree, showToast, workspacePath]);
 
   return {
-    workspacePath, lastWorkspacePath, fileTree, openedFilePath, code, setCode, setOriginalCode, setOpenedFilePath, closeFile,
+    workspacePath, savedWorkspacePath, lastWorkspacePath, fileTree, openedFilePath, code, setCode, setOriginalCode, setOpenedFilePath, closeFile,
     isDirty, saveFile, previewFile, openPreview, closePreview,
     fetchLastWorkspace, selectWorkspace, openFolder, closeWorkspace, openFile, refreshFileTree,
     openFilePicker, treeCreating, setTreeCreating, treeCreateValue, setTreeCreateValue,
