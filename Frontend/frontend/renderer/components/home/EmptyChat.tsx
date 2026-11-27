@@ -3,6 +3,7 @@ import { useLang, type TKey } from '../../lib/i18n';
 import { GamachineMascot } from './GamachineMascot';
 import { MascotHead } from './BrandLogo';
 import { displayName } from '../../lib/displayName';
+import { SceneModeChip } from './SceneModeChip';
 import type { GenerationMode } from './types';
 
 // TODO(profile): quest XP has no data source yet; these are the mockup's constants. Only Arena
@@ -42,6 +43,11 @@ interface EmptyChatProps {
   /** The approval mode decides what the greeting promises: "I ask first" was shown in auto mode
    *  too, where nothing asks (Burak, 2 Oct). Absent means Safe Auto, the strictest promise. */
   approvalMode?: GenerationMode;
+  /** The scene writing mode chip needs these; it stays hidden without them or outside a Unity project.
+   *  The first turn is where the mode matters most, so it is offered before the first message too. */
+  api?: string;
+  sessionToken?: string | null;
+  workspacePath?: string | null;
   /** Opens the "import a Claude Code session" dialog; the link is hidden without it. */
   onImportSession?: () => void;
 }
@@ -60,7 +66,7 @@ const shield = (
 );
 
 /** Mockup "Yeni sohbet (bos)": the mascot greets as the quest giver, the board lists starters. */
-export const EmptyChat: React.FC<EmptyChatProps> = ({ userName, projectName, onPick, approvalMode = 'balanced', onImportSession }) => {
+export const EmptyChat: React.FC<EmptyChatProps> = ({ userName, projectName, onPick, approvalMode = 'balanced', onImportSession, api, sessionToken, workspacePath }) => {
   const { t } = useLang();
   const promise = PROMISE[approvalMode] ?? PROMISE.balanced;
   const name = displayName(userName);
@@ -81,6 +87,11 @@ export const EmptyChat: React.FC<EmptyChatProps> = ({ userName, projectName, onP
             <span className="lex-d">{t(promise.sub)}</span>
             <span className="lex-q">{t(promise.subQuest)}</span>
           </p>
+          {api && sessionToken && (
+            <div className="empty-scene">
+              <SceneModeChip api={api} sessionToken={sessionToken} workspacePath={workspacePath} projectName={projectName} />
+            </div>
+          )}
         </div>
       </div>
 

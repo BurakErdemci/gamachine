@@ -10,6 +10,7 @@ vi.mock('axios', () => {
 
 import axios from 'axios';
 import { ThreadHeader } from '../renderer/components/home/ThreadHeader';
+import { EmptyChat } from '../renderer/components/home/EmptyChat';
 import { LangContext, translations, ceviriUygula, type Lang } from '../renderer/lib/i18n';
 
 const mockGet = (axios as any).get as ReturnType<typeof vi.fn>;
@@ -300,5 +301,27 @@ describe('SceneModeChip', () => {
       'Mixed',
       'Team',
     ]);
+  });
+});
+
+describe('SceneModeChip on the empty chat', () => {
+  it('offers the mode before the first message of a Unity project', async () => {
+    mockGet.mockResolvedValue(sceneAnswer('team'));
+    render(
+      <EmptyChat userName="Burak" projectName="BenchmarkTest4" onPick={() => {}}
+        api="http://127.0.0.1:8000" sessionToken="tok-123" workspacePath="C:/work/BenchmarkTest4" />,
+    );
+    await waitFor(() => expect(findChip().getAttribute('aria-label')).toMatch(/Ekip/));
+  });
+
+  it('shows no chip without a saved workspace', async () => {
+    mockGet.mockResolvedValue(sceneAnswer('team'));
+    render(
+      <EmptyChat userName="Burak" projectName="BenchmarkTest4" onPick={() => {}}
+        api="http://127.0.0.1:8000" sessionToken="tok-123" workspacePath={null} />,
+    );
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.queryByRole('button', { name: /Sahne yazım modu/i })).toBeNull();
+    expect(mockGet).not.toHaveBeenCalled();
   });
 });

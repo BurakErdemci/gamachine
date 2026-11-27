@@ -1125,7 +1125,8 @@ export default function Home() {
   const threadWrap = (panel: React.ReactNode, showNav = true) => (
     <div className="thread-wrap">
       {chatEmpty ? (
-        <EmptyChat userName={me.name} projectName={projectName} onPick={pickQuest} approvalMode={chat.generationMode} onImportSession={isClaudeSub ? () => setImportOpen(true) : undefined} />
+        <EmptyChat userName={me.name} projectName={projectName} onPick={pickQuest} approvalMode={chat.generationMode} onImportSession={isClaudeSub ? () => setImportOpen(true) : undefined}
+          api={API} sessionToken={auth.user?.sessionToken} workspacePath={fs.savedWorkspacePath} />
       ) : (
         <div className="thread custom-scrollbar" ref={threadRef} onScroll={chatScroll.onScroll}>
           {panel}

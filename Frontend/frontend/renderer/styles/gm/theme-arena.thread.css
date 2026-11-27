@@ -114,8 +114,13 @@
 }
 [data-theme="arena"] .empty-say {
   --c: 14px;
-  position: relative; margin-bottom: 34px; padding: 26px 26px 20px;
-  background: var(--quest-strip); color: var(--shell-text);
+  position: relative; z-index: 2; isolation: isolate; margin-bottom: 34px; padding: 26px 26px 20px;
+  color: var(--shell-text);
+}
+/* The cut corners live on a backdrop layer: clipping the box itself also clipped the scene mode
+   chip's popover, which has to hang below the dialogue box. */
+[data-theme="arena"] .empty-say::before {
+  content: ""; position: absolute; inset: 0; z-index: -1; background: var(--quest-strip);
   clip-path: polygon(var(--c) 0, 100% 0, 100% calc(100% - var(--c)), calc(100% - var(--c)) 100%, 0 100%, 0 var(--c));
 }
 [data-theme="arena"] .empty-kicker {
