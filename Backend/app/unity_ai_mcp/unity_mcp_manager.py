@@ -54,9 +54,20 @@ _GAVE_UP_MESSAGES = {
 }
 
 
+def _app_data_dir(*, allow_override: bool = True) -> str:
+    """Data folder (~/.unity_architect_ai), overridable via GAMACHINE_DATA_DIR when set to an absolute path."""
+    # dev/test override (like GAMACHINE_MCP_PORT and GAMACHINE_TOKEN_DIR) so an isolated backend
+    # can run beside a live Gamachine without writing to ~/.unity_architect_ai
+    if allow_override:
+        raw = os.environ.get("GAMACHINE_DATA_DIR", "").strip()
+        if raw and os.path.isabs(raw):
+            return raw
+    return os.path.join(os.path.expanduser("~"), ".unity_architect_ai")
+
+
 def _server_log_path() -> str:
     # Writable user dir: project_root may be a write-protected Program Files in the packaged app.
-    return os.path.join(os.path.expanduser("~"), ".unity_architect_ai", "unity_mcp_server.log")
+    return os.path.join(_app_data_dir(), "unity_mcp_server.log")
 
 
 # Temporary diagnostics: the owner asked on 8 Nov 2026 to log why the Unity connection drops. Remove before the
@@ -66,12 +77,12 @@ _DIAG_MAX_BYTES = 5 * 1024 * 1024
 _DIAG_KEEP = 2  # unity_mcp_diag.log.1 and .2
 _SERVER_LOG_MAX_BYTES = 10 * 1024 * 1024
 _diag_lock = threading.Lock()
-# Tests that run with the real home must not write the owner's diag log; a test that redirects HOME may.
+# Tests that run with the real home must not write the owner's diag log; a test that redirects HOME or GAMACHINE_DATA_DIR may.
 _IMPORT_HOME = os.path.expanduser("~")
 
 
 def unity_diag_path() -> str:
-    return os.path.join(os.path.expanduser("~"), ".unity_architect_ai", "unity_mcp_diag.log")
+    return os.path.join(_app_data_dir(), "unity_mcp_diag.log")
 
 
 def _rotate_log(path: str, max_bytes: int, keep: int) -> None:
@@ -93,7 +104,9 @@ def unity_diag(event: str, **fields) -> None:
     Fields must not carry secrets: use _token_fp for the local API token."""
     if not UNITY_DIAG:
         return
-    if "PYTEST_CURRENT_TEST" in os.environ and os.path.expanduser("~") == _IMPORT_HOME:
+    if "PYTEST_CURRENT_TEST" in os.environ and os.path.normcase(os.path.abspath(_app_data_dir())) == os.path.normcase(
+        os.path.abspath(os.path.join(_IMPORT_HOME, ".unity_architect_ai"))
+    ):
         return
     try:
         record = {"ts": datetime.now().astimezone().isoformat(timespec="milliseconds"), "event": event, **fields}
@@ -425,7 +438,7 @@ class UnityMCPManager:
             except Exception as error:
                 logger.warning("[UnityMCP] Could not remove leftover %s: %s", path, error)
 
-        base = os.path.join(os.path.expanduser("~"), ".unity_architect_ai", "unity-mcp")
+        base = os.path.join(_app_data_dir(), "unity-mcp")
         targets = [("Server", "server_dir"), ("MCPForUnity", "local_mcp_source")]
         for sub, attr in targets:
             src = os.path.join(self.project_root, "unity-mcp", sub)
@@ -640,7 +653,7 @@ class UnityMCPManager:
         if not os.path.isfile(lock):
             logger.warning("[UnityMCP] uv.lock yok (%s); sunucu sabitlenmeden başlatılıyor.", lock)
             return None
-        out_dir = os.path.join(os.path.expanduser("~"), ".unity_architect_ai")
+        out_dir = _app_data_dir()
         os.makedirs(out_dir, exist_ok=True)
         out = os.path.join(out_dir, "unity_mcp_constraints.txt")
         cmd = [
@@ -1472,7 +1485,8 @@ class UnityMCPManager:
         ours = {os.path.normcase(os.path.abspath(source)) for source in (
             self.local_mcp_source,
             os.path.join(self.project_root, "unity-mcp", "MCPForUnity"),
-            os.path.join(os.path.expanduser("~"), ".unity_architect_ai", "unity-mcp", "MCPForUnity"),
+            os.path.join(_app_data_dir(), "unity-mcp", "MCPForUnity"),
+            os.path.join(_app_data_dir(allow_override=False), "unity-mcp", "MCPForUnity"),
         )}
         if os.path.normcase(path) in ours:
             return True
