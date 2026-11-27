@@ -795,6 +795,18 @@ def _parse_porcelain_path(xy: str, raw_path: str) -> str:
 
 
 def _classify_lane_status(stdout: str) -> tuple[List[str], List[str], List[str]]:
+    """Classify `git status --porcelain=v1 -uall` lines into (tracked_noise, untracked_noise, dirty).
+
+    Tracked noise (discarded before the merge):
+      - " M" / " D" under ProjectSettings/ (Unity editor settings)
+      - " M" of Packages/packages-lock.json (Unity package lock)
+      - " D" of Assets/Editor/UnityArchitectAIMCPSetup.cs{,.meta} and " M" of
+        Packages/manifest.json (Gamachine's own lane setup removes the legacy
+        autoconnect script and migrates the manifest entry)
+    Untracked noise (cleaned before the merge):
+      - "??" under ProjectSettings/ or outside Assets/ and Packages/
+    Everything else is treated as uncommitted helper work and refuses the merge.
+    """
     tracked_noise: List[str] = []
     untracked_noise: List[str] = []
     dirty: List[str] = []
@@ -811,7 +823,12 @@ def _classify_lane_status(stdout: str) -> tuple[List[str], List[str], List[str]]
                 dirty.append(path)
         elif path.startswith("ProjectSettings/") and xy in (" M", " D"):
             tracked_noise.append(path)
-        elif xy == " M" and path == "Packages/packages-lock.json":
+        elif xy == " M" and path in ("Packages/packages-lock.json", "Packages/manifest.json"):
+            tracked_noise.append(path)
+        elif xy == " D" and path in (
+            "Assets/Editor/UnityArchitectAIMCPSetup.cs",
+            "Assets/Editor/UnityArchitectAIMCPSetup.cs.meta",
+        ):
             tracked_noise.append(path)
         else:
             dirty.append(path)
