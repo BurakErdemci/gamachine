@@ -7,6 +7,41 @@ Bu dosya kullanıcıya görünen değişiklikleri taşır. Tam geçmiş için `g
 > kullanıcının indirme anında gördüğü sayfa. Eski girdiler olduğu gibi bırakıldı —
 > geçmişi yarım çevirmek, tek dilde bırakmaktan da iki dilde bırakmaktan da kötü.
 
+## v4.1.0 — XX November 2026
+
+Your main agent can now run a team: it starts helper agents on other connected CLI models, runs scripts that do many tool calls in one step, and in Unity it can give each helper a project copy and editor of its own.
+
+### Sub-agents
+- **A CLI main agent can start helper chats on other connected CLI models.** Claude, Codex, agy, OpenCode, Cursor, Copilot and Kimi can all be the main agent, and any connected one of them can be a helper. The agent picks a model and effort level, writes a self-contained brief and the helper works in the background in the same project folder. There is no fixed limit on how many helpers run at once.
+- **Steer and stop.** The agent can send a running helper a message (it arrives at the helper's next turn boundary, never mid-step) or continue a finished one. You can also stop a helper yourself from the app or the phone; stopping refuses its open approval cards. Stopping the main chat stops its helpers, and deleting it deletes them.
+- **Results arrive by themselves.** When a helper finishes, its report reaches the main chat and wakes it if it is idle. Several results that finish together arrive in one turn.
+- **Watch what helpers are doing.** The chat shows each helper's model, status, the step it is on, steps done and failed, and its last line. After 90 seconds without activity it says so.
+- **Approval cards say who is asking.** A helper's cards carry the main chat and the helper's name. The approval mode works as in any chat: Auto opens no card, Safe Auto decides by risk.
+- **A fuse against runaway loops.** After 10 turns in a row started by helper results without a message from you, the rest wait. They go to the AI with your next message, or when you press Continue on the notice.
+- **Helpers stay out of the way.** They do not appear in the phone's chat list. A helper cannot start helpers of its own, and a read-only turn cannot start or steer one. If the app restarts, a running helper shows as interrupted until the agent messages it.
+
+### Unity lanes
+- **Parallel Unity work without edit collisions.** Ask the agent to run helpers in lanes and each helper gets its own git worktree of your project, branch and a batch-mode Unity editor, so several helpers can change scenes and prefabs and run play tests at the same time. A new lane needs a few minutes for its first Unity import; the helper starts when its editor answers.
+- **Merge with Unity's own YAML merge.** When a helper has finished and committed, `lane_merge` merges its branch into your current branch (scenes and prefabs go through Unity's YAML merge) and removes the lane and branch. A conflict, uncommitted helper work or local changes in your folder stop the merge and change nothing; a conflict lists the files so the helper or you can resolve it.
+- **Your Unity setup is left alone.** Lane editors never stop your own Unity MCP server, and on Windows the last-project values Unity Hub keeps are put back after a lane editor rewrites them.
+- **What a lane needs.** The Unity project folder must be the root of a git repository, Unity must be signed in through Unity Hub, and each lane needs about 6 GB of free memory. When one is missing, the lane is refused with the reason. Lanes and `lane_merge` are for CLI main agents.
+
+### Scripts that do the legwork
+- **`run_script`: one program instead of a long string of tool calls.** The agent can write a short JavaScript program that calls Gamachine's tools, runs them in parallel with `Promise.all`, filters and counts big results, and returns only the answer. Big results no longer fill the chat's context.
+- **Sandboxed, and every call is gated.** The program runs in a sandbox with no files, network or processes of its own. Every tool call inside it passes the same approval mode, risk check, Unity file rule and gates as a direct call. The chat shows the code and the list of calls it made.
+- **On by default; you can turn it off** in the agent settings. Time limits depend on the agent's CLI (up to 600 s in Claude and Codex, 150 s in agy, 50 s in the others), and the tool description states the limit.
+
+### Chat turns and Unity batches
+- **One queue per chat.** A message you send while a turn is running waits in line and runs in order. The queue is visible and a message can be withdrawn before it starts. Helper results, your messages and follow-ups all go through the same queue, so they cannot collide.
+- **`batch_execute` now works in Claude chats.** Several scene, component, prefab and asset steps go in one call. A batch that carries a C# script write or delete is refused with a note to use Write/Edit for `.cs` files.
+
+### Scene writing mode
+- **Choose how the agent builds your scenes, per Unity project:** Code (fastest; the agent may build layout from code at runtime), Mixed (systems in scripts, level layout in scenes and prefabs, tuning as Inspector fields) or Team (like a Unity developer in a team: everything the player sees lives in a scene or prefab, data in ScriptableObjects, one prefab or additive scene per feature so teammates and parallel helpers do not edit the same file).
+- **Mixed is the default.** The mode shows as a chip in the chat title and on the empty chat, and it shapes the agent's project guide. It is saved with the project, not the chat, and lanes follow their main project's mode.
+
+### For agents
+- New tools: `agent_models`, `agent_start`, `agent_message`, `agent_stop`, `agent_list`, `agent_result`, `lane_merge` (CLI main agents), `run_script`; `batch_execute` is allowed on the Claude chat path. `harness_search` answers questions about them.
+
 ## v4.0.4 — 25 November 2026
 
 A macOS update fix on top of v4.0.3.
