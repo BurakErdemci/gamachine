@@ -811,7 +811,7 @@ describe('stale-preview-state', () => {
       'handleTreeDrop', 'isDirty', 'lastWorkspacePath', 'openFile', 'openFilePicker', 'openFolder',
       'openPreview', 'openedFilePath', 'pendingDelete', 'pendingGenFiles', 'previewFile',
       'refreshFileTree', 'refreshGitStatus', 'renameValue', 'renamingPath', 'rootFolderPath',
-      'saveFile', 'selectWorkspace', 'setCode', 'setExportFileName', 'setExportModal',
+      'saveFile', 'savedWorkspacePath', 'selectWorkspace', 'setCode', 'setExportFileName', 'setExportModal',
       'setOpenedFilePath', 'setOriginalCode', 'setPendingDelete', 'setPendingGenFiles', 'setRenameValue',
       'setRenamingPath', 'setTreeContextMenu', 'setTreeCreateValue', 'setTreeCreating',
       'startRename', 'startTreeCreate', 'submitRename', 'submitTreeCreate', 'suggestFilePath',
