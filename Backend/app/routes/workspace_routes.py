@@ -106,7 +106,8 @@ def create_workspace_router(db):
         user_id, _ = require_user(db, x_session_token)
         workspace = db.get_last_workspace(user_id) or None
         mode = scene_mode.get(workspace) if workspace else scene_mode.DEFAULT
-        return {"mode": mode, "modes": list(scene_mode.MODES), "workspace": workspace}
+        return {"mode": mode, "modes": list(scene_mode.MODES), "workspace": workspace,
+                "unity": scene_mode.is_unity_project(workspace) if workspace else False}
 
     @router.post("/workspace/scene-mode")
     async def set_scene_mode(body: object = Body(...),

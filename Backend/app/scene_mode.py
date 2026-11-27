@@ -37,6 +37,14 @@ def project_of(workspace: str) -> str:
     return workspace
 
 
+def is_unity_project(workspace: str) -> bool:
+    """True when workspace (lane -> main project) has the Assets and ProjectSettings folders."""
+    if not workspace or not isinstance(workspace, str):
+        return False
+    project = project_of(workspace)
+    return all(os.path.isdir(os.path.join(project, d)) for d in ("Assets", "ProjectSettings"))
+
+
 def _settings_path(project: str) -> str:
     return os.path.join(project, "UserSettings", "Gamachine", "scene_mode.json")
 
@@ -64,9 +72,9 @@ def set(workspace: str, mode: str) -> str:
         raise ValueError(f"invalid scene mode: {mode!r} (expected one of {', '.join(MODES)})")
     if not workspace or not isinstance(workspace, str):
         raise ValueError("not a Unity project")
-    project = project_of(workspace)
-    if not all(os.path.isdir(os.path.join(project, d)) for d in ("Assets", "ProjectSettings")):
+    if not is_unity_project(workspace):
         raise ValueError("not a Unity project")
+    project = project_of(workspace)
 
     real_project = os.path.normcase(os.path.realpath(project))
     user_settings = os.path.join(project, "UserSettings")

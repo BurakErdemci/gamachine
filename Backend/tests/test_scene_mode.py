@@ -222,7 +222,8 @@ def test_workspace_scene_mode_routes_round_trip_and_errors(route_env, monkeypatc
     # No workspace open: GET returns default + null workspace; POST returns 409.
     res = client.get("/workspace/scene-mode")
     assert res.status_code == 200
-    assert res.json() == {"mode": "mixed", "modes": ["code", "mixed", "team"], "workspace": None}
+    assert res.json() == {"mode": "mixed", "modes": ["code", "mixed", "team"], "workspace": None,
+                          "unity": False}
 
     res = client.post("/workspace/scene-mode", json={"mode": "code"})
     assert res.status_code == 409
@@ -231,6 +232,7 @@ def test_workspace_scene_mode_routes_round_trip_and_errors(route_env, monkeypatc
     non_unity = route_env.tmp_path / "plain"
     non_unity.mkdir()
     db.save_workspace(1, str(non_unity))
+    assert client.get("/workspace/scene-mode").json()["unity"] is False
     res = client.post("/workspace/scene-mode", json={"mode": "code"})
     assert res.status_code == 400
     assert "not a Unity project" in res.json()["detail"]
@@ -241,7 +243,8 @@ def test_workspace_scene_mode_routes_round_trip_and_errors(route_env, monkeypatc
 
     res = client.get("/workspace/scene-mode")
     assert res.status_code == 200
-    assert res.json() == {"mode": "mixed", "modes": ["code", "mixed", "team"], "workspace": str(project)}
+    assert res.json() == {"mode": "mixed", "modes": ["code", "mixed", "team"], "workspace": str(project),
+                          "unity": True}
 
     res = client.post("/workspace/scene-mode", json={"mode": "team"})
     assert res.status_code == 200
@@ -250,7 +253,8 @@ def test_workspace_scene_mode_routes_round_trip_and_errors(route_env, monkeypatc
 
     res = client.get("/workspace/scene-mode")
     assert res.status_code == 200
-    assert res.json() == {"mode": "team", "modes": ["code", "mixed", "team"], "workspace": str(project)}
+    assert res.json() == {"mode": "team", "modes": ["code", "mixed", "team"], "workspace": str(project),
+                          "unity": True}
 
     bad = client.post("/workspace/scene-mode", json={"mode": "bogus"})
     assert bad.status_code == 400
