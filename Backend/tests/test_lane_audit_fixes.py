@@ -259,10 +259,27 @@ async def test_two_simultaneous_lanes_memory_gate_admits_only_one(lane_env, monk
         return st.free
 
     monkeypatch.setattr(ul, "free_memory_bytes", gated_free)
+    # Hold every admitted lane in wait_ready until both admission decisions are made: on a fast
+    # machine the first lane otherwise finished and stopped its editor before the second checked
+    # memory, and admitting the second was then correct (measured on macOS, 27 Nov 2026).
+    decided = threading.Event()
+    held_wait = ul.wait_ready
+
+    def wait_after_decision(rec, li, **kw):
+        decided.wait(5)
+        return held_wait(rec, li, **kw)
+
+    monkeypatch.setattr(ul, "wait_ready", wait_after_decision)
     parent = _main(env)
     _Runner.scripts = {}
     a = await _start_lane(env, parent, "mem-a", name="a")
     b = await _start_lane(env, parent, "mem-b", name="b")
+    for _ in range(200):
+        rows = [env.db.get_subagent(x["agent_id"])["status"] for x in (a, b)]
+        if "error" in rows or st.popen_calls >= 2:
+            break
+        await asyncio.sleep(0.02)
+    decided.set()
     await _lanes_idle()
 
     statuses = sorted([
