@@ -85,7 +85,7 @@ _BASE_ENV_ALLOWLIST = (
     "FNM_DIR", "FNM_MULTISHELL_PATH", "VOLTA_HOME", "COREPACK_HOME",
     # Bizim işletimsel değişkenlerimiz (sır DEĞİL — localhost adresi ve klasör
     # yolu). MCP sunucusu ve `unityai` CLI'ı backend'i bunlardan buluyor.
-    "UNITYAI_URL", "ANTIGRAVITY_URL", "WORKSPACE",
+    "UNITYAI_URL", "ANTIGRAVITY_URL", "WORKSPACE", "GAMACHINE_TOKEN_DIR",
     # Windows. macOS'tan sınanamayan tek yüzey burası olduğu için adlar tek
     # listede duruyor ve varlıklarına göre kopyalanıyor (bkz. testler).
     "SystemRoot", "SystemDrive", "WINDIR", "USERPROFILE", "HOMEDRIVE", "HOMEPATH",

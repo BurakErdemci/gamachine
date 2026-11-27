@@ -204,7 +204,20 @@ def read_secret_file(path: str) -> str:
         os.close(fd)
 
 
+def _configured_token_dir() -> str:
+    """Folder for token and backend-url from GAMACHINE_TOKEN_DIR when set to an absolute path."""
+    # dev/test override (like GAMACHINE_MCP_PORT) so an isolated backend can run beside a live
+    # Gamachine with real HOME (e.g. macOS Keychain login) without touching ~/.unity_architect_ai
+    raw = os.environ.get("GAMACHINE_TOKEN_DIR", "").strip()
+    if raw and os.path.isabs(raw):
+        return raw
+    return ""
+
+
 def token_path() -> str:
+    override = _configured_token_dir()
+    if override:
+        return os.path.join(override, "local-app-token")
     return _TOKEN_PATH
 
 
@@ -215,13 +228,14 @@ def write_local_app_token(token: str) -> bool:
     oturumdan kalan geçerli bir sırrın diskte kalması, kapalı sanılan bir kapıyı
     açık bırakırdı.
     """
+    path = token_path()
     try:
         if not token:
-            if os.path.exists(_TOKEN_PATH):
-                os.remove(_TOKEN_PATH)
+            if os.path.exists(path):
+                os.remove(path)
             return True
-        os.makedirs(_TOKEN_DIR, exist_ok=True)
-        with os.fdopen(_open_secret_for_write(_TOKEN_PATH), "w", encoding="utf-8") as f:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with os.fdopen(_open_secret_for_write(path), "w", encoding="utf-8") as f:
             f.write(token)
         return True
     except OSError as e:
@@ -239,11 +253,11 @@ def read_local_app_token() -> str:
     token = os.environ.get("LOCAL_APP_TOKEN", "")
     if token:
         return token
-    return read_secret_file(_TOKEN_PATH)
+    return read_secret_file(token_path())
 
 
 def backend_url_path() -> str:
-    return os.path.join(os.path.dirname(_TOKEN_PATH), "backend-url")
+    return os.path.join(os.path.dirname(token_path()), "backend-url")
 
 
 def write_backend_url(url: str) -> bool:
