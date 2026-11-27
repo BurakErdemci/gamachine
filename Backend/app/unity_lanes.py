@@ -102,6 +102,51 @@ def _git_out(project: str, *args: str) -> Optional[str]:
 
 # ---------------------------------------------------------------- memory
 
+def _darwin_vm_stat_bytes() -> Optional[int]:
+    try:
+        res = subprocess.run(["vm_stat"], capture_output=True, text=True, timeout=10,
+                             env=build_spawn_env())
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if res.returncode != 0:
+        return None
+    page = re.search(r"page size of (\d+) bytes", res.stdout)
+    free = re.search(r"Pages free:\s+(\d+)", res.stdout)
+    inactive = re.search(r"Pages inactive:\s+(\d+)", res.stdout)
+    if not (page and free and inactive):
+        return None
+    speculative = re.search(r"Pages speculative:\s+(\d+)", res.stdout)
+    purgeable = re.search(r"Pages purgeable:\s+(\d+)", res.stdout)
+    pages = (
+        int(free.group(1))
+        + int(inactive.group(1))
+        + (int(speculative.group(1)) if speculative else 0)
+        + (int(purgeable.group(1)) if purgeable else 0)
+    )
+    return pages * int(page.group(1))
+
+
+def _darwin_sysctl_bytes() -> Optional[int]:
+    vals: Dict[str, int] = {}
+    for key in ("kern.memorystatus_level", "hw.memsize"):
+        try:
+            res = subprocess.run(["sysctl", "-n", key], capture_output=True, text=True, timeout=10,
+                                 env=build_spawn_env())
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if res.returncode != 0:
+            return None
+        try:
+            vals[key] = int(res.stdout.strip())
+        except ValueError:
+            return None
+    pct = vals["kern.memorystatus_level"]
+    memsize = vals["hw.memsize"]
+    if pct < 0 or pct > 100 or memsize <= 0:
+        return None
+    return (memsize * pct) // 100
+
+
 def free_memory_bytes() -> Optional[int]:
     try:
         if sys.platform == "win32":
@@ -119,16 +164,10 @@ def free_memory_bytes() -> Optional[int]:
                 return None
             return int(status.ullAvailPhys)
         if sys.platform == "darwin":
-            res = subprocess.run(["vm_stat"], capture_output=True, text=True, timeout=10,
-                                 env=build_spawn_env())
-            if res.returncode != 0:
-                return None
-            page = re.search(r"page size of (\d+) bytes", res.stdout)
-            free = re.search(r"Pages free:\s+(\d+)", res.stdout)
-            inactive = re.search(r"Pages inactive:\s+(\d+)", res.stdout)
-            if not (page and free and inactive):
-                return None
-            return (int(free.group(1)) + int(inactive.group(1))) * int(page.group(1))
+            # vm_stat free+inactive excludes compressor-backed/reclaimable cache; take the larger
+            # of reclaimable vm_stat pages and kernel memorystatus_level * hw.memsize.
+            candidates = [v for v in (_darwin_vm_stat_bytes(), _darwin_sysctl_bytes()) if v is not None]
+            return max(candidates) if candidates else None
         with open("/proc/meminfo", "r", encoding="ascii", errors="replace") as fh:
             for line in fh:
                 if line.startswith("MemAvailable:"):
