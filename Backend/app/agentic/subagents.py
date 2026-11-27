@@ -38,6 +38,8 @@ through `configure`.
 from __future__ import annotations
 
 import asyncio
+import contextvars
+import functools
 import json
 import re
 import logging
@@ -864,6 +866,13 @@ async def stop_children(parent: int) -> int:
     return len(rows)
 
 
+def _clear_merged_lane_maps(lane_key: tuple) -> None:
+    with _LOCK:
+        _LANES.pop(lane_key, None)
+        for cid in [c for c, k in _CHILD_LANE.items() if k == lane_key]:
+            _CHILD_LANE.pop(cid, None)
+
+
 async def merge_lane(parent: int, user_id: int, lane: Any) -> dict:
     """Merge a finished Unity lane branch into the main project branch."""
     try:
@@ -878,6 +887,7 @@ async def merge_lane(parent: int, user_id: int, lane: Any) -> dict:
         if lane_key in _MERGING_LANES:
             raise _merging_error(lane_name)
         _MERGING_LANES.add(lane_key)
+    merge_future: Optional[asyncio.Future] = None
     try:
         with _LOCK:
             record = _LANES.get(lane_key)
@@ -928,15 +938,17 @@ async def merge_lane(parent: int, user_id: int, lane: Any) -> dict:
                 state="stopped",
             )
 
-        res = await asyncio.to_thread(unity_lanes.merge_lane, main, record)
+        loop = asyncio.get_running_loop()
+        ctx = contextvars.copy_context()
+        merge_future = loop.run_in_executor(
+            None, functools.partial(ctx.run, unity_lanes.merge_lane, main, record)
+        )
+        res = await asyncio.shield(merge_future)
         result_kind = res.get("result")
         files = list(res.get("files") or [])
         cleanup_error = res.get("cleanup_error")
         if result_kind in ("merged", "empty"):
-            with _LOCK:
-                _LANES.pop(lane_key, None)
-                for cid in [c for c, k in _CHILD_LANE.items() if k == lane_key]:
-                    _CHILD_LANE.pop(cid, None)
+            _clear_merged_lane_maps(lane_key)
         if result_kind == "merged":
             file_list = ", ".join(files) if files else "none"
             if cleanup_error:
@@ -977,8 +989,23 @@ async def merge_lane(parent: int, user_id: int, lane: Any) -> dict:
                 text = f"Merge of lane \"{lane_name}\" was refused: {reason}"
         return {"result": result_kind, "files": files, "text": text}
     finally:
-        with _LOCK:
-            _MERGING_LANES.discard(lane_key)
+        if merge_future is not None and not merge_future.done():
+            def _finish_cancelled_merge(fut: asyncio.Future) -> None:
+                try:
+                    if not fut.cancelled() and fut.exception() is None:
+                        res = fut.result()
+                        if isinstance(res, dict) and res.get("result") in ("merged", "empty"):
+                            _clear_merged_lane_maps(lane_key)
+                except BaseException:
+                    pass
+                finally:
+                    with _LOCK:
+                        _MERGING_LANES.discard(lane_key)
+
+            merge_future.add_done_callback(_finish_cancelled_merge)
+        else:
+            with _LOCK:
+                _MERGING_LANES.discard(lane_key)
 
 
 # ── list / result ────────────────────────────────────────────────────────────

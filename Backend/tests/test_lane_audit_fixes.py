@@ -518,10 +518,9 @@ async def test_scope_workspace_keeps_missing_lane_folder_and_never_falls_back(la
     assert os.path.realpath(scope_workspace(env.db, started["chat_id"], 1)) == os.path.realpath(lane_ws)
 
 
-def test_create_lane_prunes_stale_worktree_only_when_folder_missing(tmp_path, monkeypatch):
+def test_create_lane_recreates_missing_worktree_with_force_without_pruning(tmp_path, monkeypatch):
     import shutil
     import stat
-    from unity_lane_paths import scope_workspace  # noqa: F401
 
     monkeypatch.setattr(ul, "_install_package", lambda _d: True)
     project = _make_git_project(tmp_path)
@@ -544,13 +543,85 @@ def test_create_lane_prunes_stale_worktree_only_when_folder_missing(tmp_path, mo
     monkeypatch.setattr(ul, "_git", spy_git)
     rec2 = ul.create_lane(project, "hand-del")
     assert os.path.isdir(rec2.dir)
-    assert ("worktree", "prune") in seen_git
-    prune_idx = seen_git.index(("worktree", "prune"))
-    add_idx = next(i for i, a in enumerate(seen_git) if len(a) >= 2 and a[0] == "worktree" and a[1] == "add")
-    assert prune_idx < add_idx
+    assert not any(len(a) >= 2 and a[0] == "worktree" and a[1] == "prune" for a in seen_git)
+    add_calls = [a for a in seen_git if len(a) >= 2 and a[0] == "worktree" and a[1] == "add"]
+    assert add_calls and "-f" in add_calls[0]
 
-    # When the lane folder exists, create_lane refuses without pruning.
+    # When the lane folder exists, create_lane refuses without pruning or adding.
     seen_git.clear()
     with pytest.raises(ul.LaneError):
         ul.create_lane(project, "hand-del")
-    assert not any(len(a) >= 2 and a[0] == "worktree" and a[1] == "prune" for a in seen_git)
+    assert not any(len(a) >= 2 and a[0] == "worktree" and a[1] in ("prune", "add") for a in seen_git)
+
+
+async def test_cancelled_merge_keeps_lane_marked_until_thread_returns(lane_env, monkeypatch):
+    env, st = lane_env
+    parent = _main(env)
+    started = await _start_lane(env, parent, "cancel-merge", name="h")
+    await _lanes_idle()
+    d = ul.lane_dir(st.proj, "cancel-merge")
+    open(os.path.join(d, "Assets", "work.txt"), "w").write("lane\n")
+    _git(d, "add", "-A")
+    _git(d, "commit", "-qm", "lane work")
+    await _post(env, "/subagents/stop", conversation_id=parent, agent_id=started["agent_id"])
+    await _lanes_idle()
+
+    entered = threading.Event()
+    release = threading.Event()
+    real_merge = ul.merge_lane
+
+    def slow_merge(project, record, **kw):
+        entered.set()
+        assert release.wait(timeout=10.0)
+        return real_merge(project, record, **kw)
+
+    monkeypatch.setattr(ul, "merge_lane", slow_merge)
+    merge_task = asyncio.create_task(subagents.merge_lane(parent, 1, "cancel-merge"))
+    await _until(entered.is_set, timeout=5)
+
+    merge_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await merge_task
+
+    # Worker thread is still running: mark must remain and start/message must be refused.
+    assert subagents._MERGING_LANES
+    calls_before = st.popen_calls
+    with pytest.raises(subagents.SubagentError) as msg_exc:
+        subagents.message(parent, started["agent_id"], "devam")
+    assert (msg_exc.value.status, msg_exc.value.code) == (409, "lane_busy")
+
+    cat = await env.catalog(1)
+    with pytest.raises(subagents.SubagentError) as start_exc:
+        subagents.start(parent, 1, model=CODEX, effort="high", brief="yeni", catalog=cat, lane="cancel-merge")
+    assert (start_exc.value.status, start_exc.value.code) == (409, "lane_busy")
+    assert st.popen_calls == calls_before
+
+    release.set()
+    await _until(lambda: not subagents._MERGING_LANES, timeout=10)
+    await _lanes_idle()
+    assert os.path.isfile(os.path.join(st.proj, "Assets", "work.txt"))
+
+
+def test_create_lane_keeps_other_missing_worktree_registered(tmp_path, monkeypatch):
+    import shutil
+    import stat
+
+    monkeypatch.setattr(ul, "_install_package", lambda _d: True)
+    project = _make_git_project(tmp_path)
+
+    ext = tmp_path / "ext_wt"
+    _git(project, "worktree", "add", "-b", "usr/feature", str(ext))
+    hidden = tmp_path / "ext_wt_hidden"
+    os.rename(ext, hidden)
+
+    def _rw(func, p, _exc):
+        os.chmod(p, stat.S_IWRITE)
+        func(p)
+
+    rec = ul.create_lane(project, "reopen-me")
+    shutil.rmtree(rec.dir, onerror=_rw)
+    rec2 = ul.create_lane(project, "reopen-me")
+    assert os.path.isdir(rec2.dir)
+
+    os.rename(hidden, ext)
+    assert _git(ext, "status", "--short").returncode == 0

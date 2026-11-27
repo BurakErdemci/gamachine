@@ -268,6 +268,19 @@ def _rollback(project: str, directory: str, branch: str, *, delete_branch: bool 
             pass
 
 
+def _has_worktree_at(project: str, directory: str) -> bool:
+    out = _git_out(project, "worktree", "list", "--porcelain", "-z")
+    if not out:
+        return False
+    target = os.path.normcase(os.path.realpath(directory))
+    for entry in out.split("\0"):
+        if entry.startswith("worktree "):
+            wt_path = entry[len("worktree "):]
+            if os.path.normcase(os.path.realpath(wt_path)) == target:
+                return True
+    return False
+
+
 def create_lane(project: str, name: str) -> LaneRecord:
     validate_name(name)
     if not all(os.path.isdir(os.path.join(project, d)) for d in ("Assets", "ProjectSettings")):
@@ -285,11 +298,14 @@ def create_lane(project: str, name: str) -> LaneRecord:
     branch = f"gamachine/{name}"
     branch_existed = _git_out(project, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}") is not None
     _ensure_excluded(project)
-    _git(project, "worktree", "prune")
+    add_args = ["worktree", "add"]
+    if _has_worktree_at(project, directory):
+        add_args.append("-f")
     if branch_existed:
-        res = _git(project, "worktree", "add", directory, branch)
+        add_args.extend([directory, branch])
     else:
-        res = _git(project, "worktree", "add", "-b", branch, directory, "HEAD")
+        add_args.extend(["-b", branch, directory, "HEAD"])
+    res = _git(project, *add_args)
     if res.returncode != 0:
         raise LaneError(f"Git worktree açılamadı: {(res.stderr or res.stdout).strip()}")
     try:
